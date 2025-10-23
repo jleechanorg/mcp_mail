@@ -7340,6 +7340,11 @@ def build_mcp_server() -> FastMCP:
         - File reservations communicate edit intent and reduce collisions across agents.
         - Surfacing them helps humans review ongoing work and resolve contention.
 
+        Why this exists
+        ---------------
+        - Claims communicate edit intent and reduce collisions across agents.
+        - Surfacing them helps humans review ongoing work and resolve contention.
+
         Parameters
         ----------
         slug : str
@@ -7361,6 +7366,11 @@ def build_mcp_server() -> FastMCP:
         Also see all historical (including released) file_reservations:
         ```json
         {"jsonrpc":"2.0","id":"r4b","method":"resources/read","params":{"uri":"resource://file_reservations/backend-abc123?active_only=false"}}
+        ```
+
+        Also see all historical (including released) claims:
+        ```json
+        {"jsonrpc":"2.0","id":"r4b","method":"resources/read","params":{"uri":"resource://claims/backend-abc123?active_only=false"}}
         ```
         """
         slug_value, query_params = _split_slug_and_query(slug)
