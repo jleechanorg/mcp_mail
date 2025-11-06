@@ -900,24 +900,34 @@ def build_materialized_views(snapshot_path: Path) -> None:
 
         # Message overview materialized view
         # Denormalizes messages with sender names for efficient list rendering
-        if has_thread_id and has_sender_id:
-            overview_query = """
-                DROP TABLE IF EXISTS message_overview_mv;
-                CREATE TABLE message_overview_mv AS
+        conn.executescript(
+            """
+            DROP TABLE IF EXISTS message_overview_mv;
+            CREATE TABLE message_overview_mv AS
+            SELECT
+                m.id,
+                m.project_id,
+                m.thread_id,
+                m.subject,
+                m.importance,
+                m.ack_required,
+                m.created_ts,
+                a.name AS sender_name,
+                LENGTH(m.body_md) AS body_length,
+                json_array_length(m.attachments) AS attachment_count,
+                SUBSTR(COALESCE(m.body_md, ''), 1, 280) AS latest_snippet,
+                COALESCE(r.recipients, '') AS recipients
+            FROM messages m
+            JOIN agents a ON m.sender_id = a.id
+            LEFT JOIN (
                 SELECT
-                    m.id,
-                    m.project_id,
-                    m.thread_id,
-                    m.subject,
-                    m.importance,
-                    m.ack_required,
-                    m.created_ts,
-                    a.name AS sender_name,
-                    LENGTH(m.body_md) AS body_length,
-                    json_array_length(m.attachments) AS attachment_count
-                FROM messages m
-                JOIN agents a ON m.sender_id = a.id
-                ORDER BY m.created_ts DESC;
+                    mr.message_id,
+                    GROUP_CONCAT(COALESCE(ag.name, ''), ', ') AS recipients
+                FROM message_recipients mr
+                LEFT JOIN agents ag ON ag.id = mr.agent_id
+                GROUP BY mr.message_id
+            ) r ON r.message_id = m.id
+            ORDER BY m.created_ts DESC;
 
                 -- Covering indexes for common query patterns
                 CREATE INDEX idx_msg_overview_created ON message_overview_mv(created_ts DESC);
@@ -1096,11 +1106,8 @@ def create_performance_indexes(snapshot_path: Path) -> None:
     try:
         # Ensure derived lowercase columns exist for case-insensitive search
         for column in ("subject_lower", "sender_lower"):
-            try:
+            with suppress(sqlite3.OperationalError):
                 conn.execute(f"ALTER TABLE messages ADD COLUMN {column} TEXT")
-            except sqlite3.OperationalError:
-                # Column already exists
-                pass
 
         conn.execute(
             """
@@ -1427,6 +1434,8 @@ def maybe_chunk_database(
     chunk_dir = output_dir / "chunks"
     chunk_dir.mkdir(parents=True, exist_ok=True)
 
+    checksum_lines: list[str] = []
+
     with snapshot_path.open("rb") as src:
         index = 0
         while True:
@@ -1435,7 +1444,13 @@ def maybe_chunk_database(
                 break
             chunk_path = chunk_dir / f"{index:05d}.bin"
             chunk_path.write_bytes(chunk)
+            digest = hashlib.sha256(chunk).hexdigest()
+            checksum_lines.append(f"{digest}  chunks/{chunk_path.name}\n")
             index += 1
+
+    if checksum_lines:
+        checksums_path = output_dir / "chunks.sha256"
+        checksums_path.write_text("".join(checksum_lines), encoding="utf-8")
 
     config = {
         "version": 1,

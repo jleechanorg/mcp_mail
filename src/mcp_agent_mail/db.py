@@ -347,35 +347,15 @@ def _setup_fts(connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_messages_importance ON messages(importance)"
     )
     connection.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS idx_messages_sender_created ON messages(sender_id, created_ts DESC)"
+    )
+    connection.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS idx_messages_project_created ON messages(project_id, created_ts DESC)"
+    )
+    connection.exec_driver_sql(
         "CREATE INDEX IF NOT EXISTS idx_file_reservations_expires_ts ON file_reservations(expires_ts)"
     )
     connection.exec_driver_sql(
         "CREATE INDEX IF NOT EXISTS idx_message_recipients_agent ON message_recipients(agent_id)"
     )
 
-    # MIGRATION: Check for duplicate agent names before enforcing global uniqueness
-    # This handles upgrading from per-project uniqueness to global uniqueness
-    _check_and_fix_duplicate_agent_names(connection)
-
-    # Case-insensitive unique index on ACTIVE agent names for global uniqueness
-    connection.exec_driver_sql("DROP INDEX IF EXISTS uq_agents_name_ci")
-    connection.exec_driver_sql(
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_agents_name_ci ON agents(lower(name)) WHERE is_active = 1"
-    )
-
-
-def _ensure_agent_active_columns(connection) -> None:
-    columns = {
-        row[1]
-        for row in connection.exec_driver_sql("PRAGMA table_info('agents')").fetchall()
-    }
-    if "is_active" not in columns:
-        connection.exec_driver_sql("ALTER TABLE agents ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
-    if "deleted_ts" not in columns:
-        connection.exec_driver_sql("ALTER TABLE agents ADD COLUMN deleted_ts TEXT")
-    if "contact_policy" not in columns:
-        connection.exec_driver_sql(
-            "ALTER TABLE agents ADD COLUMN contact_policy TEXT NOT NULL DEFAULT 'auto'"
-        )
-    connection.exec_driver_sql("UPDATE agents SET is_active = 1 WHERE is_active IS NULL")
-    connection.exec_driver_sql("UPDATE agents SET contact_policy = 'auto' WHERE contact_policy IS NULL")

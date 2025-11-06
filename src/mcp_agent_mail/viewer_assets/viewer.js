@@ -1525,28 +1525,65 @@ window.viewerController = function() {
       const results = [];
       const stmt = state.db.prepare(`
         SELECT
-          m.id,
-          m.subject,
-          m.created_ts,
-          m.importance,
-          m.thread_id,
+          mv.id,
+          mv.subject,
+          mv.created_ts,
+          mv.importance,
+          mv.thread_id,
           m.project_id,
-          CASE WHEN m.thread_id IS NULL OR m.thread_id = '' THEN printf('msg:%d', m.id) ELSE m.thread_id END AS thread_key,
-          substr(COALESCE(m.body_md, ''), 1, 280) AS snippet,
-          m.body_md,
-          COALESCE(
-            (SELECT name FROM agents WHERE id = (SELECT from_agent_id FROM message_senders WHERE message_id = m.id LIMIT 1)),
-            'Unknown'
-          ) AS sender,
+          CASE WHEN mv.thread_id IS NULL OR mv.thread_id = '' THEN printf('msg:%d', mv.id) ELSE mv.thread_id END AS thread_key,
+          mv.body_length,
+          mv.latest_snippet,
+          mv.recipients,
+          mv.sender_name AS sender,
           COALESCE(p.slug, 'unknown') AS project_slug,
           COALESCE(p.human_key, 'Unknown Project') AS project_name
-        FROM messages m
+        FROM message_overview_mv mv
+        JOIN messages m ON m.id = mv.id
         LEFT JOIN projects p ON p.id = m.project_id
-        ORDER BY datetime(m.created_ts) DESC, m.id DESC
+        ORDER BY datetime(mv.created_ts) DESC, mv.id DESC
       `);
 
       try {
         while (stmt.step()) {
+          results.push(stmt.getAsObject());
+        }
+      } finally {
+        stmt.free();
+      }
+
+      // Build a recipients map in a single query (MUCH faster than N+1 queries)
+      const recipientsMap = this.buildRecipientsMap();
+      this.recipientsMap = recipientsMap;
+
+      // Enrich messages with recipients and formatted dates
+      return results.map((msg) => {
+        const importance = (msg.importance || '').toLowerCase();
+        const bodyLength = Number(msg.body_length) || 0;
+        const excerpt = msg.latest_snippet || msg.snippet || '';
+        const isAdministrative = this.isAdministrativeMessage(msg);
+
+        return {
+          ...msg,
+          importance,
+          body_length: bodyLength,
+          recipients: msg.recipients || recipientsMap.get(msg.id) || 'Unknown',
+          excerpt,
+          created_relative: this.formatTimestamp(msg.created_ts),
+          created_full: this.formatTimestampFull(msg.created_ts),
+          read: false, // Static viewer doesn't track read state
+          isAdministrative,
+          message_category: isAdministrative ? 'admin' : 'user'
+        };
+      });
+    },
+
+    async loadMessageBodyById(id) {
+      let body = '';
+      const stmt = state.db.prepare(`SELECT COALESCE(body_md, '') AS body_md FROM messages WHERE id = ? LIMIT 1`);
+      try {
+        stmt.bind([id]);
+        if (stmt.step()) {
           const row = stmt.getAsObject();
 
           // Get recipients for this message
