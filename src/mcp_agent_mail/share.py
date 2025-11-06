@@ -958,140 +958,39 @@ def build_materialized_views(snapshot_path: Path) -> None:
             ) r ON r.message_id = m.id
             ORDER BY m.created_ts DESC;
 
-                -- Covering indexes for common query patterns
-                CREATE INDEX idx_msg_overview_created ON message_overview_mv(created_ts DESC);
-                CREATE INDEX idx_msg_overview_thread ON message_overview_mv(thread_id, created_ts DESC);
-                CREATE INDEX idx_msg_overview_project ON message_overview_mv(project_id, created_ts DESC);
-                CREATE INDEX idx_msg_overview_importance ON message_overview_mv(importance, created_ts DESC);
+            -- Covering indexes for common query patterns
+            CREATE INDEX idx_msg_overview_created ON message_overview_mv(created_ts DESC);
+            CREATE INDEX idx_msg_overview_thread ON message_overview_mv(thread_id, created_ts DESC);
+            CREATE INDEX idx_msg_overview_project ON message_overview_mv(project_id, created_ts DESC);
+            CREATE INDEX idx_msg_overview_importance ON message_overview_mv(importance, created_ts DESC);
             """
-        elif has_thread_id:
-            # Has thread_id but not sender_id
-            overview_query = """
-                DROP TABLE IF EXISTS message_overview_mv;
-                CREATE TABLE message_overview_mv AS
-                SELECT
-                    m.id,
-                    m.project_id,
-                    m.thread_id,
-                    m.subject,
-                    m.importance,
-                    m.ack_required,
-                    m.created_ts,
-                    NULL AS sender_name,
-                    LENGTH(m.body_md) AS body_length,
-                    json_array_length(m.attachments) AS attachment_count
-                FROM messages m
-                ORDER BY m.created_ts DESC;
-
-                -- Covering indexes for common query patterns
-                CREATE INDEX idx_msg_overview_created ON message_overview_mv(created_ts DESC);
-                CREATE INDEX idx_msg_overview_thread ON message_overview_mv(thread_id, created_ts DESC);
-                CREATE INDEX idx_msg_overview_project ON message_overview_mv(project_id, created_ts DESC);
-                CREATE INDEX idx_msg_overview_importance ON message_overview_mv(importance, created_ts DESC);
-            """
-        elif has_sender_id:
-            # Has sender_id but not thread_id
-            overview_query = """
-                DROP TABLE IF EXISTS message_overview_mv;
-                CREATE TABLE message_overview_mv AS
-                SELECT
-                    m.id,
-                    m.project_id,
-                    printf('msg:%d', m.id) AS thread_id,
-                    m.subject,
-                    m.importance,
-                    m.ack_required,
-                    m.created_ts,
-                    a.name AS sender_name,
-                    LENGTH(m.body_md) AS body_length,
-                    json_array_length(m.attachments) AS attachment_count
-                FROM messages m
-                JOIN agents a ON m.sender_id = a.id
-                ORDER BY m.created_ts DESC;
-
-                -- Covering indexes for common query patterns
-                CREATE INDEX idx_msg_overview_created ON message_overview_mv(created_ts DESC);
-                CREATE INDEX idx_msg_overview_thread ON message_overview_mv(thread_id, created_ts DESC);
-                CREATE INDEX idx_msg_overview_project ON message_overview_mv(project_id, created_ts DESC);
-                CREATE INDEX idx_msg_overview_importance ON message_overview_mv(importance, created_ts DESC);
-            """
-        else:
-            # Neither thread_id nor sender_id (very old schema)
-            overview_query = """
-                DROP TABLE IF EXISTS message_overview_mv;
-                CREATE TABLE message_overview_mv AS
-                SELECT
-                    m.id,
-                    m.project_id,
-                    printf('msg:%d', m.id) AS thread_id,
-                    m.subject,
-                    m.importance,
-                    m.ack_required,
-                    m.created_ts,
-                    NULL AS sender_name,
-                    LENGTH(m.body_md) AS body_length,
-                    json_array_length(m.attachments) AS attachment_count
-                FROM messages m
-                ORDER BY m.created_ts DESC;
-
-                -- Covering indexes for common query patterns
-                CREATE INDEX idx_msg_overview_created ON message_overview_mv(created_ts DESC);
-                CREATE INDEX idx_msg_overview_thread ON message_overview_mv(thread_id, created_ts DESC);
-                CREATE INDEX idx_msg_overview_project ON message_overview_mv(project_id, created_ts DESC);
-                CREATE INDEX idx_msg_overview_importance ON message_overview_mv(importance, created_ts DESC);
-            """
-
-        conn.executescript(overview_query)
+        )
 
         # Attachments by message materialized view
         # Flattens JSON attachments array for easier filtering and counting
-        if has_thread_id:
-            attachments_query = """
-                DROP TABLE IF EXISTS attachments_by_message_mv;
-                CREATE TABLE attachments_by_message_mv AS
-                SELECT
-                    m.id AS message_id,
-                    m.project_id,
-                    m.thread_id,
-                    m.created_ts,
-                    json_extract(value, '$.type') AS attachment_type,
-                    json_extract(value, '$.media_type') AS media_type,
-                    json_extract(value, '$.path') AS path,
-                    CAST(json_extract(value, '$.size_bytes') AS INTEGER) AS size_bytes
-                FROM messages m,
-                     json_each(m.attachments)
-                WHERE m.attachments != '[]';
-
-                -- Indexes for attachment queries
-                CREATE INDEX idx_attach_by_msg ON attachments_by_message_mv(message_id);
-                CREATE INDEX idx_attach_by_type ON attachments_by_message_mv(attachment_type, created_ts DESC);
-                CREATE INDEX idx_attach_by_project ON attachments_by_message_mv(project_id, created_ts DESC);
+        conn.executescript(
             """
-        else:
-            # Use synthetic thread_id for older databases
-            attachments_query = """
-                DROP TABLE IF EXISTS attachments_by_message_mv;
-                CREATE TABLE attachments_by_message_mv AS
-                SELECT
-                    m.id AS message_id,
-                    m.project_id,
-                    printf('msg:%d', m.id) AS thread_id,
-                    m.created_ts,
-                    json_extract(value, '$.type') AS attachment_type,
-                    json_extract(value, '$.media_type') AS media_type,
-                    json_extract(value, '$.path') AS path,
-                    CAST(json_extract(value, '$.size_bytes') AS INTEGER) AS size_bytes
-                FROM messages m,
-                     json_each(m.attachments)
-                WHERE m.attachments != '[]';
+            DROP TABLE IF EXISTS attachments_by_message_mv;
+            CREATE TABLE attachments_by_message_mv AS
+            SELECT
+                m.id AS message_id,
+                m.project_id,
+                m.thread_id,
+                m.created_ts,
+                json_extract(value, '$.type') AS attachment_type,
+                json_extract(value, '$.media_type') AS media_type,
+                json_extract(value, '$.path') AS path,
+                CAST(json_extract(value, '$.size_bytes') AS INTEGER) AS size_bytes
+            FROM messages m,
+                 json_each(m.attachments)
+            WHERE m.attachments != '[]';
 
-                -- Indexes for attachment queries
-                CREATE INDEX idx_attach_by_msg ON attachments_by_message_mv(message_id);
-                CREATE INDEX idx_attach_by_type ON attachments_by_message_mv(attachment_type, created_ts DESC);
-                CREATE INDEX idx_attach_by_project ON attachments_by_message_mv(project_id, created_ts DESC);
+            -- Indexes for attachment queries
+            CREATE INDEX idx_attach_by_msg ON attachments_by_message_mv(message_id);
+            CREATE INDEX idx_attach_by_type ON attachments_by_message_mv(attachment_type, created_ts DESC);
+            CREATE INDEX idx_attach_by_project ON attachments_by_message_mv(project_id, created_ts DESC);
             """
-
-        conn.executescript(attachments_query)
+        )
 
         # FTS search overview materialized view
         # Pre-computes search result snippets and highlights for efficient rendering
