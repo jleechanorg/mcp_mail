@@ -18,6 +18,7 @@ from __future__ import annotations
 import contextlib
 import re
 import secrets
+import shlex
 import shutil
 import subprocess
 import sys
@@ -944,7 +945,83 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="mailbox-preview-") as temp_dir:
         temp_path = Path(temp_dir)
 
-        success, signing_pub = export_bundle(temp_path, selected_projects, scrub_preset, signing_key)
+    if not reuse_existing:
+        if bundle_path.exists():
+            shutil.rmtree(bundle_path, ignore_errors=True)
+        bundle_path.mkdir(parents=True, exist_ok=True)
+        success, signing_pub = export_bundle(
+            bundle_path,
+            selected_projects,
+            scrub_preset,
+            signing_key if use_signing else None,
+        )
+        if not success:
+            sys.exit(1)
+        bundle_ready = True
+    else:
+        console.print("[green]Reusing existing bundle workspace for preview.[/]")
+        bundle_ready = True
+
+    # Always refresh viewer assets in the bundle to pick up latest CSP/scripts
+    _refresh_viewer_assets(bundle_path)
+
+    saved_path = signing_key or last_known_signing_path
+    save_resume_state({
+        "stage": "preview",
+        "selected_projects": selected_projects,
+        "scrub_preset": scrub_preset,
+        "deployment": deployment,
+        "use_signing": use_signing,
+        "generate_new_key": generate_new_key,
+        "signing_key_path": str(saved_path) if saved_path else None,
+        "signing_pub_path": str(signing_pub) if signing_pub else None,
+        "bundle_ready": bundle_ready,
+        "timestamp": time.time(),
+    })
+
+    if not Confirm.ask("\nPreview the bundle before deploying?", default=True):
+        satisfied = True
+    else:
+        satisfied = preview_bundle(bundle_path)
+
+    if not satisfied:
+        console.print(
+            f"[yellow]Deployment cancelled. The bundle remains at {bundle_path}. Run the wizard again to resume.[/]"
+        )
+        sys.exit(0)
+
+    if deployment.get("type") == "local":
+        output_path = Path(deployment.get("path", "./mailbox-export")).expanduser().resolve()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(bundle_path, output_path, dirs_exist_ok=True)
+        console.print(f"\n[bold green]✓ Exported to: {output_path}[/]")
+
+        if signing_pub:
+            console.print(f"[green]✓ Signing public key: {signing_pub}[/]")
+
+        console.print(
+            "\n[cyan]To refresh this bundle later, run:[/]\n  uv run python -m mcp_agent_mail.cli share update "
+            f"{shlex.quote(str(output_path))}"
+        )
+
+        save_config({
+            "project_indices": selected_indices,
+            "project_count": len(selected_projects),
+            "scrub_preset": scrub_preset,
+            "deployment": deployment,
+            "deployment_type": "local",
+            "use_signing": use_signing,
+            "generate_new_key": generate_new_key,
+            "signing_key_path": str(signing_key) if signing_key else None,
+        })
+        clear_resume_state()
+
+    elif deployment.get("type") == "github-new":
+        success, repo_full_name = create_github_repo(
+            deployment.get("repo_name", "mailbox-viewer"),
+            deployment.get("private", False),
+            deployment.get("description", "MCP Agent Mail static viewer"),
+        )
         if not success:
             sys.exit(1)
 
@@ -968,7 +1045,18 @@ def main() -> None:
             if signing_pub:
                 console.print(f"[green]✓ Signing public key: {signing_pub}[/]")
 
-            # Save config for next run
+            console.print(
+                "\n[cyan]To refresh this deployment later, run:[/]\n"
+                f"  uv run python -m mcp_agent_mail.cli share update {shlex.quote(str(bundle_path))}\n"
+                f"  wrangler pages deploy {shlex.quote(str(bundle_path))} --project-name {deployment.get('project_name', 'mailbox-viewer')} --branch main"
+            )
+
+            console.print(
+                "\n[cyan]To publish fresh mailbox data later, run:[/]\n"
+                f"  uv run python -m mcp_agent_mail.cli share update {shlex.quote(str(bundle_path))}\n"
+                "  git add . && git commit -m \"Refresh mailbox\" && git push"
+            )
+
             save_config({
                 "project_indices": selected_indices,
                 "project_count": len(selected_projects),
