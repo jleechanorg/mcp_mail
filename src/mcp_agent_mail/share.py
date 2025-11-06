@@ -875,6 +875,10 @@ def finalize_snapshot_for_export(snapshot_path: Path) -> None:
         # Compact database and improve page locality
         conn.execute("VACUUM")
 
+        # Update planner statistics after schema/index changes
+        conn.execute("PRAGMA analysis_limit=400")
+        conn.execute("ANALYZE")
+
         # Update query planner statistics for optimal execution plans
         conn.execute("PRAGMA optimize")
 
@@ -1141,8 +1145,6 @@ def create_performance_indexes(snapshot_path: Path) -> None:
               ON messages(sender_lower);
             """
         )
-        conn.execute("PRAGMA analysis_limit=400")
-        conn.execute("ANALYZE")
 
         conn.commit()
     finally:
