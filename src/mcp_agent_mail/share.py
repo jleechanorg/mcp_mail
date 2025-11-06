@@ -2061,6 +2061,7 @@ __all__ = [
     "build_how_to_deploy",
     "build_search_indexes",
     "bundle_attachments",
+    "create_performance_indexes",
     "copy_viewer_assets",
     "create_sqlite_snapshot",
     "decrypt_with_age",
