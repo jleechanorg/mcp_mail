@@ -1569,7 +1569,190 @@ window.viewerController = function() {
       return results;
     },
 
-    getMessageRecipients(messageId) {
+    // Search across ALL messages using SQL: FTS when available, otherwise LIKE.
+    // Supports parentheses, NOT, quoted phrases, and OR with proper precedence (NOT > AND > OR).
+    searchDatabaseIds(query) {
+      if (!state.db) return new Set();
+      const raw = String(query || '').trim();
+      if (!raw) return new Set();
+
+      // 1) Tokenize: terms, quoted phrases, operators, parentheses
+      const tokens = [];
+      const re = /\s*(\(|\)|"([^"]*)"|AND|OR|NOT|\||[^\s()"]+)\s*/gi;
+      let m;
+      while ((m = re.exec(raw)) !== null) {
+        const full = m[1];
+        if (full === '(' || full === ')') {
+          tokens.push({ kind: full });
+        } else if (/^AND$/i.test(full)) {
+          tokens.push({ kind: 'op', value: 'AND' });
+        } else if (/^(OR|\|)$/i.test(full)) {
+          tokens.push({ kind: 'op', value: 'OR' });
+        } else if (/^NOT$/i.test(full)) {
+          tokens.push({ kind: 'op', value: 'NOT' });
+        } else if (m[2] != null) {
+          tokens.push({ kind: 'term', value: m[2] });
+        } else if (full && full.trim()) {
+          tokens.push({ kind: 'term', value: full.trim() });
+        }
+      }
+      if (tokens.length === 0) return new Set();
+
+      // 2) Shunting-yard → RPN with precedence: NOT(3) > AND(2) > OR(1)
+      const prec = { NOT: 3, AND: 2, OR: 1 };
+      const rightAssoc = { NOT: true };
+      const output = [];
+      const ops = [];
+      for (const t of tokens) {
+        if (t.kind === 'term') {
+          output.push(t);
+        } else if (t.kind === 'op') {
+          while (
+            ops.length > 0 && ops[ops.length - 1].kind === 'op' && (
+              (rightAssoc[t.value] !== true && prec[ops[ops.length - 1].value] >= prec[t.value]) ||
+              (rightAssoc[t.value] === true && prec[ops[ops.length - 1].value] > prec[t.value])
+            )
+          ) {
+            output.push(ops.pop());
+          }
+          ops.push(t);
+        } else if (t.kind === '(') {
+          ops.push(t);
+        } else if (t.kind === ')') {
+          while (ops.length > 0 && ops[ops.length - 1].kind !== '(') {
+            output.push(ops.pop());
+          }
+          if (ops.length > 0 && ops[ops.length - 1].kind === '(') ops.pop();
+        }
+      }
+      while (ops.length > 0) output.push(ops.pop());
+
+      // 3) Build AST from RPN
+      function buildAst(rpn) {
+        const stack = [];
+        for (const t of rpn) {
+          if (t.kind === 'term') {
+            stack.push({ type: 'term', value: t.value });
+          } else if (t.kind === 'op') {
+            if (t.value === 'NOT') {
+              const a = stack.pop();
+              stack.push({ type: 'not', child: a });
+            } else {
+              const b = stack.pop();
+              const a = stack.pop();
+              stack.push({ type: t.value.toLowerCase(), left: a, right: b });
+            }
+          }
+        }
+        return stack.pop() || null;
+      }
+      const ast = buildAst(output);
+      if (!ast) return new Set();
+
+      const ids = new Set();
+
+      // 4) Try FTS
+      const ftsQuote = (s) => `"${String(s).replace(/"/g, '"')}"`;
+      function buildFts(node) {
+        if (!node) return '';
+        switch (node.type) {
+          case 'term':
+            return /\s/.test(node.value) ? ftsQuote(node.value) : node.value;
+          case 'not':
+            return `(NOT ${buildFts(node.child)})`;
+          case 'and':
+            return `(${buildFts(node.left)} AND ${buildFts(node.right)})`;
+          case 'or':
+            return `(${buildFts(node.left)} OR ${buildFts(node.right)})`;
+        }
+        return '';
+      }
+
+      if (this.ftsEnabled) {
+        const ftsExpr = buildFts(ast).trim();
+        if (ftsExpr) {
+          const sql = `SELECT rowid AS id FROM fts_messages WHERE fts_messages MATCH ?`;
+          let stmt;
+          try {
+            explainQuery(state.db, sql, [ftsExpr], 'searchDatabaseIds (FTS)');
+            stmt = state.db.prepare(sql);
+            stmt.bind([ftsExpr]);
+            while (stmt.step()) {
+              const row = stmt.getAsObject();
+              if (row.id != null) ids.add(Number(row.id));
+            }
+          } catch (error) {
+            console.warn('[viewer] FTS search failed, falling back to LIKE', error);
+          } finally {
+            if (stmt) stmt.free();
+          }
+          if (ids.size > 0) return ids;
+        }
+      }
+
+      // 5) LIKE fallback
+      function buildLike(node, acc) {
+        switch (node.type) {
+          case 'term': {
+            const needle = `%${String(node.value).toLowerCase()}%`;
+            acc.sql.push('(subject_lower LIKE ? OR LOWER(COALESCE(body_md, "")) LIKE ?)');
+            acc.params.push(needle, needle);
+            break;
+          }
+          case 'not': {
+            const sub = { sql: [], params: [] };
+            buildLike(node.child, sub);
+            acc.sql.push(`NOT (${sub.sql.join(' ')})`);
+            acc.params.push(...sub.params);
+            break;
+          }
+          case 'and': {
+            const left = { sql: [], params: [] };
+            const right = { sql: [], params: [] };
+            buildLike(node.left, left);
+            buildLike(node.right, right);
+            acc.sql.push(`(${left.sql.join(' ')} AND ${right.sql.join(' ')})`);
+            acc.params.push(...left.params, ...right.params);
+            break;
+          }
+          case 'or': {
+            const left = { sql: [], params: [] };
+            const right = { sql: [], params: [] };
+            buildLike(node.left, left);
+            buildLike(node.right, right);
+            acc.sql.push(`(${left.sql.join(' ')} OR ${right.sql.join(' ')})`);
+            acc.params.push(...left.params, ...right.params);
+            break;
+          }
+        }
+      }
+
+      const acc = { sql: [], params: [] };
+      buildLike(ast, acc);
+      const likeSql = `SELECT id FROM messages WHERE ${acc.sql.join(' ')}`;
+      let likeStmt;
+      try {
+        explainQuery(state.db, likeSql, acc.params, 'searchDatabaseIds (LIKE)');
+        likeStmt = state.db.prepare(likeSql);
+        likeStmt.bind(acc.params);
+        while (likeStmt.step()) {
+          const row = likeStmt.getAsObject();
+          if (row.id != null) ids.add(Number(row.id));
+        }
+      } catch (error) {
+        console.error('[viewer] LIKE search failed', error);
+      } finally {
+        if (likeStmt) likeStmt.free();
+      }
+
+      return ids;
+    },
+
+    buildRecipientsMap() {
+      // Build a map of message_id -> comma-separated recipient names
+      // This is done in ONE query instead of N queries!
+      const map = new Map();
+
       const stmt = state.db.prepare(`
         SELECT COALESCE(a.name, 'Unknown') AS recipient_name
         FROM message_recipients mr
