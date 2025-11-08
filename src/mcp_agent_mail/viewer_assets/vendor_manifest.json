@@ -1,0 +1,44 @@
+{
+  "sql_js": {
+    "version": "1.10.1",
+    "source": "https://github.com/sql-js/sql.js/releases/tag/v1.10.1",
+    "files": {
+      "sql-wasm.js": {
+        "sha256": "f5c0404031cc8a1e2d6d856e154536775e4ec520b5471d00306e83d4edeb9fc2"
+      },
+      "sql-wasm.wasm": {
+        "sha256": "0734155c83e493983d1f2ff5b09a4fab6e35a32e9449c7e4e545756439f62d73"
+      }
+    }
+  },
+  "marked": {
+    "version": "11.0.0",
+    "source": "https://cdn.jsdelivr.net/npm/marked@11.0.0/marked.min.js",
+    "files": {
+      "marked.min.js": {
+        "sha256": "8a2388c31987f183f05076962a87c0be2e8d4d423da5e73a834e5e95bb4207ef"
+      }
+    }
+  },
+  "dompurify": {
+    "version": "3.0.8",
+    "source": "https://cdn.jsdelivr.net/npm/dompurify@3.0.8/dist/purify.min.js",
+    "files": {
+      "dompurify.min.js": {
+        "sha256": "d2469862adea8ad924559a4fffab8a4c9c1f4e9a8534ce8e1c36ec698cf0f54c"
+      }
+    }
+  },
+  "clusterize": {
+    "version": "0.18.0",
+    "source": "https://github.com/NeXTs/Clusterize.js",
+    "files": {
+      "clusterize.min.js": {
+        "sha256": "919ad8f9d75438cd3ad75fe6d163afe2c4820634b5497df691fdb7999f9d5f29"
+      },
+      "clusterize.min.css": {
+        "sha256": "228634991975e7bdb75de66f97fb7ccc3c0c430b99f199192e799c0a06418113"
+      }
+    }
+  }
+}

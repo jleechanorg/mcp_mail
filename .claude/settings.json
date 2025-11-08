@@ -1,0 +1,47 @@
+{
+  "mcpServers": {
+    "mcp-agent-mail": {
+      "type": "http",
+      "url": "http://127.0.0.1:8765/mcp/",
+      "core": true,
+      "headers": {        "Authorization": "Bearer 5e0682fe59f724f6aaa7cc04afcf1d1eb5add7c227d3b39e9ab642f8b3f570ae"},
+      "options": {
+        "timeoutSeconds": 180,
+        "initTimeoutSeconds": 30
+      }
+    }
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": {},
+        "hooks": [
+          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli file_reservations active mcp_agent_mail" },
+          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli acks pending mcp_agent_mail jleechan --limit 20" }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": {"tools": ["Edit"]},
+        "hooks": [
+          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli file_reservations soon mcp_agent_mail --minutes 10" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": {"tools": ["send_message"]},
+        "hooks": [
+          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli list-acks --project mcp_agent_mail --agent jleechan --limit 10" }
+        ]
+      },
+      {
+        "matcher": {"tools": ["file_reservation_paths"]},
+        "hooks": [
+          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli file_reservations list mcp_agent_mail" }
+        ]
+      }
+    ]
+  }
+}
