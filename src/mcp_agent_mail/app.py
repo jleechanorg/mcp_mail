@@ -606,6 +606,7 @@ def _agent_to_dict(agent: Agent) -> dict[str, Any]:
         "last_active_ts": _iso(agent.last_active_ts),
         "project_id": agent.project_id,
         "attachments_policy": getattr(agent, "attachments_policy", "auto"),
+        "contact_policy": getattr(agent, "contact_policy", "auto"),
         "is_active": getattr(agent, "is_active", True),
         "deleted_ts": _iso(deleted_ts) if (deleted_ts := getattr(agent, "deleted_ts", None)) is not None else None,
     }
@@ -1352,6 +1353,7 @@ async def _get_or_create_agent(
                 program=program,
                 model=model,
                 task_description=task_description,
+                contact_policy="auto",
             )
             session.add(agent)
             try:
