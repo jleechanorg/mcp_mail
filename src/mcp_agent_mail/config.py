@@ -106,6 +106,30 @@ class LlmSettings:
 
 
 @dataclass(slots=True, frozen=True)
+class SlackSettings:
+    """Slack integration configuration."""
+
+    enabled: bool
+    bot_token: str | None  # Bot User OAuth Token (xoxb-...)
+    app_token: str | None  # App-Level Token for Socket Mode (xapp-...)
+    signing_secret: str | None  # For webhook signature verification
+    default_channel: str  # Default channel ID or name for notifications
+    # Notification behavior
+    notify_on_message: bool  # Send Slack notification when MCP message is created
+    notify_on_ack: bool  # Send Slack notification when message is acknowledged
+    notify_mention_format: str  # "real_name" | "display_name" | "agent_name"
+    # Bidirectional sync
+    sync_enabled: bool  # Enable bidirectional message sync
+    sync_channels: list[str]  # Channel IDs to sync messages from
+    sync_thread_replies: bool  # Sync threaded replies as thread_id in MCP
+    sync_reactions: bool  # Track reactions as acknowledgments
+    # Advanced features
+    use_blocks: bool  # Use Slack Block Kit for rich formatting
+    include_attachments: bool  # Include MCP message attachments in Slack
+    webhook_url: str | None  # Optional incoming webhook URL (legacy)
+
+
+@dataclass(slots=True, frozen=True)
 class Settings:
     """Top-level application settings."""
 
@@ -115,6 +139,7 @@ class Settings:
     storage: StorageSettings
     cors: CorsSettings
     llm: LlmSettings
+    slack: SlackSettings
     # Background maintenance toggles
     file_reservations_cleanup_enabled: bool
     file_reservations_cleanup_interval_seconds: int
@@ -265,6 +290,24 @@ def get_settings() -> Settings:
         cost_logging_enabled=_bool(_decouple_config("LLM_COST_LOGGING_ENABLED", default="true"), default=True),
     )
 
+    slack_settings = SlackSettings(
+        enabled=_bool(_decouple_config("SLACK_ENABLED", default="false"), default=False),
+        bot_token=_decouple_config("SLACK_BOT_TOKEN", default="") or None,
+        app_token=_decouple_config("SLACK_APP_TOKEN", default="") or None,
+        signing_secret=_decouple_config("SLACK_SIGNING_SECRET", default="") or None,
+        default_channel=_decouple_config("SLACK_DEFAULT_CHANNEL", default="general"),
+        notify_on_message=_bool(_decouple_config("SLACK_NOTIFY_ON_MESSAGE", default="true"), default=True),
+        notify_on_ack=_bool(_decouple_config("SLACK_NOTIFY_ON_ACK", default="false"), default=False),
+        notify_mention_format=_decouple_config("SLACK_NOTIFY_MENTION_FORMAT", default="agent_name"),
+        sync_enabled=_bool(_decouple_config("SLACK_SYNC_ENABLED", default="false"), default=False),
+        sync_channels=_csv("SLACK_SYNC_CHANNELS", default=""),
+        sync_thread_replies=_bool(_decouple_config("SLACK_SYNC_THREAD_REPLIES", default="true"), default=True),
+        sync_reactions=_bool(_decouple_config("SLACK_SYNC_REACTIONS", default="true"), default=True),
+        use_blocks=_bool(_decouple_config("SLACK_USE_BLOCKS", default="true"), default=True),
+        include_attachments=_bool(_decouple_config("SLACK_INCLUDE_ATTACHMENTS", default="true"), default=True),
+        webhook_url=_decouple_config("SLACK_WEBHOOK_URL", default="") or None,
+    )
+
     def _agent_name_mode(value: str) -> str:
         v = (value or "").strip().lower()
         if v in {"strict", "coerce", "always_auto"}:
@@ -284,6 +327,7 @@ def get_settings() -> Settings:
         storage=storage_settings,
         cors=cors_settings,
         llm=llm_settings,
+        slack=slack_settings,
         file_reservations_cleanup_enabled=_bool(_decouple_config("FILE_RESERVATIONS_CLEANUP_ENABLED", default="false"), default=False),
         file_reservations_cleanup_interval_seconds=_int(_decouple_config("FILE_RESERVATIONS_CLEANUP_INTERVAL_SECONDS", default="60"), default=60),
         file_reservation_inactivity_seconds=_int(_decouple_config("FILE_RESERVATION_INACTIVITY_SECONDS", default="1800"), default=1800),

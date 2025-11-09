@@ -889,6 +889,99 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
     async def oauth_meta_root_mcp() -> JSONResponse:
         return JSONResponse({"mcp_oauth": False})
 
+    # Slack webhook endpoint for inbound events
+    @fastapi_app.post("/slack/events")
+    async def slack_events_webhook(request: Request) -> JSONResponse:
+        """
+        Handle inbound Slack events for bidirectional sync.
+
+        Supports:
+        - URL verification challenge (Slack app setup)
+        - Message events from channels
+        - Reaction events (for acknowledgment tracking)
+        - Thread replies (for conversation threading)
+        """
+        try:
+            # Reject when Slack integration is disabled
+            if not settings.slack.enabled:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
+            # Read raw body for signature verification
+            body_bytes = await request.body()
+
+            # Verify signature before any parsing
+            if settings.slack.signing_secret:
+                timestamp = request.headers.get("X-Slack-Request-Timestamp")
+                signature = request.headers.get("X-Slack-Signature")
+                if not timestamp or not signature:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Missing Slack signature headers"
+                    )
+
+                # Use static verification method
+                from .slack_integration import SlackClient
+                if not SlackClient.verify_signature(
+                    settings.slack.signing_secret,
+                    str(timestamp),
+                    str(signature),
+                    body_bytes
+                ):
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Invalid Slack signature"
+                    )
+            else:
+                # Strongly recommended in production; proceed for dev only
+                structlog.get_logger("slack").warning("slack_signing_secret_missing")
+
+            # Now safely parse JSON
+            body_text = body_bytes.decode("utf-8")
+            body_data = json.loads(body_text)
+
+            # Handle URL verification challenge (first-time setup)
+            if body_data.get("type") == "url_verification":
+                return JSONResponse({"challenge": body_data.get("challenge", "")})
+
+            # Handle event callbacks
+            if body_data.get("type") == "event_callback":
+                event = body_data.get("event", {})
+                event_type = event.get("type")
+
+                logger = structlog.get_logger("slack")
+                logger.info(
+                    "slack_event_received",
+                    event_type=event_type,
+                    channel=event.get("channel"),
+                    user=event.get("user"),
+                )
+
+                # Future: Handle different event types
+                # - message: Create MCP message from Slack message
+                # - reaction_added: Mark MCP message as acknowledged
+                # - app_mention: Trigger agent notification
+                #
+                # For now, just log the event
+                # Implementation of bidirectional sync would go here
+
+            return JSONResponse({"ok": True})
+
+        except json.JSONDecodeError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid JSON payload"
+            )
+        except HTTPException as exc:
+            # Preserve intended status (e.g., 401/404)
+            raise exc
+        except Exception as exc:
+            logger_err = structlog.get_logger("slack")
+            logger_err.error("slack_webhook_error", error=str(exc))
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Internal server error"
+            ) from exc
+
     # A minimal stateless ASGI adapter that does not rely on ASGI lifespan management
     # and runs a fresh StreamableHTTP transport per request.
     from mcp.server.streamable_http import StreamableHTTPServerTransport
