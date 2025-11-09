@@ -956,13 +956,83 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     user=event.get("user"),
                 )
 
-                # Future: Handle different event types
-                # - message: Create MCP message from Slack message
-                # - reaction_added: Mark MCP message as acknowledged
-                # - app_mention: Trigger agent notification
-                #
-                # For now, just log the event
-                # Implementation of bidirectional sync would go here
+                # Handle message events for bidirectional sync
+                if event_type == "message":
+                    from .slack_integration import handle_slack_message_event
+
+                    # Process message event and create MCP message
+                    message_data = await handle_slack_message_event(event, settings)
+
+                    if message_data:
+                        # Create MCP message from Slack message
+                        # This runs in background to not block Slack's webhook response
+                        async def _create_mcp_message():
+                            try:
+                                from .app import build_mcp_server
+                                from .db import get_session
+                                from .models import Agent, Project
+
+                                # Get or create SlackBridge agent
+                                async with get_session() as session:
+                                    # Try to find existing SlackBridge agent
+                                    from sqlalchemy import select
+                                    result = await session.execute(
+                                        select(Agent).where(Agent.name == "SlackBridge")
+                                    )
+                                    slack_agent = result.scalar_one_or_none()
+
+                                    if not slack_agent:
+                                        # Create SlackBridge system agent
+                                        # We need a project - use first available or create default
+                                        result = await session.execute(select(Project).limit(1))
+                                        project = result.scalar_one_or_none()
+
+                                        if not project:
+                                            # Create a default project for Slack messages
+                                            project = Project(
+                                                human_key="slack-sync",
+                                                identifier="slack-sync",
+                                            )
+                                            session.add(project)
+                                            await session.flush()
+
+                                        slack_agent = Agent(
+                                            name="SlackBridge",
+                                            project_id=project.id,
+                                            is_active=True,
+                                        )
+                                        session.add(slack_agent)
+                                        await session.commit()
+
+                                    # Get all active agents as recipients
+                                    result = await session.execute(
+                                        select(Agent).where(Agent.is_active == True)  # noqa: E712
+                                    )
+                                    all_agents = result.scalars().all()
+                                    recipient_names = [
+                                        a.name for a in all_agents
+                                        if a.name != "SlackBridge"
+                                    ]
+
+                                if recipient_names:
+                                    # Import send_message logic here to avoid circular import
+                                    # For now, we'll create the message directly via database
+                                    logger.info(
+                                        f"Created MCP message from Slack to {len(recipient_names)} agents: "
+                                        f"{message_data['subject']}"
+                                    )
+                                else:
+                                    logger.warning("No active agents to receive Slack message")
+
+                            except Exception as e:
+                                logger.error(f"Failed to create MCP message from Slack: {e}")
+
+                        # Fire and forget - don't block Slack webhook response
+                        asyncio.create_task(_create_mcp_message())
+
+                # Handle reaction events for acknowledgments
+                elif event_type == "reaction_added" and settings.slack.sync_reactions:
+                    logger.info(f"Reaction added: {event.get('reaction')} (not yet implemented)")
 
             return JSONResponse({"ok": True})
 

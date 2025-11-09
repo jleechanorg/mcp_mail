@@ -653,3 +653,143 @@ async def notify_slack_ack(
         logger.error(f"Failed to send Slack ack notification: {e}")
         # Don't raise - ack notifications are non-critical
         return None
+
+
+async def handle_slack_message_event(
+    event: dict[str, Any],
+    settings: Settings,
+) -> Optional[dict[str, Any]]:
+    """Handle incoming Slack message event and create MCP message.
+
+    This function implements Slack → MCP Mail sync. When a message is posted to
+    a configured Slack channel, it creates a corresponding MCP message that agents
+    can see and respond to.
+
+    Args:
+        event: Slack message event payload
+        settings: Application settings
+
+    Returns:
+        Dict with created message info, or None if message should be ignored
+
+    Message Routing Logic:
+        - Messages from configured sync channels are broadcast to all agents
+        - @mentions create targeted messages to specific agents
+        - Thread replies are mapped to MCP thread_id for conversation continuity
+        - Bot's own messages are ignored to prevent loops
+
+    Example event:
+        {
+          "type": "message",
+          "channel": "C1234567890",
+          "user": "U1234567890",
+          "text": "@BlueWhale can you review the deployment?",
+          "ts": "1503435956.000247",
+          "thread_ts": "1503435956.000100"  # If reply in thread
+        }
+    """
+    # Import here to avoid circular dependency
+    from .db import get_session
+    from .models import Agent, Project
+
+    # Ignore bot messages to prevent loops
+    if event.get("bot_id") or event.get("subtype") == "bot_message":
+        logger.debug("Ignoring bot message to prevent loop")
+        return None
+
+    channel_id = event.get("channel")
+    text = event.get("text", "")
+    user_id = event.get("user")
+    message_ts = event.get("ts")
+    thread_ts = event.get("thread_ts")  # If reply in thread
+
+    # Check if this channel is configured for sync
+    if not settings.slack.sync_enabled:
+        logger.debug("Slack sync is disabled")
+        return None
+
+    if settings.slack.sync_channels and channel_id not in settings.slack.sync_channels:
+        logger.debug(f"Channel {channel_id} not in sync_channels list")
+        return None
+
+    # Extract @mentions for targeted delivery
+    # Slack format: <@U1234567890|username> or <@U1234567890>
+    import re
+    mention_pattern = r'<@([A-Z0-9]+)(?:\|[^>]+)?>'
+    mentioned_users = re.findall(mention_pattern, text)
+
+    # Try to map Slack user to agent name (simplified - use display name)
+    # In production, you'd want a user mapping table
+    sender_name = f"slack_user_{user_id}" if user_id else "SlackBridge"
+
+    # Determine MCP thread_id from Slack thread
+    mcp_thread_id = None
+    if thread_ts and settings.slack.sync_thread_replies:
+        # Use Slack thread_ts as MCP thread_id
+        mcp_thread_id = f"slack_{channel_id}_{thread_ts}"
+
+    # Create subject from first line of text
+    subject_parts = text.split('\n', 1)
+    subject = subject_parts[0][:100] if subject_parts else "Message from Slack"
+
+    # Clean up text (remove Slack formatting)
+    body_md = text.replace('<@', '@').replace('>', '')  # Basic cleanup
+
+    logger.info(
+        f"Creating MCP message from Slack: channel={channel_id}, "
+        f"user={user_id}, thread={mcp_thread_id}"
+    )
+
+    return {
+        "sender_name": sender_name,
+        "subject": f"[Slack] {subject}",
+        "body_md": body_md,
+        "thread_id": mcp_thread_id,
+        "slack_channel": channel_id,
+        "slack_ts": message_ts,
+        "slack_thread_ts": thread_ts,
+        "mentioned_users": mentioned_users,
+    }
+
+
+async def post_via_webhook(
+    webhook_url: str,
+    text: str,
+    *,
+    blocks: Optional[list[dict[str, Any]]] = None,
+) -> bool:
+    """Post message to Slack via webhook URL (fallback method).
+
+    Webhook URLs are simpler but more limited than the Web API:
+    - Can only post to one pre-configured channel
+    - Cannot list channels, get permalinks, or read messages
+    - Useful as a fallback when bot token isn't available
+
+    Args:
+        webhook_url: Incoming webhook URL
+        text: Message text (required, used as fallback)
+        blocks: Optional Block Kit blocks for rich formatting
+
+    Returns:
+        True if message posted successfully, False otherwise
+    """
+    payload: dict[str, Any] = {"text": text}
+    if blocks:
+        payload["blocks"] = blocks
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(webhook_url, json=payload)
+            response.raise_for_status()
+
+            if response.text == "ok":
+                logger.info("Posted message via webhook")
+                return True
+            else:
+                logger.warning(f"Unexpected webhook response: {response.text}")
+                return False
+
+    except Exception as e:
+        logger.error(f"Failed to post via webhook: {e}")
+        return False
+

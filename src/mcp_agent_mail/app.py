@@ -2495,27 +2495,47 @@ def build_mcp_server() -> FastMCP:
         # Send Slack notification if enabled (fire-and-forget, non-blocking)
         # Capture client reference before async boundary to avoid race condition during shutdown
         slack_client = _slack_client
-        if slack_client and settings.slack.enabled and settings.slack.notify_on_message:
+        if settings.slack.enabled and settings.slack.notify_on_message:
             def _slack_done_cb(t: asyncio.Task) -> None:
                 try:
                     _ = t.result()
                 except Exception as e:
                     logger.warning(f"Failed to send Slack notification: {e}")
 
-            task = asyncio.create_task(
-                notify_slack_message(
-                    client=slack_client,
-                    settings=settings,
-                    message_id=str(message.id),
-                    subject=subject,
-                    body_md=body_md,
-                    sender_name=sender.name,
-                    recipients=recipients_for_archive,
-                    importance=importance,
-                    thread_id=thread_id,
+            # Try Web API client first, fall back to webhook
+            if slack_client:
+                task = asyncio.create_task(
+                    notify_slack_message(
+                        client=slack_client,
+                        settings=settings,
+                        message_id=str(message.id),
+                        subject=subject,
+                        body_md=body_md,
+                        sender_name=sender.name,
+                        recipients=recipients_for_archive,
+                        importance=importance,
+                        thread_id=thread_id,
+                    )
                 )
-            )
-            task.add_done_callback(_slack_done_cb)
+                task.add_done_callback(_slack_done_cb)
+            elif settings.slack.webhook_url:
+                # Fallback to webhook URL if no client available
+                from .slack_integration import format_mcp_message_for_slack, post_via_webhook
+
+                async def _post_webhook():
+                    text, blocks = format_mcp_message_for_slack(
+                        subject=subject,
+                        body_md=body_md,
+                        sender_name=sender.name,
+                        recipients=recipients_for_archive,
+                        message_id=str(message.id),
+                        importance=importance,
+                        use_blocks=settings.slack.use_blocks,
+                    )
+                    await post_via_webhook(settings.slack.webhook_url, text, blocks=blocks)
+
+                task = asyncio.create_task(_post_webhook())
+                task.add_done_callback(_slack_done_cb)
 
         if payload is None:
             raise RuntimeError("Message payload was not generated.")
