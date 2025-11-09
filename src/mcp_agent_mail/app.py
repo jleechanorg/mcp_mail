@@ -1171,6 +1171,7 @@ async def _get_or_create_agent(
     model: str,
     task_description: str,
     settings: Settings,
+    force_reclaim: bool = False,
 ) -> Agent:
     if project.id is None:
         raise ValueError("Project must have an id before creating agents.")
@@ -1196,14 +1197,30 @@ async def _get_or_create_agent(
                     # Exists in this project, we'll update it below
                     desired_name = sanitized
                 else:
-                    if mode == "strict":
+                    # Name exists in another project
+                    if mode == "strict" and not force_reclaim:
+                        # In strict mode, require explicit force_reclaim
+                        conflicts = await _lookup_agents_any_project(sanitized)
+                        conflict_info = []
+                        for conf_proj, conf_agent in conflicts:
+                            conflict_info.append({
+                                "project": conf_proj.human_key,
+                                "program": conf_agent.program,
+                                "model": conf_agent.model,
+                                "task": conf_agent.task_description,
+                            })
                         raise ToolExecutionError(
                             "NAME_TAKEN",
-                            f"Agent name '{sanitized}' is already in use globally.",
+                            f"Agent name '{sanitized}' is already in use. Set force_reclaim=True to override and retire the existing agent(s).",
                             recoverable=True,
-                            data={"name": sanitized, "conflict": "other_project"},
+                            data={
+                                "name": sanitized,
+                                "conflict": "other_project",
+                                "conflicting_agents": conflict_info,
+                                "hint": "Call register_agent with force_reclaim=True to reclaim this name",
+                            },
                         )
-                    # Retire conflicting agents in other projects so this project can take the name.
+                    # Retire conflicting agents in other projects (auto in coerce mode, or forced via force_reclaim)
                     await _retire_conflicting_agents(
                         sanitized,
                         project_to_keep=project,
@@ -1251,11 +1268,30 @@ async def _get_or_create_agent(
                 await session.refresh(agent)
             except IntegrityError as exc:
                 await session.rollback()
+                # Try to get info about the conflicting agent
+                try:
+                    conflicts = await _lookup_agents_any_project(desired_name)
+                    conflict_info = [
+                        {
+                            "project": conf_proj.human_key,
+                            "program": conf_agent.program,
+                            "model": conf_agent.model,
+                            "task": conf_agent.task_description,
+                        }
+                        for conf_proj, conf_agent in conflicts
+                    ]
+                except Exception:
+                    conflict_info = []
                 raise ToolExecutionError(
                     "NAME_TAKEN",
-                    f"Agent name '{desired_name}' is already in use globally.",
+                    f"Agent name '{desired_name}' is already in use globally (race condition). Set force_reclaim=True to override.",
                     recoverable=True,
-                    data={"name": desired_name},
+                    data={
+                        "name": desired_name,
+                        "race_condition": True,
+                        "conflicting_agents": conflict_info,
+                        "hint": "Call register_agent with force_reclaim=True to reclaim this name",
+                    },
                 ) from exc
         else:
             agent = Agent(
@@ -1272,11 +1308,30 @@ async def _get_or_create_agent(
             except IntegrityError as exc:
                 await session.rollback()
                 # Race condition: name was taken between our check and commit
+                # Try to get info about the conflicting agent
+                try:
+                    conflicts = await _lookup_agents_any_project(desired_name)
+                    conflict_info = [
+                        {
+                            "project": conf_proj.human_key,
+                            "program": conf_agent.program,
+                            "model": conf_agent.model,
+                            "task": conf_agent.task_description,
+                        }
+                        for conf_proj, conf_agent in conflicts
+                    ]
+                except Exception:
+                    conflict_info = []
                 raise ToolExecutionError(
                     "NAME_TAKEN",
-                    f"Agent name '{desired_name}' is already in use globally (race condition detected). Please try again.",
+                    f"Agent name '{desired_name}' is already in use globally (race condition). Set force_reclaim=True to override.",
                     recoverable=True,
-                    data={"name": desired_name, "race_condition": True},
+                    data={
+                        "name": desired_name,
+                        "race_condition": True,
+                        "conflicting_agents": conflict_info,
+                        "hint": "Call register_agent with force_reclaim=True to reclaim this name",
+                    },
                 ) from exc
     archive = await ensure_archive(settings, project.slug)
     async with _archive_write_lock(archive):
@@ -2690,6 +2745,7 @@ def build_mcp_server() -> FastMCP:
         name: Optional[str] = None,
         task_description: str = "",
         attachments_policy: str = "auto",
+        force_reclaim: bool = False,
     ) -> dict[str, Any]:
         """
         Create or update an agent identity within a project and persist its profile to Git.
@@ -2733,6 +2789,10 @@ def build_mcp_server() -> FastMCP:
             Names are globally unique; passing the same name updates the profile.
         task_description : str
             Short description of current focus (shows up in directory listings).
+        force_reclaim : bool
+            If True, forcefully reclaim this agent name by retiring any active agents that currently
+            use it, even in other projects. Use this when you want to override existing agents.
+            Default is False. When False, the system will warn you if the name is already taken.
 
         Returns
         -------
@@ -2780,7 +2840,7 @@ def build_mcp_server() -> FastMCP:
         ap = (attachments_policy or "auto").lower()
         if ap not in {"auto", "inline", "file"}:
             ap = "auto"
-        agent = await _get_or_create_agent(project, name, program, model, task_description, settings)
+        agent = await _get_or_create_agent(project, name, program, model, task_description, settings, force_reclaim=force_reclaim)
         # Persist attachment policy if changed
         if getattr(agent, "attachments_policy", None) != ap:
             async with get_session() as session:
