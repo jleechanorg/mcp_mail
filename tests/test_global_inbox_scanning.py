@@ -12,7 +12,10 @@ from fastmcp import Client
 
 from mcp_agent_mail.app import build_mcp_server
 
-GLOBAL_INBOX_NAME = "global-inbox"
+
+def get_global_inbox_name(project_slug: str) -> str:
+    """Get project-specific global inbox name."""
+    return f"global-inbox-{project_slug}"
 
 
 def _get(field: str, obj):

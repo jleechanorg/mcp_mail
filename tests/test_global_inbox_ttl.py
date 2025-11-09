@@ -13,7 +13,10 @@ from fastmcp import Client
 
 from mcp_agent_mail.app import build_mcp_server
 
-GLOBAL_INBOX_NAME = "global-inbox"
+
+def get_global_inbox_name(project_slug: str) -> str:
+    """Get project-specific global inbox name."""
+    return f"global-inbox-{project_slug}"
 
 
 def _get(field: str, obj):
@@ -48,7 +51,7 @@ async def test_global_inbox_agent_created_on_project_setup(isolated_env):
         # Try to fetch the global inbox - this should work if it exists
         result = await client.call_tool(
             "fetch_inbox",
-            {"project_key": "test-project", "agent_name": GLOBAL_INBOX_NAME},
+            {"project_key": "test-project", "agent_name": get_global_inbox_name("test-project")},
         )
 
         # The global inbox should exist and be empty initially
@@ -92,7 +95,7 @@ async def test_all_messages_auto_cc_global_inbox(isolated_env):
         # Check that the global inbox received the message
         inbox_result = await client.call_tool(
             "fetch_inbox",
-            {"project_key": "test-project", "agent_name": GLOBAL_INBOX_NAME},
+            {"project_key": "test-project", "agent_name": get_global_inbox_name("test-project")},
         )
 
         messages = _extract_result(inbox_result)
@@ -147,7 +150,7 @@ async def test_global_inbox_cc_not_visible_to_sender_outbox(isolated_env):
         payload = deliveries[0].get("payload", {})
         cc_list = payload.get("cc", [])
         # Global inbox should not appear in the visible cc list
-        assert GLOBAL_INBOX_NAME not in cc_list
+        assert get_global_inbox_name("test-project") not in cc_list
 
 
 @pytest.mark.asyncio
@@ -185,7 +188,7 @@ async def test_any_agent_can_read_global_inbox(isolated_env):
         # Charlie (not a recipient) should still be able to read it from global inbox
         charlie_global_view = await client.call_tool(
             "fetch_inbox",
-            {"project_key": "test-project", "agent_name": GLOBAL_INBOX_NAME},
+            {"project_key": "test-project", "agent_name": get_global_inbox_name("test-project")},
         )
 
         messages = _extract_result(charlie_global_view)
