@@ -32,7 +32,7 @@ from .config import Settings, get_settings
 from .db import ensure_schema, get_session, init_engine
 from .guard import install_guard as install_guard_script, uninstall_guard as uninstall_guard_script
 from .llm import complete_system_user
-from .models import Agent, AgentLink, FileReservation, Message, MessageRecipient, Project, ProjectSiblingSuggestion
+from .models import Agent, FileReservation, Message, MessageRecipient, Project, ProjectSiblingSuggestion
 from .slack_integration import SlackClient, notify_slack_message
 from .storage import (
     ProjectArchive,
