@@ -705,15 +705,20 @@ async def _ensure_global_inbox_agent(project: Project) -> Agent:
             await session.commit()
             await session.refresh(agent)
         except IntegrityError:
-            # Global inbox might already exist globally (from another project)
-            # This is OK - we'll just return the existing one
+            # Global inbox name already exists globally (agent names are globally unique)
             await session.rollback()
             result = await session.execute(
                 select(Agent).where(Agent.name == GLOBAL_INBOX_NAME)
             )
             existing_agent = result.scalars().first()
             if existing_agent:
-                return existing_agent
+                # Verify it belongs to this project
+                if existing_agent.project_id == project.id:
+                    return existing_agent
+                raise ValueError(
+                    f"Global inbox agent with name '{GLOBAL_INBOX_NAME}' already exists "
+                    f"for a different project (project_id={existing_agent.project_id})."
+                ) from None
             raise
         return agent
 
@@ -2485,8 +2490,11 @@ def build_mcp_server() -> FastMCP:
         bcc_names = _unique(bcc_names)
 
         # Auto-add global inbox to cc list (unless sender is the global inbox itself)
+        # Only add if the global inbox agent exists
         if sender.name != GLOBAL_INBOX_NAME and GLOBAL_INBOX_NAME not in cc_names:
-            cc_names = [*cc_names, GLOBAL_INBOX_NAME]
+            global_inbox_agent = await _get_agent_by_name_optional(GLOBAL_INBOX_NAME)
+            if global_inbox_agent is not None:
+                cc_names = [*cc_names, GLOBAL_INBOX_NAME]
 
         if to_names or cc_names or bcc_names:
             to_agents = [await _get_agent_by_name(name) for name in to_names]
