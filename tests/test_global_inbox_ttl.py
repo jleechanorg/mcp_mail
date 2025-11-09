@@ -177,7 +177,7 @@ async def test_global_inbox_ttl_deletion_after_21_days(isolated_env):
         with patch("mcp_agent_mail.app.datetime") as mock_datetime:
             # Make datetime.now() return old time for message creation
             mock_datetime.now.return_value = old_time
-            mock_datetime.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
+            mock_datetime.side_effect = datetime
 
             # Send a message in the "past"
             send_result = await client.call_tool(
@@ -255,7 +255,7 @@ async def test_global_inbox_ttl_deletion_keeps_original_inboxes_intact(isolated_
 
         with patch("mcp_agent_mail.app.datetime") as mock_datetime:
             mock_datetime.now.return_value = old_time
-            mock_datetime.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
+            mock_datetime.side_effect = datetime
 
             await client.call_tool(
                 "send_message",
