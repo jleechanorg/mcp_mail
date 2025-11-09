@@ -19,12 +19,8 @@ from mcp_agent_mail.app import build_mcp_server
 from mcp_agent_mail.http import build_http_app
 
 
-def _rpc(method: str, params: dict) -> dict:
-    return {"jsonrpc": "2.0", "id": "1", "method": method, "params": params}
-
-
 @pytest.mark.asyncio
-async def test_unified_inbox_does_not_filter_by_project(isolated_env, monkeypatch):
+async def test_unified_inbox_does_not_filter_by_project(isolated_env):
     """Verify unified inbox template does not contain project filtering UI.
 
     Projects should be visible as metadata (badges/tags) but should not
@@ -96,7 +92,7 @@ async def test_unified_inbox_does_not_filter_by_project(isolated_env, monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_unified_inbox_api_structure(isolated_env, monkeypatch):
+async def test_unified_inbox_api_structure(isolated_env):
     """Verify the unified inbox API returns correct structure with project metadata.
 
     The API response should include a messages array where each message
@@ -132,7 +128,7 @@ async def test_unified_inbox_api_structure(isolated_env, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_global_message_lookup_function_exists(isolated_env, monkeypatch):
+async def test_global_message_lookup_function_exists(isolated_env):
     """Verify the _get_message_by_id_global function exists and works correctly.
 
     This function is the key to making projects informational only - it allows

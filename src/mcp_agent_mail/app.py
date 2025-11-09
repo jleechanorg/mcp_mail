@@ -2282,6 +2282,31 @@ async def _update_recipient_timestamp(
     return now
 
 
+async def _validate_agent_is_recipient(agent: Agent, message_id: int) -> None:
+    """Validate that an agent is a recipient of a message.
+
+    Raises NoResultFound if the agent is not a recipient of the message.
+    This prevents agents from marking messages as read/acknowledged when
+    they never received them.
+    """
+    if agent.id is None:
+        raise ValueError("Agent must have an id before validation.")
+    await ensure_schema()
+    async with get_session() as session:
+        result = await session.execute(
+            select(MessageRecipient).where(
+                MessageRecipient.message_id == message_id,
+                MessageRecipient.agent_id == agent.id,
+            )
+        )
+        recipient = result.scalars().first()
+        if not recipient:
+            raise NoResultFound(
+                f"Agent '{agent.name}' is not a recipient of message {message_id}. "
+                f"Only recipients can mark messages as read or acknowledged."
+            )
+
+
 # Tool exposure configuration for lazy loading
 # Core tools (~9k tokens): Essential coordination functionality
 CORE_TOOLS = {
@@ -3723,9 +3748,19 @@ def build_mcp_server() -> FastMCP:
         """
         Mark a specific message as read for the given agent.
 
+        Parameters
+        ----------
+        project_key : str
+            Project identifier (informational only - agents and messages are globally accessible).
+        agent_name : str
+            Name of the agent marking the message as read.
+        message_id : int
+            ID of the message to mark as read.
+
         Notes
         -----
         - Read receipts are per-recipient; this only affects the specified agent.
+        - Agent must be a recipient of the message (raises error if not).
         - This does not send an acknowledgement; use `acknowledge_message` for that.
         - Safe to call multiple times; later calls return the original timestamp.
 
@@ -3758,9 +3793,9 @@ def build_mcp_server() -> FastMCP:
             except Exception:
                 pass
         try:
-            project = await _get_project_by_identifier(project_key)
-            agent = await _get_agent(project, agent_name)
+            agent = await _get_agent_by_name(agent_name)
             await _get_message_by_id_global(message_id)
+            await _validate_agent_is_recipient(agent, message_id)
             read_ts = await _update_recipient_timestamp(agent, message_id, "read_ts")
             await ctx.info(f"Marked message {message_id} read for '{agent.name}'.")
             return {"message_id": message_id, "read": bool(read_ts), "read_at": _iso(read_ts) if read_ts else None}
@@ -3792,9 +3827,19 @@ def build_mcp_server() -> FastMCP:
         """
         Acknowledge a message addressed to an agent (and mark as read).
 
+        Parameters
+        ----------
+        project_key : str
+            Project identifier (informational only - agents and messages are globally accessible).
+        agent_name : str
+            Name of the agent acknowledging the message.
+        message_id : int
+            ID of the message to acknowledge.
+
         Behavior
         --------
         - Sets both read_ts and ack_ts for the (agent, message) pairing
+        - Agent must be a recipient of the message (raises error if not)
         - Safe to call multiple times; subsequent calls will return the prior timestamps
 
         Idempotency
@@ -3830,9 +3875,9 @@ def build_mcp_server() -> FastMCP:
             except Exception:
                 pass
         try:
-            project = await _get_project_by_identifier(project_key)
-            agent = await _get_agent(project, agent_name)
+            agent = await _get_agent_by_name(agent_name)
             await _get_message_by_id_global(message_id)
+            await _validate_agent_is_recipient(agent, message_id)
             read_ts = await _update_recipient_timestamp(agent, message_id, "read_ts")
             ack_ts = await _update_recipient_timestamp(agent, message_id, "ack_ts")
             await ctx.info(f"Acknowledged message {message_id} for '{agent.name}'.")
