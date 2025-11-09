@@ -62,6 +62,10 @@ CLUSTER_SEARCH = "search"
 CLUSTER_FILE_RESERVATIONS = "file_reservations"
 CLUSTER_MACROS = "workflow_macros"
 
+# Global inbox configuration
+GLOBAL_INBOX_NAME = "global-inbox"
+GLOBAL_INBOX_TTL_DAYS = 21  # 3 weeks
+
 
 class ToolExecutionError(Exception):
     def __init__(self, error_type: str, message: str, *, recoverable: bool = True, data: Optional[dict[str, Any]] = None):
@@ -655,12 +659,64 @@ async def _ensure_project(human_key: str) -> Project:
         result = await session.execute(select(Project).where(Project.slug == slug))
         project = result.scalars().first()
         if project:
+            # Ensure global inbox agent exists for existing project
+            await _ensure_global_inbox_agent(project)
             return project
         project = Project(slug=slug, human_key=human_key)
         session.add(project)
         await session.commit()
         await session.refresh(project)
+        # Create global inbox agent for new project
+        await _ensure_global_inbox_agent(project)
         return project
+
+
+async def _ensure_global_inbox_agent(project: Project) -> Agent:
+    """Ensure the global inbox agent exists for the given project.
+
+    The global inbox is a special agent that receives a copy of all messages
+    and has a TTL of 21 days for auto-deletion.
+    """
+    if project.id is None:
+        raise ValueError("Project must have an id before creating global inbox agent.")
+
+    await ensure_schema()
+    async with get_session() as session:
+        # Check if global inbox agent already exists
+        result = await session.execute(
+            select(Agent).where(
+                Agent.project_id == project.id,
+                Agent.name == GLOBAL_INBOX_NAME,
+            )
+        )
+        existing_agent = result.scalars().first()
+        if existing_agent:
+            return existing_agent
+
+        # Create global inbox agent
+        agent = Agent(
+            project_id=project.id,
+            name=GLOBAL_INBOX_NAME,
+            program="mcp-mail-system",
+            model="system",
+            task_description=f"Global inbox for all project messages. Messages auto-delete after {GLOBAL_INBOX_TTL_DAYS} days.",
+        )
+        session.add(agent)
+        try:
+            await session.commit()
+            await session.refresh(agent)
+        except IntegrityError:
+            # Global inbox might already exist globally (from another project)
+            # This is OK - we'll just return the existing one
+            await session.rollback()
+            result = await session.execute(
+                select(Agent).where(Agent.name == GLOBAL_INBOX_NAME)
+            )
+            existing_agent = result.scalars().first()
+            if existing_agent:
+                return existing_agent
+            raise
+        return agent
 
 
 async def _get_project_by_identifier(identifier: str) -> Project:
@@ -2367,6 +2423,11 @@ def build_mcp_server() -> FastMCP:
         to_names = _unique(to_names)
         cc_names = _unique(cc_names)
         bcc_names = _unique(bcc_names)
+
+        # Auto-add global inbox to cc list (unless sender is the global inbox itself)
+        if sender.name != GLOBAL_INBOX_NAME and GLOBAL_INBOX_NAME not in cc_names:
+            cc_names = list(cc_names) + [GLOBAL_INBOX_NAME]
+
         if to_names or cc_names or bcc_names:
             to_agents = [await _get_agent_by_name(name) for name in to_names]
             cc_agents = [await _get_agent_by_name(name) for name in cc_names]
@@ -2375,6 +2436,10 @@ def build_mcp_server() -> FastMCP:
             to_agents = []
             cc_agents = []
             bcc_agents = []
+
+        # Filter out global inbox from cc_agents for outbox visibility (keep in recipient_records)
+        cc_agents_for_outbox = [agent for agent in cc_agents if agent.name != GLOBAL_INBOX_NAME]
+
         recipient_records: list[tuple[Agent, str]] = [(agent, "to") for agent in to_agents]
         recipient_records.extend((agent, "cc") for agent in cc_agents)
         recipient_records.extend((agent, "bcc") for agent in bcc_agents)
@@ -2472,7 +2537,7 @@ def build_mcp_server() -> FastMCP:
                 {
                     "from": sender.name,
                     "to": [agent.name for agent in to_agents],
-                    "cc": [agent.name for agent in cc_agents],
+                    "cc": [agent.name for agent in cc_agents_for_outbox],
                     "bcc": [agent.name for agent in bcc_agents],
                     "attachments": attachments_meta,
                 }
@@ -4126,6 +4191,86 @@ def build_mcp_server() -> FastMCP:
             return ToolResult(structured_content={"result": items})
         except Exception:
             return items
+
+    @mcp.tool(name="cleanup_global_inbox")
+    @_instrument_tool(
+        "cleanup_global_inbox",
+        cluster=CLUSTER_MESSAGING,
+        capabilities={"messaging", "cleanup"},
+        project_arg="project_key",
+    )
+    async def cleanup_global_inbox(ctx: Context, project_key: str) -> dict[str, Any]:
+        """
+        Delete messages older than 21 days from the global inbox.
+
+        This tool removes MessageRecipient records for the global inbox agent
+        where the message is older than the TTL (21 days). The original messages
+        remain in the database for other recipients.
+
+        Parameters
+        ----------
+        project_key : str
+            Project identifier.
+
+        Returns
+        -------
+        dict
+            {
+                "deleted_count": int,  # Number of MessageRecipient records deleted
+                "cutoff_date": str,    # ISO timestamp of the cutoff date
+            }
+
+        Example
+        -------
+        ```json
+        {
+          "jsonrpc": "2.0",
+          "id": "11",
+          "method": "tools/call",
+          "params": {
+            "name": "cleanup_global_inbox",
+            "arguments": {"project_key": "/test-project"}
+          }
+        }
+        ```
+        """
+        project = await _get_project_by_identifier(project_key)
+        if project.id is None:
+            raise ValueError("Project must have an id before cleaning up global inbox.")
+
+        # Get the global inbox agent
+        global_inbox = await _get_agent_by_name(GLOBAL_INBOX_NAME)
+
+        # Calculate cutoff date (21 days ago)
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=GLOBAL_INBOX_TTL_DAYS)
+
+        await ensure_schema()
+        async with get_session() as session:
+            # Delete MessageRecipient records for global inbox where message is older than TTL
+            result = await session.execute(
+                delete(MessageRecipient)
+                .where(
+                    MessageRecipient.agent_id == global_inbox.id,
+                    MessageRecipient.message_id.in_(
+                        select(Message.id).where(
+                            Message.project_id == project.id,
+                            Message.created_ts < cutoff_date,
+                        )
+                    ),
+                )
+            )
+            deleted_count = result.rowcount or 0
+            await session.commit()
+
+        await ctx.info(
+            f"Cleaned up {deleted_count} messages from global inbox for project '{project.human_key}' "
+            f"(older than {cutoff_date.isoformat()})"
+        )
+
+        return {
+            "deleted_count": deleted_count,
+            "cutoff_date": _iso(cutoff_date),
+        }
 
     @mcp.tool(name="summarize_thread")
     @_instrument_tool("summarize_thread", cluster=CLUSTER_SEARCH, capabilities={"summarization", "search"}, project_arg="project_key")
