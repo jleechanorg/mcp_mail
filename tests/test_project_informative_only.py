@@ -9,6 +9,7 @@ Reference: Projects should be informative and not organize messages anymore.
 from __future__ import annotations
 
 import contextlib
+import inspect
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -141,7 +142,6 @@ async def test_global_message_lookup_function_exists(isolated_env, monkeypatch):
     from mcp_agent_mail.app import _get_message_by_id_global
 
     # The function should be importable and have the correct signature
-    import inspect
     sig = inspect.signature(_get_message_by_id_global)
     params = list(sig.parameters.keys())
 
