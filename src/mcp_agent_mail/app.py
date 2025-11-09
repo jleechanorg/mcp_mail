@@ -2480,12 +2480,15 @@ def build_mcp_server() -> FastMCP:
         cc_names = _unique(cc_names)
         bcc_names = _unique(bcc_names)
 
-        # Auto-add global inbox to cc list (unless sender is the global inbox itself)
+        # Check if global inbox exists (will be added directly to cc_agents to avoid race condition)
         global_inbox_name = get_global_inbox_name(project)
-        # Check if global inbox exists before adding to cc
         global_inbox_agent = await _get_agent_by_name_optional(global_inbox_name)
-        if global_inbox_agent is not None and sender.name != global_inbox_name and global_inbox_name not in cc_names:
-            cc_names = [*cc_names, global_inbox_name]
+        # Only add to cc if sender is not the global inbox itself
+        should_cc_global_inbox = (
+            global_inbox_agent is not None
+            and sender.name != global_inbox_name
+            and global_inbox_name not in cc_names
+        )
 
         if to_names or cc_names or bcc_names:
             to_agents = [await _get_agent_by_name(name) for name in to_names]
@@ -2495,6 +2498,10 @@ def build_mcp_server() -> FastMCP:
             to_agents = []
             cc_agents = []
             bcc_agents = []
+
+        # Add global inbox to cc_agents directly (avoids race condition from re-fetching by name)
+        if should_cc_global_inbox:
+            cc_agents.append(global_inbox_agent)
 
         # Filter out global inbox from cc_agents for outbox visibility (keep in recipient_records)
         cc_agents_for_outbox = [agent for agent in cc_agents if agent.name != global_inbox_name]
