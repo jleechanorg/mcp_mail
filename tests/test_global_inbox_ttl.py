@@ -5,13 +5,13 @@ This test suite covers:
 2. Auto-cc to global inbox on all messages
 3. Read-all permissions for global inbox
 """
+
 from __future__ import annotations
 
 import pytest
 from fastmcp import Client
 
 from mcp_agent_mail.app import build_mcp_server
-
 
 GLOBAL_INBOX_NAME = "global-inbox"
 
@@ -25,8 +25,8 @@ def _get(field: str, obj):
 
 def _extract_result(call_result):
     """Extract the actual data from a CallToolResult."""
-    if hasattr(call_result, 'structured_content') and call_result.structured_content:
-        return call_result.structured_content.get('result', call_result.data)
+    if hasattr(call_result, "structured_content") and call_result.structured_content:
+        return call_result.structured_content.get("result", call_result.data)
     return call_result.data
 
 

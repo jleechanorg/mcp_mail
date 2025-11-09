@@ -2486,7 +2486,7 @@ def build_mcp_server() -> FastMCP:
 
         # Auto-add global inbox to cc list (unless sender is the global inbox itself)
         if sender.name != GLOBAL_INBOX_NAME and GLOBAL_INBOX_NAME not in cc_names:
-            cc_names = list(cc_names) + [GLOBAL_INBOX_NAME]
+            cc_names = [*cc_names, GLOBAL_INBOX_NAME]
 
         if to_names or cc_names or bcc_names:
             to_agents = [await _get_agent_by_name(name) for name in to_names]
