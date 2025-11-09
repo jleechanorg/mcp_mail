@@ -2195,6 +2195,24 @@ async def _get_message(project: Project, message_id: int) -> Message:
         return message
 
 
+async def _get_message_by_id_global(message_id: int) -> Message:
+    """Fetch message by ID globally (ignoring project boundaries).
+
+    Projects are informational only - messages are globally accessible by ID.
+    This allows agents to reply to messages they received regardless of which
+    project context they're currently operating in.
+    """
+    await ensure_schema()
+    async with get_session() as session:
+        result = await session.execute(
+            select(Message).where(Message.id == message_id)
+        )
+        message = result.scalars().first()
+        if not message:
+            raise NoResultFound(f"Message id '{message_id}' not found.")
+        return message
+
+
 async def _get_agent_by_id(project: Project, agent_id: int) -> Agent:
     """Fetch active agent by ID within project."""
     if project.id is None:
@@ -2262,6 +2280,31 @@ async def _update_recipient_timestamp(
         await session.execute(stmt)
         await session.commit()
     return now
+
+
+async def _validate_agent_is_recipient(agent: Agent, message_id: int) -> None:
+    """Validate that an agent is a recipient of a message.
+
+    Raises NoResultFound if the agent is not a recipient of the message.
+    This prevents agents from marking messages as read/acknowledged when
+    they never received them.
+    """
+    if agent.id is None:
+        raise ValueError("Agent must have an id before validation.")
+    await ensure_schema()
+    async with get_session() as session:
+        result = await session.execute(
+            select(MessageRecipient).where(
+                MessageRecipient.message_id == message_id,
+                MessageRecipient.agent_id == agent.id,
+            )
+        )
+        recipient = result.scalars().first()
+        if not recipient:
+            raise NoResultFound(
+                f"Agent '{agent.name}' is not a recipient of message {message_id}. "
+                f"Only recipients can mark messages as read or acknowledged."
+            )
 
 
 # Tool exposure configuration for lazy loading
@@ -3485,7 +3528,7 @@ def build_mcp_server() -> FastMCP:
         """
         project = await _get_project_by_identifier(project_key)
         sender = await _get_agent_by_name(sender_name)
-        original = await _get_message(project, message_id)
+        original = await _get_message_by_id_global(message_id)
         original_sender = await _get_agent_by_id_global(original.sender_id)
         thread_key = original.thread_id or str(original.id)
         subject_prefix_clean = subject_prefix.strip()
@@ -3705,9 +3748,19 @@ def build_mcp_server() -> FastMCP:
         """
         Mark a specific message as read for the given agent.
 
+        Parameters
+        ----------
+        project_key : str
+            Project identifier (informational only - agents and messages are globally accessible).
+        agent_name : str
+            Name of the agent marking the message as read.
+        message_id : int
+            ID of the message to mark as read.
+
         Notes
         -----
         - Read receipts are per-recipient; this only affects the specified agent.
+        - Agent must be a recipient of the message (raises error if not).
         - This does not send an acknowledgement; use `acknowledge_message` for that.
         - Safe to call multiple times; later calls return the original timestamp.
 
@@ -3740,9 +3793,9 @@ def build_mcp_server() -> FastMCP:
             except Exception:
                 pass
         try:
-            project = await _get_project_by_identifier(project_key)
-            agent = await _get_agent(project, agent_name)
-            await _get_message(project, message_id)
+            agent = await _get_agent_by_name(agent_name)
+            await _get_message_by_id_global(message_id)
+            await _validate_agent_is_recipient(agent, message_id)
             read_ts = await _update_recipient_timestamp(agent, message_id, "read_ts")
             await ctx.info(f"Marked message {message_id} read for '{agent.name}'.")
             return {"message_id": message_id, "read": bool(read_ts), "read_at": _iso(read_ts) if read_ts else None}
@@ -3774,9 +3827,19 @@ def build_mcp_server() -> FastMCP:
         """
         Acknowledge a message addressed to an agent (and mark as read).
 
+        Parameters
+        ----------
+        project_key : str
+            Project identifier (informational only - agents and messages are globally accessible).
+        agent_name : str
+            Name of the agent acknowledging the message.
+        message_id : int
+            ID of the message to acknowledge.
+
         Behavior
         --------
         - Sets both read_ts and ack_ts for the (agent, message) pairing
+        - Agent must be a recipient of the message (raises error if not)
         - Safe to call multiple times; subsequent calls will return the prior timestamps
 
         Idempotency
@@ -3812,9 +3875,9 @@ def build_mcp_server() -> FastMCP:
             except Exception:
                 pass
         try:
-            project = await _get_project_by_identifier(project_key)
-            agent = await _get_agent(project, agent_name)
-            await _get_message(project, message_id)
+            agent = await _get_agent_by_name(agent_name)
+            await _get_message_by_id_global(message_id)
+            await _validate_agent_is_recipient(agent, message_id)
             read_ts = await _update_recipient_timestamp(agent, message_id, "read_ts")
             ack_ts = await _update_recipient_timestamp(agent, message_id, "ack_ts")
             await ctx.info(f"Acknowledged message {message_id} for '{agent.name}'.")
