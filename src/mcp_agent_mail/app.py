@@ -64,7 +64,6 @@ CLUSTER_MACROS = "workflow_macros"
 
 # Global inbox configuration
 GLOBAL_INBOX_NAME = "global-inbox"
-GLOBAL_INBOX_TTL_DAYS = 21  # 3 weeks
 
 
 class ToolExecutionError(Exception):
@@ -699,7 +698,7 @@ async def _ensure_global_inbox_agent(project: Project) -> Agent:
             name=GLOBAL_INBOX_NAME,
             program="mcp-mail-system",
             model="system",
-            task_description=f"Global inbox for all project messages. Messages auto-delete after {GLOBAL_INBOX_TTL_DAYS} days.",
+            task_description="Global inbox for all project messages.",
         )
         session.add(agent)
         try:
@@ -4252,86 +4251,6 @@ def build_mcp_server() -> FastMCP:
             return ToolResult(structured_content={"result": items})
         except Exception:
             return items
-
-    @mcp.tool(name="cleanup_global_inbox")
-    @_instrument_tool(
-        "cleanup_global_inbox",
-        cluster=CLUSTER_MESSAGING,
-        capabilities={"messaging", "cleanup"},
-        project_arg="project_key",
-    )
-    async def cleanup_global_inbox(ctx: Context, project_key: str) -> dict[str, Any]:
-        """
-        Delete messages older than 21 days from the global inbox.
-
-        This tool removes MessageRecipient records for the global inbox agent
-        where the message is older than the TTL (21 days). The original messages
-        remain in the database for other recipients.
-
-        Parameters
-        ----------
-        project_key : str
-            Project identifier.
-
-        Returns
-        -------
-        dict
-            {
-                "deleted_count": int,  # Number of MessageRecipient records deleted
-                "cutoff_date": str,    # ISO timestamp of the cutoff date
-            }
-
-        Example
-        -------
-        ```json
-        {
-          "jsonrpc": "2.0",
-          "id": "11",
-          "method": "tools/call",
-          "params": {
-            "name": "cleanup_global_inbox",
-            "arguments": {"project_key": "/test-project"}
-          }
-        }
-        ```
-        """
-        project = await _get_project_by_identifier(project_key)
-        if project.id is None:
-            raise ValueError("Project must have an id before cleaning up global inbox.")
-
-        # Get the global inbox agent
-        global_inbox = await _get_agent_by_name(GLOBAL_INBOX_NAME)
-
-        # Calculate cutoff date (21 days ago)
-        cutoff_date = datetime.now(timezone.utc) - timedelta(days=GLOBAL_INBOX_TTL_DAYS)
-
-        await ensure_schema()
-        async with get_session() as session:
-            # Delete MessageRecipient records for global inbox where message is older than TTL
-            result = await session.execute(
-                delete(MessageRecipient)
-                .where(
-                    MessageRecipient.agent_id == global_inbox.id,
-                    MessageRecipient.message_id.in_(
-                        select(Message.id).where(
-                            Message.project_id == project.id,
-                            Message.created_ts < cutoff_date,
-                        )
-                    ),
-                )
-            )
-            deleted_count = result.rowcount or 0
-            await session.commit()
-
-        await ctx.info(
-            f"Cleaned up {deleted_count} messages from global inbox for project '{project.human_key}' "
-            f"(older than {cutoff_date.isoformat()})"
-        )
-
-        return {
-            "deleted_count": deleted_count,
-            "cutoff_date": _iso(cutoff_date),
-        }
 
     @mcp.tool(name="summarize_thread")
     @_instrument_tool("summarize_thread", cluster=CLUSTER_SEARCH, capabilities={"summarization", "search"}, project_arg="project_key")
