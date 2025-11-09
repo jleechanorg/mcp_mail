@@ -131,7 +131,7 @@ async def test_multiple_agent_registrations_all_have_contact_policy(isolated_env
 
         # Verify all agents have contact_policy field set
         async with get_session() as session:
-            for agent_id, expected_name in zip(agent_ids, agent_names):
+            for agent_id, expected_name in zip(agent_ids, agent_names, strict=True):
                 db_result = await session.execute(
                     select(Agent).where(Agent.id == agent_id)
                 )

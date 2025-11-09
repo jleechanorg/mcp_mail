@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: ["main", "develop", "release/**", "feature/**"]
+    branches: ["**"]
   pull_request:
-    branches: ["main", "develop"]
+    branches: ["**"]
 
 jobs:
   ruff:
