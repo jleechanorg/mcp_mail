@@ -373,5 +373,9 @@ def _ensure_agent_active_columns(connection) -> None:
         connection.exec_driver_sql("ALTER TABLE agents ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
     if "deleted_ts" not in columns:
         connection.exec_driver_sql("ALTER TABLE agents ADD COLUMN deleted_ts TEXT")
+    if "contact_policy" not in columns:
+        connection.exec_driver_sql(
+            "ALTER TABLE agents ADD COLUMN contact_policy TEXT NOT NULL DEFAULT 'auto'"
+        )
     connection.exec_driver_sql("UPDATE agents SET is_active = 1 WHERE is_active IS NULL")
-
+    connection.exec_driver_sql("UPDATE agents SET contact_policy = 'auto' WHERE contact_policy IS NULL")
