@@ -707,14 +707,18 @@ async def _ensure_global_inbox_agent(project: Project) -> Agent:
             await session.refresh(agent)
         except IntegrityError:
             # Global inbox might already exist globally (from another project)
-            # This is OK - we'll just return the existing one
+            # Due to global uniqueness constraint, verify it belongs to this project
             await session.rollback()
             result = await session.execute(
                 select(Agent).where(Agent.name == GLOBAL_INBOX_NAME)
             )
             existing_agent = result.scalars().first()
             if existing_agent:
-                return existing_agent
+                if existing_agent.project_id == project.id:
+                    return existing_agent
+                raise ValueError(
+                    f"Global inbox agent with name '{GLOBAL_INBOX_NAME}' already exists for a different project (project_id={existing_agent.project_id})."
+                )
             raise
         return agent
 
@@ -2487,7 +2491,9 @@ def build_mcp_server() -> FastMCP:
 
         # Auto-add global inbox to cc list (unless sender is the global inbox itself)
         if sender.name != GLOBAL_INBOX_NAME and GLOBAL_INBOX_NAME not in cc_names:
-            cc_names = list(cc_names) + [GLOBAL_INBOX_NAME]
+            global_inbox_agent = await _get_agent_by_name_optional(GLOBAL_INBOX_NAME)
+            if global_inbox_agent is not None:
+                cc_names = list(cc_names) + [GLOBAL_INBOX_NAME]
 
         if to_names or cc_names or bcc_names:
             to_agents = [await _get_agent_by_name(name) for name in to_names]
@@ -4299,8 +4305,8 @@ def build_mcp_server() -> FastMCP:
         if project.id is None:
             raise ValueError("Project must have an id before cleaning up global inbox.")
 
-        # Get the global inbox agent
-        global_inbox = await _get_agent_by_name(GLOBAL_INBOX_NAME)
+        # Get the global inbox agent for this project
+        global_inbox = await _ensure_global_inbox_agent(project)
 
         # Calculate cutoff date (21 days ago)
         cutoff_date = datetime.now(timezone.utc) - timedelta(days=GLOBAL_INBOX_TTL_DAYS)
