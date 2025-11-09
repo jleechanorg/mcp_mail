@@ -1164,6 +1164,27 @@ async def _create_agent_record(
         return agent
 
 
+async def _build_conflict_info(name: str) -> list[dict[str, Any]]:
+    """Build conflict information for agents with the given name.
+
+    Returns a list of dictionaries containing project, program, model, and task
+    information for all agents currently using the specified name.
+    """
+    try:
+        conflicts = await _lookup_agents_any_project(name)
+        return [
+            {
+                "project": conf_proj.human_key,
+                "program": conf_agent.program,
+                "model": conf_agent.model,
+                "task": conf_agent.task_description,
+            }
+            for conf_proj, conf_agent in conflicts
+        ]
+    except Exception:
+        return []
+
+
 async def _get_or_create_agent(
     project: Project,
     name: Optional[str],
@@ -1200,15 +1221,7 @@ async def _get_or_create_agent(
                     # Name exists in another project
                     if mode == "strict" and not force_reclaim:
                         # In strict mode, require explicit force_reclaim
-                        conflicts = await _lookup_agents_any_project(sanitized)
-                        conflict_info = []
-                        for conf_proj, conf_agent in conflicts:
-                            conflict_info.append({
-                                "project": conf_proj.human_key,
-                                "program": conf_agent.program,
-                                "model": conf_agent.model,
-                                "task": conf_agent.task_description,
-                            })
+                        conflict_info = await _build_conflict_info(sanitized)
                         raise ToolExecutionError(
                             "NAME_TAKEN",
                             f"Agent name '{sanitized}' is already in use. Set force_reclaim=True to override and retire the existing agent(s).",
@@ -1268,29 +1281,21 @@ async def _get_or_create_agent(
                 await session.refresh(agent)
             except IntegrityError as exc:
                 await session.rollback()
-                # Try to get info about the conflicting agent
-                try:
-                    conflicts = await _lookup_agents_any_project(desired_name)
-                    conflict_info = [
-                        {
-                            "project": conf_proj.human_key,
-                            "program": conf_agent.program,
-                            "model": conf_agent.model,
-                            "task": conf_agent.task_description,
-                        }
-                        for conf_proj, conf_agent in conflicts
-                    ]
-                except Exception:
-                    conflict_info = []
+                # Race condition in UPDATE path: agent was being updated in same project,
+                # but name collision occurred (likely with a different project's agent).
+                # This shouldn't happen since we already verified the agent exists in this project,
+                # but could occur if another process retired this agent and created a new one elsewhere.
+                conflict_info = await _build_conflict_info(desired_name)
                 raise ToolExecutionError(
                     "NAME_TAKEN",
-                    f"Agent name '{desired_name}' is already in use globally (race condition). Set force_reclaim=True to override.",
+                    f"Agent name '{desired_name}' is already in use globally. "
+                    f"This agent may have been retired and the name claimed by another project. "
+                    f"Please retry the operation.",
                     recoverable=True,
                     data={
                         "name": desired_name,
                         "race_condition": True,
                         "conflicting_agents": conflict_info,
-                        "hint": "Call register_agent with force_reclaim=True to reclaim this name",
                     },
                 ) from exc
         else:
@@ -1307,30 +1312,20 @@ async def _get_or_create_agent(
                 await session.refresh(agent)
             except IntegrityError as exc:
                 await session.rollback()
-                # Race condition: name was taken between our check and commit
-                # Try to get info about the conflicting agent
-                try:
-                    conflicts = await _lookup_agents_any_project(desired_name)
-                    conflict_info = [
-                        {
-                            "project": conf_proj.human_key,
-                            "program": conf_agent.program,
-                            "model": conf_agent.model,
-                            "task": conf_agent.task_description,
-                        }
-                        for conf_proj, conf_agent in conflicts
-                    ]
-                except Exception:
-                    conflict_info = []
+                # Race condition: name was taken between our check and commit.
+                # Another process claimed this name just before we could commit.
+                conflict_info = await _build_conflict_info(desired_name)
                 raise ToolExecutionError(
                     "NAME_TAKEN",
-                    f"Agent name '{desired_name}' is already in use globally (race condition). Set force_reclaim=True to override.",
+                    f"Agent name '{desired_name}' is already in use globally (race condition). "
+                    f"Another process claimed this name before the commit completed. "
+                    f"Please retry the operation. If the conflict persists, use force_reclaim=True to override.",
                     recoverable=True,
                     data={
                         "name": desired_name,
                         "race_condition": True,
                         "conflicting_agents": conflict_info,
-                        "hint": "Call register_agent with force_reclaim=True to reclaim this name",
+                        "hint": "Retry the operation; if it persists, call register_agent with force_reclaim=True",
                     },
                 ) from exc
     archive = await ensure_archive(settings, project.slug)
