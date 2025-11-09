@@ -62,6 +62,11 @@ CLUSTER_SEARCH = "search"
 CLUSTER_FILE_RESERVATIONS = "file_reservations"
 CLUSTER_MACROS = "workflow_macros"
 
+# Global inbox configuration
+def get_global_inbox_name(project: Project) -> str:
+    """Get project-specific global inbox name to ensure per-project isolation."""
+    return f"global-inbox-{project.slug}"
+
 
 class ToolExecutionError(Exception):
     def __init__(self, error_type: str, message: str, *, recoverable: bool = True, data: Optional[dict[str, Any]] = None):
@@ -655,12 +660,54 @@ async def _ensure_project(human_key: str) -> Project:
         result = await session.execute(select(Project).where(Project.slug == slug))
         project = result.scalars().first()
         if project:
+            # Ensure global inbox agent exists for existing project
+            await _ensure_global_inbox_agent(project)
             return project
         project = Project(slug=slug, human_key=human_key)
         session.add(project)
         await session.commit()
         await session.refresh(project)
+        # Create global inbox agent for new project
+        await _ensure_global_inbox_agent(project)
         return project
+
+
+async def _ensure_global_inbox_agent(project: Project) -> Agent:
+    """Ensure the global inbox agent exists for the given project.
+
+    Each project gets its own global inbox agent with a project-specific name
+    to ensure proper isolation between projects.
+    """
+    if project.id is None:
+        raise ValueError("Project must have an id before creating global inbox agent.")
+
+    global_inbox_name = get_global_inbox_name(project)
+
+    await ensure_schema()
+    async with get_session() as session:
+        # Check if global inbox agent already exists for this project
+        result = await session.execute(
+            select(Agent).where(
+                Agent.project_id == project.id,
+                Agent.name == global_inbox_name,
+            )
+        )
+        existing_agent = result.scalars().first()
+        if existing_agent:
+            return existing_agent
+
+        # Create global inbox agent for this project
+        agent = Agent(
+            project_id=project.id,
+            name=global_inbox_name,
+            program="mcp-mail-system",
+            model="system",
+            task_description=f"Global inbox for project '{project.slug}'.",
+        )
+        session.add(agent)
+        await session.commit()
+        await session.refresh(agent)
+        return agent
 
 
 async def _get_project_by_identifier(identifier: str) -> Project:
@@ -1851,6 +1898,71 @@ async def _list_inbox(
 ) -> list[dict[str, Any]]:
     if agent.id is None:
         raise ValueError("Agent must have an id before listing inbox.")
+
+    global_inbox_name = get_global_inbox_name(project)
+
+    # Skip global inbox scanning if the agent IS the global inbox (prevent recursion)
+    if agent.name == global_inbox_name:
+        return await _list_inbox_basic(agent, limit, urgent_only, include_bodies, since_ts)
+
+    # Get regular inbox messages
+    messages = await _list_inbox_basic(agent, limit, urgent_only, include_bodies, since_ts)
+    message_ids_in_inbox = {msg["id"] for msg in messages}
+
+    # Scan global inbox for messages mentioning this agent
+    try:
+        global_inbox_agent = await _get_agent_by_name(global_inbox_name)
+        global_inbox_messages = await _list_inbox_basic(
+            global_inbox_agent,
+            limit=100,  # Scan more messages to find mentions
+            urgent_only=False,
+            include_bodies=True,  # Need bodies to check for mentions
+            since_ts=since_ts
+        )
+
+        # Filter for messages that mention the agent (word-boundary aware, case-insensitive)
+        import re
+        # Use word boundaries to avoid false positives (e.g., "Al" matching "Alice")
+        agent_name_pattern = re.compile(r'\b' + re.escape(agent.name) + r'\b', re.IGNORECASE)
+        mentioned_messages = []
+        for msg in global_inbox_messages:
+            # Skip if already in regular inbox
+            if msg["id"] in message_ids_in_inbox:
+                continue
+
+            # Check if agent name appears as a complete word in subject or body
+            subject = msg.get("subject", "")
+            body = msg.get("body_md", "")
+
+            if agent_name_pattern.search(subject) or agent_name_pattern.search(body):
+                # Mark as from global inbox mention scan
+                msg["source"] = "global_inbox_mention"
+                # Don't include body unless requested
+                if not include_bodies:
+                    msg.pop("body_md", None)
+                mentioned_messages.append(msg)
+
+        # Merge with regular inbox, respecting the limit
+        messages.extend(mentioned_messages)
+        messages = messages[:limit]
+
+    except Exception:
+        # If global inbox doesn't exist or there's an error, just return regular inbox
+        pass
+
+    return messages
+
+
+async def _list_inbox_basic(
+    agent: Agent,
+    limit: int,
+    urgent_only: bool,
+    include_bodies: bool,
+    since_ts: Optional[str],
+) -> list[dict[str, Any]]:
+    """Basic inbox listing without global inbox scanning."""
+    if agent.id is None:
+        raise ValueError("Agent must have an id before listing inbox.")
     sender_alias = aliased(Agent)
     await ensure_schema()
     async with get_session() as session:
@@ -2410,6 +2522,17 @@ def build_mcp_server() -> FastMCP:
         to_names = _unique(to_names)
         cc_names = _unique(cc_names)
         bcc_names = _unique(bcc_names)
+
+        # Check if global inbox exists (will be added directly to cc_agents to avoid race condition)
+        global_inbox_name = get_global_inbox_name(project)
+        global_inbox_agent = await _get_agent_by_name_optional(global_inbox_name)
+        # Only add to cc if sender is not the global inbox itself
+        should_cc_global_inbox = (
+            global_inbox_agent is not None
+            and sender.name != global_inbox_name
+            and global_inbox_name not in cc_names
+        )
+
         if to_names or cc_names or bcc_names:
             to_agents = [await _get_agent_by_name(name) for name in to_names]
             cc_agents = [await _get_agent_by_name(name) for name in cc_names]
@@ -2418,6 +2541,14 @@ def build_mcp_server() -> FastMCP:
             to_agents = []
             cc_agents = []
             bcc_agents = []
+
+        # Add global inbox to cc_agents directly (avoids race condition from re-fetching by name)
+        if should_cc_global_inbox:
+            cc_agents.append(global_inbox_agent)
+
+        # Filter out global inbox from cc_agents for outbox visibility (keep in recipient_records)
+        cc_agents_for_outbox = [agent for agent in cc_agents if agent.name != global_inbox_name]
+
         recipient_records: list[tuple[Agent, str]] = [(agent, "to") for agent in to_agents]
         recipient_records.extend((agent, "cc") for agent in cc_agents)
         recipient_records.extend((agent, "bcc") for agent in bcc_agents)
@@ -2515,7 +2646,7 @@ def build_mcp_server() -> FastMCP:
                 {
                     "from": sender.name,
                     "to": [agent.name for agent in to_agents],
-                    "cc": [agent.name for agent in cc_agents],
+                    "cc": [agent.name for agent in cc_agents_for_outbox],
                     "bcc": [agent.name for agent in bcc_agents],
                     "attachments": attachments_meta,
                 }
