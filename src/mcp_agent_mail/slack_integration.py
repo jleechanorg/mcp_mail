@@ -234,10 +234,12 @@ class SlackClient:
         self._check_client()
         assert self._http_client is not None
 
-        # Read file into bytes before async request
-        # TODO: Consider using aiofiles for non-blocking file I/O
-        with file_path.open("rb") as f:
-            file_bytes = f.read()
+        # Read file into bytes asynchronously to avoid blocking the event loop
+        def _read_file() -> bytes:
+            with file_path.open("rb") as f:
+                return f.read()
+        
+        file_bytes = await asyncio.to_thread(_read_file)
 
         files = {"file": (file_path.name, file_bytes, "application/octet-stream")}
         data: dict[str, Any] = {"channels": ",".join(channels)}
