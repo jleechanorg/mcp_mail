@@ -2195,6 +2195,24 @@ async def _get_message(project: Project, message_id: int) -> Message:
         return message
 
 
+async def _get_message_by_id_global(message_id: int) -> Message:
+    """Fetch message by ID globally (ignoring project boundaries).
+
+    Projects are informational only - messages are globally accessible by ID.
+    This allows agents to reply to messages they received regardless of which
+    project context they're currently operating in.
+    """
+    await ensure_schema()
+    async with get_session() as session:
+        result = await session.execute(
+            select(Message).where(Message.id == message_id)
+        )
+        message = result.scalars().first()
+        if not message:
+            raise NoResultFound(f"Message id '{message_id}' not found.")
+        return message
+
+
 async def _get_agent_by_id(project: Project, agent_id: int) -> Agent:
     """Fetch active agent by ID within project."""
     if project.id is None:
@@ -3485,7 +3503,7 @@ def build_mcp_server() -> FastMCP:
         """
         project = await _get_project_by_identifier(project_key)
         sender = await _get_agent_by_name(sender_name)
-        original = await _get_message(project, message_id)
+        original = await _get_message_by_id_global(message_id)
         original_sender = await _get_agent_by_id_global(original.sender_id)
         thread_key = original.thread_id or str(original.id)
         subject_prefix_clean = subject_prefix.strip()
@@ -3742,7 +3760,7 @@ def build_mcp_server() -> FastMCP:
         try:
             project = await _get_project_by_identifier(project_key)
             agent = await _get_agent(project, agent_name)
-            await _get_message(project, message_id)
+            await _get_message_by_id_global(message_id)
             read_ts = await _update_recipient_timestamp(agent, message_id, "read_ts")
             await ctx.info(f"Marked message {message_id} read for '{agent.name}'.")
             return {"message_id": message_id, "read": bool(read_ts), "read_at": _iso(read_ts) if read_ts else None}
@@ -3814,7 +3832,7 @@ def build_mcp_server() -> FastMCP:
         try:
             project = await _get_project_by_identifier(project_key)
             agent = await _get_agent(project, agent_name)
-            await _get_message(project, message_id)
+            await _get_message_by_id_global(message_id)
             read_ts = await _update_recipient_timestamp(agent, message_id, "read_ts")
             ack_ts = await _update_recipient_timestamp(agent, message_id, "ack_ts")
             await ctx.info(f"Acknowledged message {message_id} for '{agent.name}'.")

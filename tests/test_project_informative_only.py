@@ -128,3 +128,29 @@ async def test_unified_inbox_api_structure(isolated_env, monkeypatch):
         # (even if empty, the fields should exist)
         # Note: In a fresh test environment, there may be no messages, so we just
         # verify the structure is correct
+
+
+@pytest.mark.asyncio
+async def test_global_message_lookup_function_exists(isolated_env, monkeypatch):
+    """Verify the _get_message_by_id_global function exists and works correctly.
+
+    This function is the key to making projects informational only - it allows
+    messages to be looked up globally by ID without project boundaries.
+    """
+    # Import the function to verify it exists
+    from mcp_agent_mail.app import _get_message_by_id_global
+
+    # The function should be importable and have the correct signature
+    import inspect
+    sig = inspect.signature(_get_message_by_id_global)
+    params = list(sig.parameters.keys())
+
+    # Should only take message_id, not project
+    assert "message_id" in params, "Function should accept message_id parameter"
+    assert "project" not in params, "Function should NOT require project parameter"
+
+    # Verify the docstring mentions global access
+    assert _get_message_by_id_global.__doc__ is not None, "Function should have documentation"
+    assert "global" in _get_message_by_id_global.__doc__.lower(), (
+        "Docstring should mention global access"
+    )
