@@ -1907,6 +1907,67 @@ async def _list_inbox(
 ) -> list[dict[str, Any]]:
     if agent.id is None:
         raise ValueError("Agent must have an id before listing inbox.")
+
+    # Skip global inbox scanning if the agent IS the global inbox (prevent recursion)
+    if agent.name == GLOBAL_INBOX_NAME:
+        return await _list_inbox_basic(agent, limit, urgent_only, include_bodies, since_ts)
+
+    # Get regular inbox messages
+    messages = await _list_inbox_basic(agent, limit, urgent_only, include_bodies, since_ts)
+    message_ids_in_inbox = {msg["id"] for msg in messages}
+
+    # Scan global inbox for messages mentioning this agent
+    try:
+        global_inbox_agent = await _get_agent_by_name(GLOBAL_INBOX_NAME)
+        global_inbox_messages = await _list_inbox_basic(
+            global_inbox_agent,
+            limit=100,  # Scan more messages to find mentions
+            urgent_only=False,
+            include_bodies=True,  # Need bodies to check for mentions
+            since_ts=since_ts
+        )
+
+        # Filter for messages that mention the agent (case-insensitive)
+        agent_name_lower = agent.name.lower()
+        mentioned_messages = []
+        for msg in global_inbox_messages:
+            # Skip if already in regular inbox
+            if msg["id"] in message_ids_in_inbox:
+                continue
+
+            # Check if agent name appears in subject or body
+            subject = msg.get("subject", "").lower()
+            body = msg.get("body_md", "").lower()
+
+            if agent_name_lower in subject or agent_name_lower in body:
+                # Mark as from global inbox mention scan
+                msg["source"] = "global_inbox_mention"
+                # Don't include body unless requested
+                if not include_bodies:
+                    msg.pop("body_md", None)
+                mentioned_messages.append(msg)
+
+        # Merge with regular inbox, respecting the limit
+        messages.extend(mentioned_messages)
+        messages = messages[:limit]
+
+    except Exception:
+        # If global inbox doesn't exist or there's an error, just return regular inbox
+        pass
+
+    return messages
+
+
+async def _list_inbox_basic(
+    agent: Agent,
+    limit: int,
+    urgent_only: bool,
+    include_bodies: bool,
+    since_ts: Optional[str],
+) -> list[dict[str, Any]]:
+    """Basic inbox listing without global inbox scanning."""
+    if agent.id is None:
+        raise ValueError("Agent must have an id before listing inbox.")
     sender_alias = aliased(Agent)
     await ensure_schema()
     async with get_session() as session:
