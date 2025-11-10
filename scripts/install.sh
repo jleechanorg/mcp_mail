@@ -9,11 +9,11 @@ set -euo pipefail
 #
 # Usage examples:
 #   ./scripts/install.sh --yes
-#   ./scripts/install.sh --dir "$HOME/mcp_agent_mail" --yes
-#   curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/mcp_agent_mail/main/scripts/install.sh | bash -s -- --yes
+#   ./scripts/install.sh --dir "$HOME/mcp_mail" --yes
+#   curl -fsSL https://raw.githubusercontent.com/jleechanorg/mcp_mail/main/scripts/install.sh | bash -s -- --yes
 
-REPO_URL="https://github.com/Dicklesworthstone/mcp_agent_mail"
-REPO_NAME="mcp_agent_mail"
+REPO_URL="https://github.com/jleechanorg/mcp_mail"
+REPO_NAME="mcp_mail"
 BRANCH="main"
 DEFAULT_CLONE_DIR="$PWD/${REPO_NAME}"
 CLONE_DIR=""
@@ -29,7 +29,7 @@ usage() {
 MCP Agent Mail installer
 
 Options:
-  --dir DIR              Clone/use repo at DIR (default: ./mcp_agent_mail)
+  --dir DIR              Clone/use repo at DIR (default: ./mcp_mail)
   --branch NAME          Git branch to clone (default: main)
   --port PORT            HTTP server port (default: 8765); sets HTTP_PORT in .env
   -y, --yes              Non-interactive; assume Yes where applicable
@@ -42,9 +42,9 @@ Options:
 Examples:
   ./scripts/install.sh --yes
   ./scripts/install.sh --port 9000 --yes
-  ./scripts/install.sh --dir "\$HOME/mcp_agent_mail" --yes
-  curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/mcp_agent_mail/main/scripts/install.sh | bash -s -- --yes
-  curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/mcp_agent_mail/main/scripts/install.sh | bash -s -- --port 9000 --yes
+  ./scripts/install.sh --dir "\$HOME/mcp_mail" --yes
+  curl -fsSL https://raw.githubusercontent.com/jleechanorg/mcp_mail/main/scripts/install.sh | bash -s -- --yes
+  curl -fsSL https://raw.githubusercontent.com/jleechanorg/mcp_mail/main/scripts/install.sh | bash -s -- --port 9000 --yes
 EOF
 }
 
