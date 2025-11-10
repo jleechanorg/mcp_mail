@@ -1579,31 +1579,18 @@ window.viewerController = function() {
     },
 
     async loadMessageBodyById(id) {
-      let body = '';
       const stmt = state.db.prepare(`SELECT COALESCE(body_md, '') AS body_md FROM messages WHERE id = ? LIMIT 1`);
       try {
         stmt.bind([id]);
         if (stmt.step()) {
           const row = stmt.getAsObject();
-
-          // Get recipients for this message
-          const recipients = this.getMessageRecipients(row.id);
-
-          // Enrich message with additional fields
-          results.push({
-            ...row,
-            recipients: recipients,
-            excerpt: row.snippet || '',
-            created_relative: this.formatTimestamp(row.created_ts),
-            created_full: this.formatTimestampFull(row.created_ts),
-            read: false // Static viewer doesn't track read state
-          });
+          return row.body_md || '';
         }
       } finally {
         stmt.free();
       }
 
-      return results;
+      return '';
     },
 
     // Search across ALL messages using SQL: FTS when available, otherwise LIKE.
@@ -1788,8 +1775,6 @@ window.viewerController = function() {
     buildRecipientsMap() {
       // Build a map of message_id -> comma-separated recipient names
       // This is done in ONE query instead of N queries!
-      const map = new Map();
-
       const stmt = state.db.prepare(`
         SELECT COALESCE(a.name, 'Unknown') AS recipient_name
         FROM message_recipients mr
