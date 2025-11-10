@@ -4118,6 +4118,7 @@ def build_mcp_server() -> FastMCP:
                     border_style="green"
                 ))
             except Exception:
+                # Logging with rich is non-critical; ignore all exceptions to avoid interfering with tool execution.
                 pass
 
         try:
@@ -4135,19 +4136,28 @@ def build_mcp_server() -> FastMCP:
                     SELECT
                         fts.message_id,
                         -rank as relevance_score,
-                        snippet(fts_messages, 1, '<mark>', '</mark>', '...', 32) as subject_snippet,
-                        snippet(fts_messages, 2, '<mark>', '</mark>', '...', 64) as body_snippet
+                        snippet(fts, 1, '<mark>', '</mark>', '...', 32) as subject_snippet,
+                        snippet(fts, 2, '<mark>', '</mark>', '...', 64) as body_snippet
                     FROM fts_messages fts
-                    WHERE fts_messages MATCH :query
+                    WHERE fts MATCH :query
                     ORDER BY rank
                     LIMIT :limit
                 """)
 
-                fts_result = await session.execute(
-                    fts_stmt,
-                    {"query": fts_query, "limit": limit * 2}  # Get more results for filtering
-                )
-                fts_rows = fts_result.fetchall()
+                # If agent_filter is provided, fetch extra results to allow for post-query filtering.
+                # Otherwise, use the requested limit directly.
+                fts_limit = limit * 2 if agent_filter else limit
+                
+                try:
+                    fts_result = await session.execute(
+                        fts_stmt,
+                        {"query": fts_query, "limit": fts_limit}
+                    )
+                    fts_rows = fts_result.fetchall()
+                except Exception as exc:
+                    await ctx.error(f"Invalid search query: {query!r}. Please check your search syntax.")
+                    logger.warning(f"FTS5 query error for query {query!r}: {exc}")
+                    return []
 
                 if not fts_rows:
                     await ctx.info(f"No messages found matching query: {query}")
@@ -4172,12 +4182,15 @@ def build_mcp_server() -> FastMCP:
                     .join(sender_alias, Message.sender_id == sender_alias.id)
                     .join(MessageRecipient, MessageRecipient.message_id == Message.id)
                     .join(recipient_alias, MessageRecipient.agent_id == recipient_alias.id)
-                    .where(cast(Any, Message.id).in_(message_ids))
+                    .where(
+                        cast(Any, Message.id).in_(message_ids),
+                        Message.project_id == project.id
+                    )
                 )
 
                 # Apply agent filter if specified
                 if agent_filter:
-                    agent_filter_obj = await _get_agent_by_name(agent_filter)
+                    agent_filter_obj = await _get_agent(project, agent_filter)
                     messages_stmt = messages_stmt.where(
                         or_(
                             Message.sender_id == agent_filter_obj.id,
@@ -4221,10 +4234,9 @@ def build_mcp_server() -> FastMCP:
                 results = list(messages_dict.values())
                 results.sort(
                     key=lambda x: (
-                        -1 if x["in_global_inbox"] else 0,  # Global inbox first
-                        -x["relevance_score"]  # Then by relevance
-                    ),
-                    reverse=True
+                        0 if x["in_global_inbox"] else 1,  # Global inbox first
+                        -x["relevance_score"]  # Then by relevance (higher first)
+                    )
                 )
                 results = results[:limit]
 
