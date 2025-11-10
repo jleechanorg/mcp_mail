@@ -163,7 +163,7 @@ def render_prepush_script(archive: ProjectArchive) -> str:
         "                            check=True,capture_output=True)",
         "        data = cp.stdout.decode(\"utf-8\",\"ignore\")",
         "        paths = [p for p in data.split(\"\\x00\") if p]",
-+        "        changed.extend(paths)",
+        "        changed.extend(paths)",
         "    except Exception:",
         "        continue",
         "",

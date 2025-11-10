@@ -1547,7 +1547,7 @@ def amctl_env(
 @app.command(name="am-run")
 def am_run(
     slot: Annotated[str, typer.Argument(help="Build slot name (e.g., frontend-build)")],
-    cmd: Annotated[list[str], typer.Argument(help="Command to run", nargs=-1)],
+    cmd: Annotated[list[str], typer.Argument(..., help="Command to run")],
     project_path: Annotated[Path, typer.Option("--path", "-p", help="Path to repo/worktree",)] = Path(),
     agent: Annotated[Optional[str], typer.Option("--agent", "-a", help="Agent name (defaults to $AGENT_NAME)")] = None,
 ) -> None:
@@ -1827,8 +1827,11 @@ def projects_adopt(
     async def _load(slug_or_key: str) -> Project:
         return await _get_project_record(slug_or_key)
 
+    async def _load_both() -> tuple[Project, Project]:
+        return await asyncio.gather(_load(source), _load(target))
+
     try:
-        src, dst = asyncio.run(asyncio.gather(_load(source), _load(target)))
+        src, dst = asyncio.run(_load_both())
     except Exception as exc:
         raise typer.BadParameter(str(exc)) from exc
 

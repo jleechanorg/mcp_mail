@@ -83,12 +83,7 @@ def test_finalize_snapshot_creates_all_optimizations(tmp_path: Path):
     storage_root.mkdir()
 
     # Finalize snapshot
-    finalize_snapshot_for_export(
-        snapshot,
-        storage_root=storage_root,
-        inline_threshold=1024,
-        detach_threshold=10240
-    )
+    finalize_snapshot_for_export(snapshot)
 
     conn = sqlite3.connect(str(snapshot))
     try:
@@ -132,20 +127,14 @@ def test_share_update_incremental_processing(tmp_path: Path):
     storage_root.mkdir()
 
     # Finalize v1
-    finalize_snapshot_for_export(
-        snapshot_v1,
-        storage_root=storage_root
-    )
+    finalize_snapshot_for_export(snapshot_v1)
 
     # Create updated snapshot with more messages
     snapshot_v2 = tmp_path / "snapshot_v2.sqlite3"
     _create_snapshot_with_data(snapshot_v2, num_messages=5)
 
     # Finalize v2
-    finalize_snapshot_for_export(
-        snapshot_v2,
-        storage_root=storage_root
-    )
+    finalize_snapshot_for_export(snapshot_v2)
 
     # Verify both snapshots have optimizations
     for snapshot in [snapshot_v1, snapshot_v2]:
@@ -256,6 +245,7 @@ def test_bundle_attachments_with_detachment(tmp_path: Path):
     # Bundle with small detach threshold
     bundle_attachments(
         snapshot,
+        storage_root,
         storage_root=storage_root,
         inline_threshold=1024,
         detach_threshold=10000  # File is larger than this
@@ -305,10 +295,7 @@ def test_finalize_snapshot_atomic_updates(tmp_path: Path):
     storage_root.mkdir()
 
     # Finalize snapshot
-    finalize_snapshot_for_export(
-        snapshot,
-        storage_root=storage_root
-    )
+    finalize_snapshot_for_export(snapshot)
 
     conn = sqlite3.connect(str(snapshot))
     try:

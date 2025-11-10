@@ -77,6 +77,9 @@ packages = ["src/mcp_agent_mail"]
 [tool.hatch.build.targets.sdist]
 exclude = ["/.venv", "/.vscode", "/.idea", "/.git", "/__pycache__", "*.py[cod]", "*.db*", ".DS_Store"]
 
+[tool.ty]
+exclude = ["scripts/"]
+
 [tool.ruff]
 line-length = 120
 target-version = "py311"
