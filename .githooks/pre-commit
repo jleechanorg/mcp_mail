@@ -44,5 +44,25 @@ else
     echo -e "${YELLOW}Type checks completed with warnings (not blocking commit)${NC}"
 fi
 
+# Run security checks with Bandit
+echo -e "${YELLOW}Running Bandit security scan...${NC}"
+if uvx bandit -r src/ -ll -q 2>/dev/null; then
+    echo -e "${GREEN}✓ Security scan passed${NC}"
+else
+    echo -e "${YELLOW}⚠ Security issues found (not blocking commit)${NC}"
+    echo -e "${YELLOW}Run 'uvx bandit -r src/' for details${NC}"
+fi
+
+# Run dependency vulnerability check with Safety
+echo -e "${YELLOW}Checking dependencies for vulnerabilities...${NC}"
+if uvx safety check --json 2>/dev/null | grep -q '"vulnerabilities": \[\]'; then
+    echo -e "${GREEN}✓ No known vulnerabilities in dependencies${NC}"
+elif uvx safety check --json 2>/dev/null | grep -q '"vulnerabilities"'; then
+    echo -e "${YELLOW}⚠ Vulnerabilities found in dependencies (not blocking commit)${NC}"
+    echo -e "${YELLOW}Run 'uvx safety check' for details${NC}"
+else
+    echo -e "${YELLOW}⚠ Could not check dependencies (not blocking commit)${NC}"
+fi
+
 echo -e "${GREEN}All pre-commit checks complete!${NC}"
 exit 0

@@ -63,6 +63,53 @@ jobs:
       - name: Run Ty
         run: uvx ty check
 
+  bandit:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Install uv
+        run: curl -Ls https://astral.sh/uv/install.sh | sh
+      - name: Add uv to PATH
+        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - name: Run Bandit
+        run: uvx bandit -r src/ -ll -f json -o bandit-report.json || true
+      - name: Display Bandit Results
+        run: uvx bandit -r src/ -ll || true
+
+  safety:
+    name: Dependency Vulnerability Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Install uv
+        run: curl -Ls https://astral.sh/uv/install.sh | sh
+      - name: Add uv to PATH
+        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - name: Cache uv
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/uv
+            .venv
+          key: ci-safety-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'uv.lock') }}
+          restore-keys: |
+            ci-safety-${{ runner.os }}-
+      - name: Sync dependencies
+        run: uv sync --dev
+      - name: Run Safety Check
+        run: uvx safety check --json || true
+
   test:
     name: Run Tests
     runs-on: ubuntu-latest

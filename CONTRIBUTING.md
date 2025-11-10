@@ -34,6 +34,8 @@ This will install a pre-commit hook that automatically:
 1. Syncs dependencies (if needed)
 2. Runs `ruff check --fix --unsafe-fixes` to lint and auto-fix code issues
 3. Runs `ty check` for type checking (warnings won't block commits)
+4. Runs `bandit` to scan for security vulnerabilities (warnings won't block commits)
+5. Runs `safety` to check dependencies for known vulnerabilities (warnings won't block commits)
 
 ### What the Pre-Commit Hook Does
 
@@ -43,9 +45,20 @@ The pre-commit hook performs the following checks:
   - If ruff makes any fixes, they will be automatically added to your commit
   - If ruff finds unfixable errors, the commit will be blocked until you fix them
 
-- **Type Checking**: Runs type checks to catch potential type errors
+- **Type Checking (ty)**: Runs type checks to catch potential type errors
   - Type checking warnings will be reported but won't block the commit
   - This helps maintain type safety while not being overly strict
+
+- **Security Scanning (Bandit)**: Scans code for common security vulnerabilities
+  - Checks for hardcoded credentials, SQL injection risks, unsafe functions, etc.
+  - Security issues are reported but won't block the commit
+  - Run `uvx bandit -r src/` for detailed security reports
+
+- **Dependency Vulnerability Check (Safety)**: Scans dependencies for known vulnerabilities
+  - Checks all installed packages against the Safety vulnerability database
+  - Alerts you to known CVEs in your dependencies
+  - Vulnerabilities are reported but won't block the commit
+  - Run `uvx safety check` for detailed vulnerability reports
 
 ### Skipping Hooks
 
@@ -70,6 +83,18 @@ uvx ruff check
 
 # Run type checking
 uvx ty check
+
+# Run security scan
+uvx bandit -r src/
+
+# Run security scan with verbose output
+uvx bandit -r src/ -ll
+
+# Check dependencies for vulnerabilities
+uvx safety check
+
+# Get detailed JSON report of vulnerabilities
+uvx safety check --json
 ```
 
 ### Running Tests
@@ -88,11 +113,13 @@ uv run pytest --cov=mcp_agent_mail --cov-report=term-missing
 ## CI/CD
 
 All pull requests are automatically checked by GitHub Actions for:
-- Ruff linting
-- Type checking with ty
-- Test suite
+- **Ruff linting** - Code style and quality
+- **Type checking with ty** - Static type analysis
+- **Security scanning with Bandit** - Common security vulnerabilities
+- **Dependency vulnerability checks with Safety** - Known CVEs in dependencies
+- **Test suite** - Functional correctness
 
-Make sure your code passes all checks before submitting a PR.
+Make sure your code passes all checks before submitting a PR. Security and dependency checks are informational and won't block PRs, but should be reviewed and addressed when possible.
 
 ## Code Style
 
@@ -100,6 +127,20 @@ Make sure your code passes all checks before submitting a PR.
 - Use type hints for all function signatures
 - Write docstrings for public functions and classes
 - Keep line length to 120 characters or less
+
+## Security Best Practices
+
+When contributing code, keep these security practices in mind:
+
+- **Never commit secrets**: No API keys, passwords, tokens, or credentials in code
+- **Avoid hardcoded credentials**: Use environment variables or secure config files
+- **Validate inputs**: Sanitize and validate all user inputs to prevent injection attacks
+- **Use parameterized queries**: Prevent SQL injection by using parameterized database queries
+- **Keep dependencies updated**: Regularly check for and update vulnerable dependencies
+- **Review Bandit warnings**: Pay attention to security scan results, even if they don't block commits
+- **Use secure random**: Use `secrets` module instead of `random` for security-sensitive operations
+
+The pre-commit hook will flag common security issues, but developer awareness is the best defense.
 
 ## Submitting Changes
 
