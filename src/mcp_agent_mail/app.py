@@ -5395,6 +5395,7 @@ def build_mcp_server() -> FastMCP:
         archive = await ensure_archive(settings, project.slug)
         now = datetime.now(timezone.utc)
         slot_path = _slot_dir(archive, slot)
+        await asyncio.to_thread(slot_path.mkdir, parents=True, exist_ok=True)
         branch = _compute_branch(project.human_key)
         holder_id = _safe_component(f"{agent_name}__{branch or 'unknown'}")
         lease_path = slot_path / f"{holder_id}.json"

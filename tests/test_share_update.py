@@ -80,6 +80,8 @@ def test_finalize_snapshot_creates_all_optimizations(tmp_path: Path):
     storage_root.mkdir()
 
     # Finalize snapshot
+    build_materialized_views(snapshot)
+    create_performance_indexes(snapshot)
     finalize_snapshot_for_export(snapshot)
 
     conn = sqlite3.connect(str(snapshot))
@@ -118,6 +120,8 @@ def test_share_update_incremental_processing(tmp_path: Path):
     storage_root.mkdir()
 
     # Finalize v1
+    build_materialized_views(snapshot_v1)
+    create_performance_indexes(snapshot_v1)
     finalize_snapshot_for_export(snapshot_v1)
 
     # Create updated snapshot with more messages
@@ -125,6 +129,8 @@ def test_share_update_incremental_processing(tmp_path: Path):
     _create_snapshot_with_data(snapshot_v2, num_messages=5)
 
     # Finalize v2
+    build_materialized_views(snapshot_v2)
+    create_performance_indexes(snapshot_v2)
     finalize_snapshot_for_export(snapshot_v2)
 
     # Verify both snapshots have optimizations
@@ -284,6 +290,8 @@ def test_finalize_snapshot_atomic_updates(tmp_path: Path):
     storage_root.mkdir()
 
     # Finalize snapshot
+    build_materialized_views(snapshot)
+    create_performance_indexes(snapshot)
     finalize_snapshot_for_export(snapshot)
 
     conn = sqlite3.connect(str(snapshot))
