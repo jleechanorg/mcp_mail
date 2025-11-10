@@ -1,16 +1,39 @@
+<div align="center">
+
 # MCP Agent Mail
+
+[![PyPI version](https://badge.fury.io/py/mcp-mail.svg)](https://pypi.org/project/mcp-mail/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Downloads](https://pepy.tech/badge/mcp-mail)](https://pepy.tech/project/mcp-mail)
+
+**A mail-like coordination layer for coding agents**
 
 ![Agent Mail Showcase](screenshots/output/agent_mail_showcase.gif)
 
 > "It's like gmail for your coding agents!"
 
-## Fork Attribution
+### 📦 Installation Options
 
-### **This repository is forked from [https://github.com/Dicklesworthstone/mcp_agent_mail](https://github.com/Dicklesworthstone/mcp_agent_mail). Full credit goes to the original author for creating this innovative multi-agent coordination system.
+[![PyPI](https://img.shields.io/badge/Install%20from-PyPI-0073b7?style=for-the-badge&logo=pypi&logoColor=white)](https://pypi.org/project/mcp-mail/)
+[![Piwheels](https://img.shields.io/badge/Install%20from-Piwheels-c51a4a?style=for-the-badge&logo=raspberrypi&logoColor=white)](https://www.piwheels.org/project/mcp-mail/)
 
-> Note: This was copied as a standalone repository rather than kept as a fork because Codex web appears to ignore forks in its repository indexing.
-Here was my first attempt at a normal fork: [https://github.com/jleechanorg/mcp_agent_mail](https://github.com/jleechanorg/mcp_agent_mail)
+### 🔗 Repository Links
 
+**This Fork**: [jleechanorg/mcp_mail](https://github.com/jleechanorg/mcp_mail) •
+**Original**: [Dicklesworthstone/mcp_agent_mail](https://github.com/Dicklesworthstone/mcp_agent_mail)
+
+</div>
+
+---
+
+## 🌟 Fork Attribution
+
+**This repository is a fork of [Dicklesworthstone/mcp_agent_mail](https://github.com/Dicklesworthstone/mcp_agent_mail)**
+
+Full credit goes to the original author for creating this innovative multi-agent coordination system.
+
+> **Note**: This was copied as a standalone repository rather than kept as a fork because Codex web appears to ignore forks in its repository indexing. Here was my first attempt at a normal fork: [jleechanorg/mcp_agent_mail](https://github.com/jleechanorg/mcp_agent_mail)
 ## Fork Improvements
 
 This fork extends the original MCP Agent Mail with several production-ready enhancements:
