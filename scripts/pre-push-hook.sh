@@ -15,7 +15,17 @@ NC='\033[0m' # No Color
 # Track if any checks fail
 FAILED=0
 
-# 1. Run integration tests
+# 1. Run Ty type checker (blocking - must pass before push)
+echo "🔬 Running Ty type checker..."
+if uvx ty check; then
+    echo -e "${GREEN}✓ Type checks passed${NC}"
+else
+    echo -e "${RED}✗ Type checks failed${NC}"
+    echo -e "${YELLOW}Type errors must be fixed before pushing to match CI requirements${NC}"
+    FAILED=1
+fi
+
+# 2. Run integration tests
 echo "🧪 Running integration tests..."
 if uv run pytest tests/integration/test_mcp_mail_messaging.py -v; then
     echo -e "${GREEN}✓ Integration tests passed${NC}"
@@ -24,7 +34,7 @@ else
     FAILED=1
 fi
 
-# 2. Run smoke tests
+# 3. Run smoke tests
 echo "🧪 Running smoke tests..."
 if uv run pytest tests/test_reply_and_threads.py tests/test_identity_resources.py -v; then
     echo -e "${GREEN}✓ Smoke tests passed${NC}"

@@ -3,8 +3,8 @@ name: CI
 on:
   push:
     branches: ["**"]
-  pull_request:
-    branches: ["**"]
+  # Run on pull_request only for draft PRs or when requested
+  # This avoids duplicate runs since push events also trigger for PRs
 
 jobs:
   ruff:

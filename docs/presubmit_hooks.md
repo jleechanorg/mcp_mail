@@ -41,14 +41,15 @@ This creates symlinks to the hook scripts in `.git/hooks/`.
 
 ### Pre-commit (runs before `git commit`)
 
-✅ **Ruff linting** - Fast Python linter with auto-fix
-✅ **Ty type checking** - Static type analysis
+✅ **Ruff linting** - Fast Python linter with auto-fix (blocking)
+⚠️ **Ty type checking** - Static type analysis (non-blocking warning)
 ✅ **Fast unit tests** - Quick smoke tests (~2 seconds)
 ✅ **Trailing whitespace** - Automatic cleanup
 ✅ **YAML/JSON syntax** - Configuration file validation
 
 ### Pre-push (runs before `git push`)
 
+✅ **Ty type checking** - Static type analysis (blocking - must match CI)
 ✅ **Integration tests** - Full `.mcp_mail/` messaging system tests
 ✅ **Smoke tests** - Core functionality validation
 
@@ -122,6 +123,13 @@ This ensures local validation matches CI, catching issues before push.
 
 All hooks use Python 3.13 to match CI configuration (see CLAUDE.md).
 Python 3.14 RC causes Pydantic/Starlette compatibility issues.
+
+## Type Checking Strategy
+
+- **Pre-commit**: Ty runs as non-blocking warning (local Python version may differ)
+- **Pre-push**: Ty runs as blocking check (must pass to match CI requirements)
+
+This two-tier approach provides early feedback without blocking commits for Python version differences, while ensuring pushes match CI validation.
 
 ## Benefits
 
