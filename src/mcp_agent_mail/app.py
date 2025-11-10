@@ -4195,13 +4195,6 @@ def build_mcp_server() -> FastMCP:
                     if msg_id not in messages_dict:
                         relevance_score, subject_snippet, body_snippet = relevance_map[msg_id]
 
-                        # Check if this message went to global inbox (prioritize these)
-                        is_global = any(
-                            r_name == global_inbox_name
-                            for _, _, _, r_name, _ in message_rows
-                            if _ == msg
-                        )
-
                         payload = _message_to_dict(msg, include_body=include_bodies)
                         payload["from"] = sender_name
                         payload["to"] = []
@@ -4210,10 +4203,13 @@ def build_mcp_server() -> FastMCP:
                         payload["relevance_score"] = float(relevance_score)
                         payload["subject_snippet"] = subject_snippet
                         payload["body_snippet"] = body_snippet
-                        payload["in_global_inbox"] = is_global
+                        payload["in_global_inbox"] = False  # Will be set to True if global inbox is found
                         messages_dict[msg_id] = payload
 
-                    # Add recipient to appropriate list
+                    # Add recipient to appropriate list and check for global inbox
+                    if recipient_name == global_inbox_name:
+                        messages_dict[msg_id]["in_global_inbox"] = True
+
                     if kind == "to":
                         messages_dict[msg_id]["to"].append(recipient_name)
                     elif kind == "cc":
