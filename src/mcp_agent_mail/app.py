@@ -24,7 +24,7 @@ from fastmcp import Context, FastMCP
 from git import Repo
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
 from sqlalchemy import asc, delete, desc, func, or_, select, text, update
-from sqlalchemy.exc import IntegrityError, NoResultFound
+from sqlalchemy.exc import IntegrityError, NoResultFound, SQLAlchemyError
 from sqlalchemy.orm import aliased
 
 from . import rich_logger
@@ -3006,6 +3006,7 @@ def build_mcp_server() -> FastMCP:
                 c = Console()
                 c.print(Panel(f"project=[bold]{project.human_key}[/]\nname=[bold]{name or '(generated)'}[/]\nprogram={program}\nmodel={model}", title="tool: register_agent", border_style="green"))
             except Exception:
+                # Logging with rich is best-effort; skip errors to avoid impacting tool execution.
                 pass
         # sanitize attachments policy
         ap = (attachments_policy or "auto").lower()
@@ -4118,6 +4119,7 @@ def build_mcp_server() -> FastMCP:
                     border_style="green"
                 ))
             except Exception:
+                # Logging with rich is best-effort; skip failures to avoid interfering with tool behavior.
                 pass
 
         try:
@@ -4129,31 +4131,42 @@ def build_mcp_server() -> FastMCP:
 
             await ensure_schema()
             async with get_session() as session:
-                # Search using FTS5 virtual table
-                # rank gives us relevance score (lower is better in FTS5)
+                # Search using FTS5 virtual table scoped to this project.
+                # bm25 returns lower values for more relevant rows; convert to a 0-1 score for readability.
                 fts_stmt = text("""
                     SELECT
-                        fts.message_id,
-                        -rank as relevance_score,
-                        snippet(fts_messages, 1, '<mark>', '</mark>', '...', 32) as subject_snippet,
-                        snippet(fts_messages, 2, '<mark>', '</mark>', '...', 64) as body_snippet
-                    FROM fts_messages fts
-                    WHERE fts_messages MATCH :query
-                    ORDER BY rank
+                        m.id AS message_id,
+                        1.0 / (1.0 + bm25(fts_messages)) AS relevance_score,
+                        snippet(fts_messages, 1, '<mark>', '</mark>', '...', 32) AS subject_snippet,
+                        snippet(fts_messages, 2, '<mark>', '</mark>', '...', 64) AS body_snippet
+                    FROM fts_messages
+                    JOIN messages AS m ON fts_messages.rowid = m.id
+                    WHERE m.project_id = :project_id
+                      AND fts_messages MATCH :query
+                    ORDER BY bm25(fts_messages) ASC
                     LIMIT :limit
                 """)
 
-                fts_result = await session.execute(
-                    fts_stmt,
-                    {"query": fts_query, "limit": limit * 2}  # Get more results for filtering
-                )
+                fts_limit = limit * 2 if agent_filter else limit
+                try:
+                    fts_result = await session.execute(
+                        fts_stmt,
+                        {"project_id": project.id, "query": fts_query, "limit": fts_limit},
+                    )
+                except SQLAlchemyError as exc:
+                    await ctx.error(
+                        "Invalid search query. Please check your search syntax and try again."
+                    )
+                    logger.warning("FTS5 query error for %r: %s", query, exc)
+                    return []
+
                 fts_rows = fts_result.fetchall()
 
                 if not fts_rows:
                     await ctx.info(f"No messages found matching query: {query}")
                     return []
 
-                message_ids = [row[0] for row in fts_rows]
+                message_ids = list(dict.fromkeys(row[0] for row in fts_rows))
                 relevance_map = {row[0]: (row[1], row[2], row[3]) for row in fts_rows}
 
                 # Now fetch full message details with recipient info
@@ -4172,12 +4185,15 @@ def build_mcp_server() -> FastMCP:
                     .join(sender_alias, Message.sender_id == sender_alias.id)
                     .join(MessageRecipient, MessageRecipient.message_id == Message.id)
                     .join(recipient_alias, MessageRecipient.agent_id == recipient_alias.id)
-                    .where(cast(Any, Message.id).in_(message_ids))
+                    .where(
+                        cast(Any, Message.id).in_(message_ids),
+                        Message.project_id == project.id,
+                    )
                 )
 
                 # Apply agent filter if specified
                 if agent_filter:
-                    agent_filter_obj = await _get_agent_by_name(agent_filter)
+                    agent_filter_obj = await _get_agent(project, agent_filter)
                     messages_stmt = messages_stmt.where(
                         or_(
                             Message.sender_id == agent_filter_obj.id,
@@ -4221,10 +4237,9 @@ def build_mcp_server() -> FastMCP:
                 results = list(messages_dict.values())
                 results.sort(
                     key=lambda x: (
-                        -1 if x["in_global_inbox"] else 0,  # Global inbox first
-                        -x["relevance_score"]  # Then by relevance
-                    ),
-                    reverse=True
+                        0 if x["in_global_inbox"] else 1,  # Global inbox first
+                        -x["relevance_score"],  # Then by relevance (higher first)
+                    )
                 )
                 results = results[:limit]
 
