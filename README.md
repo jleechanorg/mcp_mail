@@ -20,7 +20,7 @@
 ### 🔗 Repository Links
 
 **This Fork**: [jleechanorg/mcp_mail](https://github.com/jleechanorg/mcp_mail) •
-**Original**: [Dicklesworthstone/mcp_agent_mail](https://github.com/jleechanorg/mcp_mail)
+**Original**: [Dicklesworthstone/mcp_agent_mail](https://github.com/Dicklesworthstone/mcp_agent_mail)
 
 </div>
 
