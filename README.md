@@ -6,11 +6,13 @@
 
 ## Fork Attribution
 
-This repository is forked from [https://github.com/Dicklesworthstone/mcp_agent_mail](https://github.com/Dicklesworthstone/mcp_agent_mail). Full credit goes to the original author for creating this innovative multi-agent coordination system.
+### **This repository is forked from [https://github.com/Dicklesworthstone/mcp_agent_mail](https://github.com/Dicklesworthstone/mcp_agent_mail). Full credit goes to the original author for creating this innovative multi-agent coordination system.**
 
 **This Repo:** [https://github.com/jleechanorg/mcp_agent_mail](https://github.com/jleechanorg/mcp_agent_mail)
 
 > Note: This was copied as a standalone repository rather than kept as a fork because Claude Code on the web appears to ignore forks in its repository indexing.
+
+Here was my first attempt at a normal fork: [https://github.com/jleechanorg/mcp_agent_mail](https://github.com/jleechanorg/mcp_agent_mail)
 
 ## Fork Improvements
 
