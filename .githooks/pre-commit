@@ -1,0 +1,68 @@
+#!/bin/bash
+# Pre-commit hook to run ruff and type checks
+
+set -e
+
+echo "Running pre-commit checks..."
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Check if we're in the right directory
+if [ ! -f "pyproject.toml" ]; then
+    echo -e "${RED}Error: pyproject.toml not found. Are you in the repository root?${NC}"
+    exit 1
+fi
+
+# Ensure dependencies are synced (quick check, uv sync is smart about caching)
+echo -e "${YELLOW}Ensuring dependencies are synced...${NC}"
+uv sync --dev --quiet 2>/dev/null || true
+
+# Run ruff with auto-fix
+echo -e "${YELLOW}Running ruff check --fix --unsafe-fixes...${NC}"
+if uvx ruff check --fix --unsafe-fixes; then
+    echo -e "${GREEN}✓ Ruff checks passed${NC}"
+else
+    echo -e "${RED}✗ Ruff checks failed${NC}"
+    exit 1
+fi
+
+# If ruff made any fixes, add them to the commit
+if ! git diff --quiet; then
+    echo -e "${YELLOW}Ruff made automatic fixes. Adding them to the commit...${NC}"
+    git add -u
+fi
+
+# Run type checks with ty
+echo -e "${YELLOW}Running ty check...${NC}"
+if uvx ty check 2>&1 | grep -v "error\|warning" > /dev/null; then
+    echo -e "${GREEN}✓ Type checks completed (warnings ignored)${NC}"
+else
+    echo -e "${YELLOW}Type checks completed with warnings (not blocking commit)${NC}"
+fi
+
+# Run security checks with Bandit
+echo -e "${YELLOW}Running Bandit security scan...${NC}"
+if uv run bandit -r src/ -ll -q 2>/dev/null; then
+    echo -e "${GREEN}✓ Security scan passed${NC}"
+else
+    echo -e "${YELLOW}⚠ Security issues found (not blocking commit)${NC}"
+    echo -e "${YELLOW}Run 'uv run bandit -r src/' for details${NC}"
+fi
+
+# Run dependency vulnerability check with Safety
+echo -e "${YELLOW}Checking dependencies for vulnerabilities...${NC}"
+if uv run safety check --json 2>/dev/null | grep -q '"vulnerabilities": \[\]'; then
+    echo -e "${GREEN}✓ No known vulnerabilities in dependencies${NC}"
+elif uv run safety check --json 2>/dev/null | grep -q '"vulnerabilities"'; then
+    echo -e "${YELLOW}⚠ Vulnerabilities found in dependencies (not blocking commit)${NC}"
+    echo -e "${YELLOW}Run 'uv run safety check' for details${NC}"
+else
+    echo -e "${YELLOW}⚠ Could not check dependencies (not blocking commit)${NC}"
+fi
+
+echo -e "${GREEN}All pre-commit checks complete!${NC}"
+exit 0
