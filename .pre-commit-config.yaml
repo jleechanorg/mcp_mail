@@ -1,0 +1,66 @@
+# Pre-commit hooks for MCP Mail
+# See https://pre-commit.com for more information
+
+repos:
+  # Ruff - Fast Python linter and formatter
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.1
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+        name: Ruff linter
+
+  # Standard pre-commit hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        name: Trim trailing whitespace
+      - id: end-of-file-fixer
+        name: Fix end of files
+      - id: check-yaml
+        name: Check YAML syntax
+      - id: check-added-large-files
+        name: Check for large files
+        args: ['--maxkb=1000']
+      - id: check-merge-conflict
+        name: Check for merge conflicts
+      - id: check-json
+        name: Check JSON syntax
+        exclude: ^\.vscode/
+
+  # Python-specific checks
+  - repo: local
+    hooks:
+      # Type checking with ty
+      - id: ty-check
+        name: Ty type checker
+        entry: bash -c 'uvx ty check'
+        language: system
+        types: [python]
+        pass_filenames: false
+        # Skip in CI since we have dedicated CI job
+        stages: [pre-commit]
+
+      # Run fast unit tests (not integration tests to keep it fast)
+      - id: pytest-fast
+        name: Fast unit tests
+        entry: bash -c 'uv run pytest tests/test_reply_and_threads.py tests/test_identity_resources.py -q'
+        language: system
+        types: [python]
+        pass_filenames: false
+        # Only run on commit, not on push
+        stages: [pre-commit]
+
+      # Run integration tests on push only (slower)
+      - id: pytest-integration
+        name: Integration tests
+        entry: bash -c 'uv run pytest tests/integration/ -q'
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-push]
+
+# Configuration
+default_stages: [pre-commit]
+fail_fast: false

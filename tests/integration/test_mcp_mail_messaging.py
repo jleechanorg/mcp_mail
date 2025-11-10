@@ -7,8 +7,8 @@ directory structure for message storage and git-based persistence.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
-import os
 import subprocess
 from pathlib import Path
 
@@ -62,7 +62,6 @@ def mcp_mail_repo(tmp_path):
 
 def write_message(repo_path: Path, message: dict) -> str:
     """Write a message to messages.jsonl and return message ID."""
-    import hashlib
     import uuid
     from datetime import datetime, timezone
 
@@ -82,7 +81,7 @@ def write_message(repo_path: Path, message: dict) -> str:
 
     # Append to messages.jsonl
     messages_file = repo_path / ".mcp_mail" / "messages.jsonl"
-    with open(messages_file, "a") as f:
+    with messages_file.open("a") as f:
         f.write(json.dumps(message) + "\n")
 
     return msg_id
@@ -95,7 +94,7 @@ def read_messages(repo_path: Path) -> list[dict]:
         return []
 
     messages = []
-    with open(messages_file) as f:
+    with messages_file.open() as f:
         for line in f:
             if line.strip():
                 messages.append(json.loads(line))
@@ -142,7 +141,7 @@ async def test_basic_message_send_receive(mcp_mail_repo):
     commit_messages(mcp_mail_repo, "Agent 1 sends message")
 
     # Verify git commit
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: ASYNC221
         ["git", "log", "--oneline", "-1"],
         cwd=mcp_mail_repo,
         capture_output=True,
@@ -385,7 +384,7 @@ async def test_git_history_preservation(mcp_mail_repo):
     commit_messages(mcp_mail_repo, "Add message 3")
 
     # Verify git log
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: ASYNC221
         ["git", "log", "--oneline"],
         cwd=mcp_mail_repo,
         capture_output=True,
@@ -401,7 +400,7 @@ async def test_git_history_preservation(mcp_mail_repo):
     assert "Add message 1" in result.stdout
 
     # Verify we can checkout previous state
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: ASYNC221
         ["git", "rev-list", "HEAD"],
         cwd=mcp_mail_repo,
         capture_output=True,
@@ -411,7 +410,7 @@ async def test_git_history_preservation(mcp_mail_repo):
     commits = result.stdout.strip().split("\n")
 
     # Save current branch name
-    branch_result = subprocess.run(
+    branch_result = subprocess.run(  # noqa: ASYNC221
         ["git", "branch", "--show-current"],
         cwd=mcp_mail_repo,
         capture_output=True,
@@ -423,7 +422,7 @@ async def test_git_history_preservation(mcp_mail_repo):
     second_commit = commits[1]  # Second most recent
 
     # Checkout previous commit (detached HEAD)
-    subprocess.run(
+    subprocess.run(  # noqa: ASYNC221
         ["git", "checkout", second_commit],
         cwd=mcp_mail_repo,
         check=True,
@@ -435,7 +434,7 @@ async def test_git_history_preservation(mcp_mail_repo):
     assert len(messages) == 2
 
     # Return to original branch
-    subprocess.run(
+    subprocess.run(  # noqa: ASYNC221
         ["git", "checkout", current_branch],
         cwd=mcp_mail_repo,
         check=True,
@@ -456,20 +455,20 @@ async def test_cross_repo_message_reference(mcp_mail_repo, tmp_path):
     mcp_mail_dir2 = repo2_path / ".mcp_mail"
     mcp_mail_dir2.mkdir()
 
-    subprocess.run(["git", "init"], cwd=repo2_path, check=True, capture_output=True)
-    subprocess.run(
+    subprocess.run(["git", "init"], cwd=repo2_path, check=True, capture_output=True)  # noqa: ASYNC221
+    subprocess.run(  # noqa: ASYNC221
         ["git", "config", "user.email", "test@example.com"],
         cwd=repo2_path,
         check=True,
         capture_output=True,
     )
-    subprocess.run(
+    subprocess.run(  # noqa: ASYNC221
         ["git", "config", "user.name", "Test Agent"],
         cwd=repo2_path,
         check=True,
         capture_output=True,
     )
-    subprocess.run(
+    subprocess.run(  # noqa: ASYNC221
         ["git", "config", "commit.gpgsign", "false"],
         cwd=repo2_path,
         check=True,
@@ -478,8 +477,8 @@ async def test_cross_repo_message_reference(mcp_mail_repo, tmp_path):
 
     (mcp_mail_dir2 / ".gitignore").write_text("*.db\n*.db-shm\n*.db-wal\n")
     (mcp_mail_dir2 / "messages.jsonl").write_text("")
-    subprocess.run(["git", "add", "."], cwd=repo2_path, check=True, capture_output=True)
-    subprocess.run(
+    subprocess.run(["git", "add", "."], cwd=repo2_path, check=True, capture_output=True)  # noqa: ASYNC221
+    subprocess.run(  # noqa: ASYNC221
         ["git", "commit", "-m", "Initial commit"],
         cwd=repo2_path,
         check=True,
@@ -487,7 +486,7 @@ async def test_cross_repo_message_reference(mcp_mail_repo, tmp_path):
     )
 
     # Agent in repo1 sends to agent in repo2
-    msg_id = write_message(
+    _msg_id = write_message(
         mcp_mail_repo,
         {
             "from": {
@@ -515,7 +514,7 @@ async def test_cross_repo_message_reference(mcp_mail_repo, tmp_path):
 @pytest.mark.asyncio
 async def test_message_metadata_and_extensions(mcp_mail_repo):
     """Test that messages can carry arbitrary metadata."""
-    msg_id = write_message(
+    _msg_id = write_message(
         mcp_mail_repo,
         {
             "to": {"agent": "agent1"},
@@ -572,14 +571,11 @@ async def test_malformed_message_handling(mcp_mail_repo):
     # Reading should handle the error gracefully
     # In a real implementation, you'd want error handling
     messages = []
-    with open(messages_file) as f:
+    with messages_file.open() as f:
         for line in f:
             if line.strip():
-                try:
+                with contextlib.suppress(json.JSONDecodeError):
                     messages.append(json.loads(line))
-                except json.JSONDecodeError:
-                    # Skip malformed lines
-                    pass
 
     # Should have 2 good messages
     assert len(messages) == 2
