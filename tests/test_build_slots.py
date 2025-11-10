@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -59,7 +59,7 @@ async def test_acquire_build_slot_conflict(isolated_env, tmp_path: Path):
     """Test build slot conflict detection with multiple agents."""
     server = build_mcp_server()
     settings = get_settings()
-    archive = await ensure_archive(settings, "testproject")
+    await ensure_archive(settings, "testproject")
 
     import os
     os.environ["WORKTREES_ENABLED"] = "1"

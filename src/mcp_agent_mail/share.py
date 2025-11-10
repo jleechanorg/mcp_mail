@@ -923,10 +923,6 @@ def build_materialized_views(snapshot_path: Path) -> None:
     """
     conn = sqlite3.connect(str(snapshot_path))
     try:
-        # Check which columns exist in messages table (backward compatibility)
-        has_thread_id = _column_exists(conn, "messages", "thread_id")
-        has_sender_id = _column_exists(conn, "messages", "sender_id")
-
         # Message overview materialized view
         # Denormalizes messages with sender names for efficient list rendering
         conn.executescript(

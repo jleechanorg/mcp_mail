@@ -19,6 +19,7 @@ from mcp_agent_mail.share import (
     ShareExportError,
     build_materialized_views,
     bundle_attachments,
+    create_performance_indexes,
     finalize_snapshot_for_export,
     maybe_chunk_database,
     scrub_snapshot,

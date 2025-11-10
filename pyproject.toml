@@ -80,6 +80,7 @@ exclude = ["/.venv", "/.vscode", "/.idea", "/.git", "/__pycache__", "*.py[cod]",
 [tool.ruff]
 line-length = 120
 target-version = "py311"
+extend-exclude = ["scripts/share_to_github_pages.py"]
 
 [tool.ruff.lint]
 select = [

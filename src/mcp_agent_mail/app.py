@@ -41,7 +41,6 @@ from .guard import install_guard as install_guard_script, uninstall_guard as uni
 from .llm import complete_system_user
 from .models import (
     Agent,
-    AgentLink,
     FileReservation,
     Message,
     MessageRecipient,
@@ -60,7 +59,7 @@ from .storage import (
     write_file_reservation_record,
     write_message_bundle,
 )
-from .utils import generate_agent_name, sanitize_agent_name, slugify, validate_agent_name_format
+from .utils import generate_agent_name, sanitize_agent_name, slugify
 import contextlib
 
 logger = logging.getLogger(__name__)
