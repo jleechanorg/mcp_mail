@@ -4,35 +4,21 @@ Git-backed messaging system for AI agents across platforms (local, Codex web, Cl
 
 ## Architecture
 
-- **messages.jsonl** - Source of truth (committed to git)
-- **SQLite cache** - Fast parallel reads with WAL mode (optional, .gitignored)
-- **Hash-based IDs** - Collision-free concurrent message creation
-- **Async writes** - Non-blocking git operations for zero latency
-- **Parallel access** - Multiple agents can read/write simultaneously
-- **Cross-repo support** - Messages written to both sender and receiver repos
+This directory (`.mcp_mail/`) provides a simple file-based messaging system:
 
-## Parallel Access Features
-
-### Concurrent Writes
-- **Atomic appends**: JSONL naturally supports parallel writes via O_APPEND flag
-- **Unique IDs**: Hash-based IDs prevent collisions in concurrent writes
-- **Cache updates**: SQLite cache updated immediately after JSONL write
-
-### Concurrent Reads
-- **SQLite cache**: Fast parallel reads using WAL (Write-Ahead Logging) mode
-- **JSONL fallback**: If cache disabled, JSONL still supports parallel reads
-- **Zero contention**: Multiple agents can read simultaneously without blocking
-
-### Performance
-- **Cache enabled (default)**: 2-10x faster for repeated reads
-- **High concurrency**: Tested with 20 concurrent agents, 100+ messages
-- **Stress tested**: 100 simultaneous writes without corruption
+- **messages.jsonl** - Source of truth for all messages (tracked in git)
+- **Format** - One JSON message per line (JSONL format)
+- **Parallel access** - JSONL supports atomic appends via O_APPEND flag
+- **Git-backed** - Messages persist across sessions via git commits
+- **Cross-repo support** - Can be used in any repository with this structure
 
 ## Message Format
 
+Each line in `messages.jsonl` is a complete JSON object with the following structure:
+
 ```json
 {
-  "id": "msg-a1b2c3",
+  "id": "msg-a1b2c3d4",
   "from": {
     "agent": "claude-code",
     "repo": "/home/user/ai_universe",
@@ -52,73 +38,115 @@ Git-backed messaging system for AI agents across platforms (local, Codex web, Cl
 }
 ```
 
+### Required Fields
+
+- **id** - Unique message identifier (e.g., `msg-{uuid}`)
+- **from** - Sender information with agent name, repo path, and branch
+- **to** - Recipient information with agent name and optional repo path
+- **subject** - Message subject line
+- **body** - Message content
+- **timestamp** - ISO 8601 timestamp in UTC
+
+### Optional Fields
+
+- **threadId** - ID of parent message for threading
+- **metadata** - Additional key-value data
+
 ## Usage
 
-### Basic Operations
+### Direct File Access
+
+The simplest way to use this messaging system is through direct file I/O:
 
 ```python
-from mcp_agent_mail.mail import MCPMail
+import json
+from pathlib import Path
+from datetime import datetime, timezone
+import uuid
 
-# Create mail instance (cache enabled by default for parallel access)
-mail = MCPMail()
+# Append a new message
+def write_message(repo_path: Path, message: dict):
+    messages_file = repo_path / ".mcp_mail" / "messages.jsonl"
+    
+    # Add required fields
+    message["id"] = f"msg-{uuid.uuid4()}"
+    message["timestamp"] = datetime.now(timezone.utc).isoformat()
+    
+    # Atomic append
+    with messages_file.open("a") as f:
+        f.write(json.dumps(message) + "\n")
 
-# Send message (parallel-safe, atomic append)
-await mail.send({
-  "to": {"agent": "codex-web", "repo": "/path/to/repo"},
-  "subject": "Hello",
-  "body": "Message content"
-})
-
-# List messages (parallel reads from SQLite cache)
-messages = await mail.list(unread=True)
-
-# Sync with git
-await mail.sync()
-
-# Close connection (cleanup SQLite)
-mail.close()
+# Read all messages
+def read_messages(repo_path: Path) -> list[dict]:
+    messages_file = repo_path / ".mcp_mail" / "messages.jsonl"
+    messages = []
+    
+    with messages_file.open() as f:
+        for line in f:
+            if line.strip():
+                messages.append(json.loads(line))
+    
+    return messages
 ```
 
-### Parallel Access Example
+### Using MCP Agent Mail Server
+
+For more advanced features (filtering, threading, recipients), use the MCP Agent Mail server tools:
 
 ```python
-# Multiple agents can operate simultaneously
-agent1 = MCPMail('/path/to/repo')
-agent2 = MCPMail('/path/to/repo')
-agent3 = MCPMail('/path/to/repo')
+from mcp import ClientSession
+from mcp.client.stdio import stdio_client
 
-# Concurrent writes - all succeed without conflicts
-await asyncio.gather(
-  agent1.send({"to": {"agent": "receiver"}, "subject": "From 1", "body": "Content"}),
-  agent2.send({"to": {"agent": "receiver"}, "subject": "From 2", "body": "Content"}),
-  agent3.send({"to": {"agent": "receiver"}, "subject": "From 3", "body": "Content"}),
-)
-
-# Concurrent reads - all get consistent data
-list1, list2, list3 = await asyncio.gather(
-  agent1.list(),
-  agent2.list(to_agent="receiver"),
-  agent3.count(unread=True),
-)
-
-# Cleanup
-for agent in [agent1, agent2, agent3]:
-    agent.close()
+# Connect to MCP server
+async with stdio_client() as (read, write):
+    async with ClientSession(read, write) as session:
+        # Initialize server
+        await session.initialize()
+        
+        # Send message using MCP tool
+        result = await session.call_tool(
+            "send_message",
+            {
+                "project_key": "my-project",
+                "sender_name": "my-agent",
+                "to": ["recipient-agent"],
+                "subject": "Hello",
+                "body": "Message content"
+            }
+        )
 ```
 
-### Configuration Options
+### Available MCP Tools
 
-```python
-# Enable cache (default - recommended for parallel access)
-mail = MCPMail('/path/to/repo', cache=True)
+When using the `mcp_agent_mail` server, these tools are available:
 
-# Disable cache (JSONL-only mode)
-mail = MCPMail('/path/to/repo', cache=False)
+- **send_message** - Send a message to one or more agents
+- **list_messages** - List messages with filtering options
+- **get_message** - Read a specific message by ID
+- **search_messages** - Search messages by content or metadata
+
+## Parallel Access
+
+The JSONL format naturally supports concurrent writes:
+
+- **Atomic appends** - Multiple agents can append simultaneously using O_APPEND
+- **No locking required** - File system handles append atomicity
+- **Collision-free IDs** - UUID-based message IDs prevent conflicts
+
+## Git Integration
+
+Messages are tracked in git for persistence:
+
+```bash
+# Commit new messages
+cd /path/to/repo
+git add .mcp_mail/messages.jsonl
+git commit -m "Add new messages"
+
+# Sync with remote
+git pull --rebase
+git push
+
+# View message history
+git log -p .mcp_mail/messages.jsonl
 ```
-
-## MCP Tools
-
-- **mcp_mail.send** - Send message to another agent
-- **mcp_mail.list** - List messages with filters
-- **mcp_mail.read** - Read specific message
-- **mcp_mail.sync** - Pull/push messages via git
