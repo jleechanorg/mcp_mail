@@ -944,99 +944,29 @@ def main() -> None:
     # Export to temp directory first for preview
     with tempfile.TemporaryDirectory(prefix="mailbox-preview-") as temp_dir:
         temp_path = Path(temp_dir)
+        console.print(f"[dim]Using temporary export workspace: {temp_path}[/]")
 
-    if not reuse_existing:
-        if bundle_path.exists():
-            shutil.rmtree(bundle_path, ignore_errors=True)
-        bundle_path.mkdir(parents=True, exist_ok=True)
         success, signing_pub = export_bundle(
-            bundle_path,
+            temp_path,
             selected_projects,
             scrub_preset,
             signing_key if use_signing else None,
         )
         if not success:
             sys.exit(1)
-        bundle_ready = True
-    else:
-        console.print("[green]Reusing existing bundle workspace for preview.[/]")
-        bundle_ready = True
 
-    # Always refresh viewer assets in the bundle to pick up latest CSP/scripts
-    _refresh_viewer_assets(bundle_path)
-
-    saved_path = signing_key or last_known_signing_path
-    save_resume_state({
-        "stage": "preview",
-        "selected_projects": selected_projects,
-        "scrub_preset": scrub_preset,
-        "deployment": deployment,
-        "use_signing": use_signing,
-        "generate_new_key": generate_new_key,
-        "signing_key_path": str(saved_path) if saved_path else None,
-        "signing_pub_path": str(signing_pub) if signing_pub else None,
-        "bundle_ready": bundle_ready,
-        "timestamp": time.time(),
-    })
-
-    if not Confirm.ask("\nPreview the bundle before deploying?", default=True):
-        satisfied = True
-    else:
-        satisfied = preview_bundle(bundle_path)
-
-    if not satisfied:
-        console.print(
-            f"[yellow]Deployment cancelled. The bundle remains at {bundle_path}. Run the wizard again to resume.[/]"
-        )
-        sys.exit(0)
-
-    if deployment.get("type") == "local":
-        output_path = Path(deployment.get("path", "./mailbox-export")).expanduser().resolve()
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(bundle_path, output_path, dirs_exist_ok=True)
-        console.print(f"\n[bold green]✓ Exported to: {output_path}[/]")
-
-        if signing_pub:
-            console.print(f"[green]✓ Signing public key: {signing_pub}[/]")
-
-        console.print(
-            "\n[cyan]To refresh this bundle later, run:[/]\n  uv run python -m mcp_agent_mail.cli share update "
-            f"{shlex.quote(str(output_path))}"
-        )
-
-        save_config({
-            "project_indices": selected_indices,
-            "project_count": len(selected_projects),
-            "scrub_preset": scrub_preset,
-            "deployment": deployment,
-            "deployment_type": "local",
-            "use_signing": use_signing,
-            "generate_new_key": generate_new_key,
-            "signing_key_path": str(signing_key) if signing_key else None,
-        })
-        clear_resume_state()
-
-    elif deployment.get("type") == "github-new":
-        success, repo_full_name = create_github_repo(
-            deployment.get("repo_name", "mailbox-viewer"),
-            deployment.get("private", False),
-            deployment.get("description", "MCP Agent Mail static viewer"),
-        )
-        if not success:
-            sys.exit(1)
-
-        # Preview
-        if not Confirm.ask("\nPreview the bundle before deploying?", default=True):
-            satisfied = True
-        else:
+        if Confirm.ask("\nPreview the bundle before deploying?", default=True):
             satisfied = preview_bundle(temp_path)
+        else:
+            satisfied = True
 
         if not satisfied:
-            console.print("[yellow]Deployment cancelled[/]")
-            sys.exit(0)
+            console.print("[yellow]Deployment cancelled. Temporary preview directory removed.[/]")
+            return
 
-        # Deploy based on target
-        if deployment.get("type") == "local":
+        deploy_type = deployment.get("type")
+
+        if deploy_type == "local":
             output_path = Path(deployment.get("path", "./mailbox-export")).expanduser().resolve()
             output_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copytree(temp_path, output_path, dirs_exist_ok=True)
@@ -1046,15 +976,8 @@ def main() -> None:
                 console.print(f"[green]✓ Signing public key: {signing_pub}[/]")
 
             console.print(
-                "\n[cyan]To refresh this deployment later, run:[/]\n"
-                f"  uv run python -m mcp_agent_mail.cli share update {shlex.quote(str(bundle_path))}\n"
-                f"  wrangler pages deploy {shlex.quote(str(bundle_path))} --project-name {deployment.get('project_name', 'mailbox-viewer')} --branch main"
-            )
-
-            console.print(
-                "\n[cyan]To publish fresh mailbox data later, run:[/]\n"
-                f"  uv run python -m mcp_agent_mail.cli share update {shlex.quote(str(bundle_path))}\n"
-                "  git add . && git commit -m \"Refresh mailbox\" && git push"
+                "\n[cyan]To refresh this bundle later, run:[/]\n  uv run python -m mcp_agent_mail.cli share update "
+                f"{shlex.quote(str(output_path))}"
             )
 
             save_config({
@@ -1065,10 +988,11 @@ def main() -> None:
                 "deployment_type": "local",
                 "use_signing": use_signing,
                 "generate_new_key": generate_new_key,
+                "signing_key_path": str(signing_key) if signing_key else None,
             })
+            return
 
-        elif deployment.get("type") == "github-new":
-            # Create repo
+        if deploy_type == "github-new":
             success, repo_full_name = create_github_repo(
                 deployment.get("repo_name", "mailbox-viewer"),
                 deployment.get("private", False),
@@ -1077,11 +1001,9 @@ def main() -> None:
             if not success:
                 sys.exit(1)
 
-            # Init and push (use temp_path directly, no need to copy)
             if not init_and_push_repo(temp_path, repo_full_name):
                 sys.exit(1)
 
-            # Enable Pages
             success, pages_url = enable_github_pages(repo_full_name)
             if success:
                 console.print(
@@ -1099,7 +1021,6 @@ def main() -> None:
                     console.print(f"\n[cyan]Signing public key saved to:[/] {signing_pub}")
                     console.print("[dim]Share this with viewers to verify bundle authenticity[/]")
 
-                # Save config for next run
                 save_config({
                     "project_indices": selected_indices,
                     "project_count": len(selected_projects),
@@ -1112,9 +1033,9 @@ def main() -> None:
             else:
                 console.print("\n[yellow]Repository created but Pages setup failed[/]")
                 console.print(f"Visit https://github.com/{repo_full_name}/settings/pages to enable manually")
+            return
 
-        elif deployment.get("type") == "cloudflare-pages":
-            # Deploy to Cloudflare Pages
+        if deploy_type == "cloudflare-pages":
             success, pages_url = deploy_to_cloudflare_pages(temp_path, deployment.get("project_name", "mailbox-viewer"))
             if success:
                 console.print(
@@ -1131,7 +1052,6 @@ def main() -> None:
                     console.print(f"\n[cyan]Signing public key saved to:[/] {signing_pub}")
                     console.print("[dim]Share this with viewers to verify bundle authenticity[/]")
 
-                # Save config for next run
                 save_config({
                     "project_indices": selected_indices,
                     "project_count": len(selected_projects),
@@ -1144,6 +1064,9 @@ def main() -> None:
             else:
                 console.print("\n[yellow]Cloudflare Pages deployment failed[/]")
                 sys.exit(1)
+            return
+
+        console.print("[yellow]Unknown deployment target. No deployment performed.[/]")
 
 
 if __name__ == "__main__":

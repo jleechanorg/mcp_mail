@@ -302,7 +302,6 @@ def _check_and_fix_duplicate_agent_names(connection) -> None:
 
 
 def _setup_fts(connection) -> None:
-    _ensure_agent_active_columns(connection)
     connection.exec_driver_sql(
         "CREATE VIRTUAL TABLE IF NOT EXISTS fts_messages USING fts5(message_id UNINDEXED, subject, body)"
     )

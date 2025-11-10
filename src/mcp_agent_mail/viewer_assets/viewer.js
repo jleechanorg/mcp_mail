@@ -1579,31 +1579,17 @@ window.viewerController = function() {
     },
 
     async loadMessageBodyById(id) {
-      let body = '';
       const stmt = state.db.prepare(`SELECT COALESCE(body_md, '') AS body_md FROM messages WHERE id = ? LIMIT 1`);
       try {
         stmt.bind([id]);
         if (stmt.step()) {
           const row = stmt.getAsObject();
-
-          // Get recipients for this message
-          const recipients = this.getMessageRecipients(row.id);
-
-          // Enrich message with additional fields
-          results.push({
-            ...row,
-            recipients: recipients,
-            excerpt: row.snippet || '',
-            created_relative: this.formatTimestamp(row.created_ts),
-            created_full: this.formatTimestampFull(row.created_ts),
-            read: false // Static viewer doesn't track read state
-          });
+          return row.body_md ?? '';
         }
+        return '';
       } finally {
         stmt.free();
       }
-
-      return results;
     },
 
     // Search across ALL messages using SQL: FTS when available, otherwise LIKE.
@@ -1786,30 +1772,30 @@ window.viewerController = function() {
     },
 
     buildRecipientsMap() {
-      // Build a map of message_id -> comma-separated recipient names
-      // This is done in ONE query instead of N queries!
+      // Build a map of message_id -> comma-separated recipient names in a single query
       const map = new Map();
 
       const stmt = state.db.prepare(`
-        SELECT COALESCE(a.name, 'Unknown') AS recipient_name
+        SELECT
+          mr.message_id AS message_id,
+          COALESCE(a.name, 'Unknown') AS recipient_name
         FROM message_recipients mr
         LEFT JOIN agents a ON a.id = mr.to_agent_id
-        WHERE mr.message_id = ?
-        ORDER BY recipient_name
+        ORDER BY mr.message_id, recipient_name
       `);
 
-      const recipients = [];
       try {
-        stmt.bind([messageId]);
         while (stmt.step()) {
           const row = stmt.getAsObject();
-          recipients.push(row.recipient_name);
+          const id = Number(row.message_id);
+          const prior = map.get(id);
+          map.set(id, prior ? `${prior}, ${row.recipient_name}` : row.recipient_name);
         }
       } finally {
         stmt.free();
       }
 
-      return recipients.length > 0 ? recipients.join(', ') : 'Unknown';
+      return map;
     },
 
     buildThreadsForAlpine(rawThreads) {

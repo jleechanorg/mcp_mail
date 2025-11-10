@@ -1,9 +1,9 @@
 """Application factory for the MCP Agent Mail server."""
-# ruff: noqa: I001
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import fnmatch
 import functools
 import inspect
@@ -24,12 +24,6 @@ from urllib.parse import parse_qsl
 from fastmcp import Context, FastMCP
 from git import Repo
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
-try:
-    from pathspec import PathSpec  # type: ignore[import-not-found]
-    from pathspec.patterns.gitwildmatch import GitWildMatchPattern  # type: ignore[import-not-found]
-except Exception:  # pragma: no cover - optional dependency fallback
-    PathSpec = None  # type: ignore[assignment]
-    GitWildMatchPattern = None  # type: ignore[assignment]
 from sqlalchemy import asc, delete, desc, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, NoResultFound
 from sqlalchemy.orm import aliased
@@ -41,7 +35,6 @@ from .guard import install_guard as install_guard_script, uninstall_guard as uni
 from .llm import complete_system_user
 from .models import (
     Agent,
-    AgentLink,
     FileReservation,
     Message,
     MessageRecipient,
@@ -60,8 +53,7 @@ from .storage import (
     write_file_reservation_record,
     write_message_bundle,
 )
-from .utils import generate_agent_name, sanitize_agent_name, slugify, validate_agent_name_format
-import contextlib
+from .utils import generate_agent_name, sanitize_agent_name, slugify
 
 logger = logging.getLogger(__name__)
 
@@ -5128,7 +5120,8 @@ def build_mcp_server() -> FastMCP:
                         if datetime.fromisoformat(exp) <= now:
                             continue
                     except Exception:
-                        pass
+                        # If the expiration timestamp is malformed, skip this file.
+                        continue
                 results.append(data)
             except Exception:
                 continue
@@ -5201,6 +5194,7 @@ def build_mcp_server() -> FastMCP:
         archive = await ensure_archive(settings, project.slug)
         now = datetime.now(timezone.utc)
         slot_path = _slot_dir(archive, slot)
+        await asyncio.to_thread(slot_path.mkdir, parents=True, exist_ok=True)
         branch = _compute_branch(project.human_key)
         holder_id = _safe_component(f"{agent_name}__{branch or 'unknown'}")
         lease_path = slot_path / f"{holder_id}.json"

@@ -5,8 +5,6 @@ import json
 import sqlite3
 from pathlib import Path
 
-import pytest
-
 from mcp_agent_mail.share import (
     build_materialized_views,
     create_performance_indexes,

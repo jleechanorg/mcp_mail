@@ -924,13 +924,15 @@ def build_materialized_views(snapshot_path: Path) -> None:
     conn = sqlite3.connect(str(snapshot_path))
     try:
         # Check which columns exist in messages table (backward compatibility)
-        has_thread_id = _column_exists(conn, "messages", "thread_id")
+        _column_exists(conn, "messages", "thread_id")
         has_sender_id = _column_exists(conn, "messages", "sender_id")
 
         # Message overview materialized view
         # Denormalizes messages with sender names for efficient list rendering
+        sender_column = "COALESCE(a.name, '') AS sender_name" if has_sender_id else "'' AS sender_name"
+        sender_join = "JOIN agents a ON m.sender_id = a.id" if has_sender_id else ""
         conn.executescript(
-            """
+            f"""
             DROP TABLE IF EXISTS message_overview_mv;
             CREATE TABLE message_overview_mv AS
             SELECT
@@ -941,13 +943,13 @@ def build_materialized_views(snapshot_path: Path) -> None:
                 m.importance,
                 m.ack_required,
                 m.created_ts,
-                a.name AS sender_name,
+                {sender_column},
                 LENGTH(m.body_md) AS body_length,
                 json_array_length(m.attachments) AS attachment_count,
                 SUBSTR(COALESCE(m.body_md, ''), 1, 280) AS latest_snippet,
                 COALESCE(r.recipients, '') AS recipients
             FROM messages m
-            JOIN agents a ON m.sender_id = a.id
+            {sender_join}
             LEFT JOIN (
                 SELECT
                     mr.message_id,
