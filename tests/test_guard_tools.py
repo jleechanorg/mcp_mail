@@ -43,5 +43,3 @@ async def test_install_and_uninstall_precommit_guard_tools(isolated_env, tmp_pat
         # Tool returns {removed: bool}
         assert bool(res2.data.get("removed")) is True
         assert not hook_path.exists()
-
-

@@ -64,5 +64,3 @@ async def test_summarize_threads_llm_refinement(isolated_env, monkeypatch):
         # Ensure LLM-refined aggregate keys present
         agg = payload.get("aggregate") or {}
         assert agg.get("action_items") == ["A"]
-
-

@@ -54,6 +54,7 @@ def _setup_callbacks() -> None:
                 if settings.log_rich_enabled:
                     try:
                         import importlib as _imp
+
                         _rc = _imp.import_module("rich.console")
                         _rp = _imp.import_module("rich.panel")
                         _rt = _imp.import_module("rich.text")
@@ -62,8 +63,11 @@ def _setup_callbacks() -> None:
                         Text = _rt.Text
 
                         body = Text.assemble(
-                            ("model: ", "cyan"), (model, "white"), "\n",
-                            ("cost: ", "cyan"), (f"${cost:.6f}", "bold green"),
+                            ("model: ", "cyan"),
+                            (model, "white"),
+                            "\n",
+                            ("cost: ", "cyan"),
+                            (f"${cost:.6f}", "bold green"),
                         )
                         Console().print(Panel(body, title="llm: cost", border_style="magenta"))
                     except Exception:
@@ -169,7 +173,15 @@ def _resolve_model_alias(name: str) -> str:
         return _choose_best_available_model(normalized)
     return name
 
-async def complete_system_user(system: str, user: str, *, model: Optional[str] = None, temperature: Optional[float] = None, max_tokens: Optional[int] = None) -> LlmOutput:
+
+async def complete_system_user(
+    system: str,
+    user: str,
+    *,
+    model: Optional[str] = None,
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+) -> LlmOutput:
     """Chat completion helper returning content.
 
     Falls back to litellm.completion if Router isn't available.
@@ -211,7 +223,9 @@ async def complete_system_user(system: str, user: str, *, model: Optional[str] =
             alt_model = _choose_best_available_model(use_model)
             if alt_model != use_model:
                 use_model = alt_model
-                resp = await asyncio.to_thread(lambda: litellm.completion(model=use_model, messages=messages, temperature=temp, max_tokens=mtoks))
+                resp = await asyncio.to_thread(
+                    lambda: litellm.completion(model=use_model, messages=messages, temperature=temp, max_tokens=mtoks)
+                )
             else:
                 raise err from None
 
@@ -266,5 +280,3 @@ def _bridge_provider_env() -> None:
             val = _get_from_any(*aliases)
             if val:
                 os.environ[canonical] = val
-
-

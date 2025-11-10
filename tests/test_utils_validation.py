@@ -1,4 +1,5 @@
 """Tests for utility functions added in Tier 1 and Tier 2."""
+
 from __future__ import annotations
 
 from mcp_agent_mail.utils import (

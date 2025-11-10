@@ -1,4 +1,5 @@
 """End-to-end workflow tests for Tier 1 and Tier 2 features integration."""
+
 from __future__ import annotations
 
 import json
@@ -26,12 +27,7 @@ def _create_and_commit_file(repo: Path, filename: str, content: str = "test") ->
     file_path.parent.mkdir(parents=True, exist_ok=True)
     file_path.write_text(content)
     subprocess.run(["git", "add", filename], cwd=str(repo), check=True)
-    subprocess.run(
-        ["git", "commit", "-m", f"Add {filename}"],
-        cwd=str(repo),
-        check=True,
-        capture_output=True
-    )
+    subprocess.run(["git", "commit", "-m", f"Add {filename}"], cwd=str(repo), check=True, capture_output=True)
 
 
 @pytest.mark.asyncio
@@ -42,6 +38,7 @@ async def test_e2e_build_slots_with_file_reservations(isolated_env, tmp_path: Pa
     await ensure_archive(settings, "e2e-project")
 
     import os
+
     os.environ["WORKTREES_ENABLED"] = "1"
 
     # Agent1 creates a file reservation
@@ -52,8 +49,8 @@ async def test_e2e_build_slots_with_file_reservations(isolated_env, tmp_path: Pa
             "agent_name": "Agent1",
             "path_pattern": "src/*.py",
             "exclusive": True,
-            "ttl_seconds": 3600
-        }
+            "ttl_seconds": 3600,
+        },
     )
     assert result[0].text
 
@@ -65,8 +62,8 @@ async def test_e2e_build_slots_with_file_reservations(isolated_env, tmp_path: Pa
             "agent_name": "Agent1",
             "slot": "backend-build",
             "ttl_seconds": 3600,
-            "exclusive": True
-        }
+            "exclusive": True,
+        },
     )
     data = json.loads(result[0].text)
     assert data["granted"] is True
@@ -79,8 +76,8 @@ async def test_e2e_build_slots_with_file_reservations(isolated_env, tmp_path: Pa
             "agent_name": "Agent2",
             "slot": "backend-build",
             "ttl_seconds": 3600,
-            "exclusive": True
-        }
+            "exclusive": True,
+        },
     )
     data = json.loads(result[0].text)
     # Should report conflict
@@ -88,12 +85,7 @@ async def test_e2e_build_slots_with_file_reservations(isolated_env, tmp_path: Pa
 
     # Agent1 releases the build slot
     result = await server._mcp_server.call_tool(
-        "release_build_slot",
-        {
-            "project_key": "e2e-project",
-            "agent_name": "Agent1",
-            "slot": "backend-build"
-        }
+        "release_build_slot", {"project_key": "e2e-project", "agent_name": "Agent1", "slot": "backend-build"}
     )
     data = json.loads(result[0].text)
     assert data["released"] is True
@@ -106,8 +98,8 @@ async def test_e2e_build_slots_with_file_reservations(isolated_env, tmp_path: Pa
             "agent_name": "Agent2",
             "slot": "backend-build",
             "ttl_seconds": 3600,
-            "exclusive": True
-        }
+            "exclusive": True,
+        },
     )
     data = json.loads(result[0].text)
     assert data["granted"] is True
@@ -128,7 +120,7 @@ async def test_e2e_pre_push_guard_with_build_slots(isolated_env, tmp_path: Path)
             "agent": "BuildAgent",
             "path_pattern": "build/**/*",
             "exclusive": True,
-        }
+        },
     )
 
     # Render pre-push script
@@ -146,13 +138,8 @@ async def test_e2e_pre_push_guard_with_build_slots(isolated_env, tmp_path: Path)
 
     # Run pre-push hook
     import os
-    result = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=str(repo),
-        capture_output=True,
-        text=True,
-        check=True
-    )
+
+    result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True)
     local_sha = result.stdout.strip()
 
     env = os.environ.copy()
@@ -161,12 +148,7 @@ async def test_e2e_pre_push_guard_with_build_slots(isolated_env, tmp_path: Path)
 
     hook_input = f"refs/heads/main {local_sha} refs/heads/main 0000000000000000000000000000000000000000\n"
     proc = subprocess.run(
-        ["python", str(script_path)],
-        cwd=str(repo),
-        env=env,
-        input=hook_input,
-        capture_output=True,
-        text=True
+        ["python", str(script_path)], cwd=str(repo), env=env, input=hook_input, capture_output=True, text=True
     )
 
     # Should detect conflict
@@ -244,7 +226,7 @@ async def test_e2e_materialized_views_with_share_export(isolated_env, tmp_path: 
                 )
                 VALUES (?, 1, 1, ?, ?, ?, 'normal', 0, '2025-01-0?T00:00:00Z', '[]')
                 """,
-                (msg_id, f"thread-{msg_id}", subject, body)
+                (msg_id, f"thread-{msg_id}", subject, body),
             )
 
         conn.commit()
@@ -261,28 +243,20 @@ async def test_e2e_materialized_views_with_share_export(isolated_env, tmp_path: 
     conn = sqlite3.connect(str(snapshot))
     try:
         # Check materialized views
-        cursor = conn.execute(
-            "SELECT COUNT(*) FROM message_overview_mv"
-        )
+        cursor = conn.execute("SELECT COUNT(*) FROM message_overview_mv")
         assert cursor.fetchone()[0] == 3
 
         # Check lowercase columns for case-insensitive search
-        cursor = conn.execute(
-            "SELECT COUNT(*) FROM messages WHERE subject_lower LIKE '%important%'"
-        )
+        cursor = conn.execute("SELECT COUNT(*) FROM messages WHERE subject_lower LIKE '%important%'")
         count = cursor.fetchone()[0]
         assert count == 3  # All three messages have "important" in different cases
 
         # Check indexes exist
-        cursor = conn.execute(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'"
-        )
+        cursor = conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'")
         assert cursor.fetchone()[0] > 0
 
         # Check ANALYZE was run
-        cursor = conn.execute(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sqlite_stat1'"
-        )
+        cursor = conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sqlite_stat1'")
         assert cursor.fetchone()[0] == 1
 
     finally:
@@ -297,6 +271,7 @@ async def test_e2e_multi_agent_workflow(isolated_env, tmp_path: Path):
     await ensure_archive(settings, "multi-agent-project")
 
     import os
+
     os.environ["WORKTREES_ENABLED"] = "1"
 
     # Scenario: Frontend and Backend agents working in parallel
@@ -309,8 +284,8 @@ async def test_e2e_multi_agent_workflow(isolated_env, tmp_path: Path):
             "agent_name": "FrontendAgent",
             "slot": "frontend-build",
             "ttl_seconds": 3600,
-            "exclusive": True
-        }
+            "exclusive": True,
+        },
     )
     assert json.loads(result[0].text)["granted"] is True
 
@@ -322,8 +297,8 @@ async def test_e2e_multi_agent_workflow(isolated_env, tmp_path: Path):
             "agent_name": "BackendAgent",
             "slot": "backend-build",
             "ttl_seconds": 3600,
-            "exclusive": True
-        }
+            "exclusive": True,
+        },
     )
     assert json.loads(result[0].text)["granted"] is True
 
@@ -335,8 +310,8 @@ async def test_e2e_multi_agent_workflow(isolated_env, tmp_path: Path):
             "agent_name": "FrontendAgent",
             "path_pattern": "frontend/**/*.ts",
             "exclusive": True,
-            "ttl_seconds": 3600
-        }
+            "ttl_seconds": 3600,
+        },
     )
     assert result[0].text
 
@@ -348,8 +323,8 @@ async def test_e2e_multi_agent_workflow(isolated_env, tmp_path: Path):
             "agent_name": "BackendAgent",
             "path_pattern": "backend/**/*.py",
             "exclusive": True,
-            "ttl_seconds": 3600
-        }
+            "ttl_seconds": 3600,
+        },
     )
     assert result[0].text
 
@@ -361,8 +336,8 @@ async def test_e2e_multi_agent_workflow(isolated_env, tmp_path: Path):
             "project_key": "multi-agent-project",
             "agent_name": "FrontendAgent",
             "slot": "frontend-build",
-            "extend_seconds": 1800
-        }
+            "extend_seconds": 1800,
+        },
     )
     assert json.loads(result[0].text)["renewed"] is True
 
@@ -373,29 +348,21 @@ async def test_e2e_multi_agent_workflow(isolated_env, tmp_path: Path):
             "project_key": "multi-agent-project",
             "agent_name": "BackendAgent",
             "slot": "backend-build",
-            "extend_seconds": 1800
-        }
+            "extend_seconds": 1800,
+        },
     )
     assert json.loads(result[0].text)["renewed"] is True
 
     # Both agents finish and release slots
     result = await server._mcp_server.call_tool(
         "release_build_slot",
-        {
-            "project_key": "multi-agent-project",
-            "agent_name": "FrontendAgent",
-            "slot": "frontend-build"
-        }
+        {"project_key": "multi-agent-project", "agent_name": "FrontendAgent", "slot": "frontend-build"},
     )
     assert json.loads(result[0].text)["released"] is True
 
     result = await server._mcp_server.call_tool(
         "release_build_slot",
-        {
-            "project_key": "multi-agent-project",
-            "agent_name": "BackendAgent",
-            "slot": "backend-build"
-        }
+        {"project_key": "multi-agent-project", "agent_name": "BackendAgent", "slot": "backend-build"},
     )
     assert json.loads(result[0].text)["released"] is True
 
@@ -431,7 +398,7 @@ async def test_e2e_guard_lifecycle(isolated_env, tmp_path: Path):
             "agent": "ProtectedAgent",
             "path_pattern": "protected/**/*",
             "exclusive": True,
-        }
+        },
     )
 
     # Try to commit a file in protected area (should be blocked by pre-commit)
@@ -443,17 +410,12 @@ async def test_e2e_guard_lifecycle(isolated_env, tmp_path: Path):
 
     # Run pre-commit hook
     import os
+
     env = os.environ.copy()
     env["AGENT_NAME"] = "OtherAgent"
     env["WORKTREES_ENABLED"] = "1"
 
-    proc = subprocess.run(
-        ["python", str(precommit_hook)],
-        cwd=str(repo),
-        env=env,
-        capture_output=True,
-        text=True
-    )
+    proc = subprocess.run(["python", str(precommit_hook)], cwd=str(repo), env=env, capture_output=True, text=True)
 
     # Should block the commit
     assert proc.returncode == 1
@@ -504,7 +466,7 @@ async def test_e2e_database_optimizations_query_performance(isolated_env, tmp_pa
                 )
                 VALUES (?, 1, 1, ?, ?, 'body', 'normal', 0, '2025-01-01T00:00:00Z', '[]')
                 """,
-                (i + 1, f"thread-{i}", f"Subject {i % 10}")
+                (i + 1, f"thread-{i}", f"Subject {i % 10}"),
             )
 
         conn.commit()
@@ -514,9 +476,7 @@ async def test_e2e_database_optimizations_query_performance(isolated_env, tmp_pa
     # Query performance WITHOUT optimizations
     conn = sqlite3.connect(str(snapshot))
     start = time.time()
-    cursor = conn.execute(
-        "SELECT * FROM messages WHERE LOWER(subject) LIKE '%subject 5%' ORDER BY created_ts DESC"
-    )
+    cursor = conn.execute("SELECT * FROM messages WHERE LOWER(subject) LIKE '%subject 5%' ORDER BY created_ts DESC")
     results_before = cursor.fetchall()
     time.time() - start
     conn.close()
@@ -528,9 +488,7 @@ async def test_e2e_database_optimizations_query_performance(isolated_env, tmp_pa
     # Query performance WITH optimizations (using lowercase column)
     conn = sqlite3.connect(str(snapshot))
     start = time.time()
-    cursor = conn.execute(
-        "SELECT * FROM messages WHERE subject_lower LIKE '%subject 5%' ORDER BY created_ts DESC"
-    )
+    cursor = conn.execute("SELECT * FROM messages WHERE subject_lower LIKE '%subject 5%' ORDER BY created_ts DESC")
     results_after = cursor.fetchall()
     time_after = time.time() - start
     conn.close()
@@ -580,7 +538,7 @@ async def test_e2e_incremental_share_updates(isolated_env, tmp_path: Path):
                 INSERT INTO messages (id, project_id, sender_id, thread_id, subject, body_md, importance, ack_required, created_ts, attachments)
                 VALUES (?, 1, 1, ?, ?, 'body', 'normal', 0, '2025-01-01T00:00:00Z', '[]')
                 """,
-                (i + 1, f"thread-{i}", f"V1 Subject {i}")
+                (i + 1, f"thread-{i}", f"V1 Subject {i}"),
             )
         conn.commit()
     finally:
@@ -608,7 +566,7 @@ async def test_e2e_incremental_share_updates(isolated_env, tmp_path: Path):
                 INSERT INTO messages (id, project_id, sender_id, thread_id, subject, body_md, importance, ack_required, created_ts, attachments)
                 VALUES (?, 1, 1, ?, ?, 'body', 'normal', 0, '2025-01-02T00:00:00Z', '[]')
                 """,
-                (i + 1, f"thread-{i}", f"V2 Subject {i}")
+                (i + 1, f"thread-{i}", f"V2 Subject {i}"),
             )
         conn.commit()
     finally:

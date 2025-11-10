@@ -15,7 +15,13 @@ async def test_whois_and_projects_resources(isolated_env):
         await client.call_tool("ensure_project", {"human_key": "/backend"})
         await client.call_tool(
             "register_agent",
-            {"project_key": "Backend", "program": "codex", "model": "gpt-5", "name": "BlueLake", "task_description": "dir"},
+            {
+                "project_key": "Backend",
+                "program": "codex",
+                "model": "gpt-5",
+                "name": "BlueLake",
+                "task_description": "dir",
+            },
         )
 
         who = await client.call_tool(
@@ -228,4 +234,3 @@ async def test_register_agent_same_slug_different_human_keys(isolated_env):
 
         assert who1.data.get("name") == "Agent1"
         assert who2.data.get("name") == "Agent2"
-

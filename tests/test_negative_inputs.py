@@ -12,7 +12,9 @@ async def test_invalid_project_or_agent_errors(isolated_env):
     server = build_mcp_server()
     async with Client(server) as client:
         # register_agent now auto-creates projects, so this should succeed
-        res = await client.call_tool_mcp("register_agent", {"project_key": "Missing", "program": "x", "model": "y", "name": "A"})
+        res = await client.call_tool_mcp(
+            "register_agent", {"project_key": "Missing", "program": "x", "model": "y", "name": "A"}
+        )
         assert res.isError is False  # Changed: project is auto-created
         assert res.content[0].text  # Should have success response
 

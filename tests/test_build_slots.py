@@ -1,4 +1,5 @@
 """Unit and integration tests for build slot functionality."""
+
 from __future__ import annotations
 
 import json
@@ -21,6 +22,7 @@ async def test_acquire_build_slot_basic(isolated_env, tmp_path: Path):
 
     # Enable worktrees for build slots
     import os
+
     os.environ["WORKTREES_ENABLED"] = "1"
 
     result = await server._mcp_server.call_tool(
@@ -30,8 +32,8 @@ async def test_acquire_build_slot_basic(isolated_env, tmp_path: Path):
             "agent_name": "TestAgent",
             "slot": "frontend-build",
             "ttl_seconds": 3600,
-            "exclusive": True
-        }
+            "exclusive": True,
+        },
     )
 
     assert result is not None
@@ -62,6 +64,7 @@ async def test_acquire_build_slot_conflict(isolated_env, tmp_path: Path):
     await ensure_archive(settings, "testproject")
 
     import os
+
     os.environ["WORKTREES_ENABLED"] = "1"
 
     # First agent acquires slot
@@ -72,8 +75,8 @@ async def test_acquire_build_slot_conflict(isolated_env, tmp_path: Path):
             "agent_name": "AgentAlpha",
             "slot": "test-runner",
             "ttl_seconds": 3600,
-            "exclusive": True
-        }
+            "exclusive": True,
+        },
     )
 
     data1 = json.loads(result1[0].text)
@@ -87,8 +90,8 @@ async def test_acquire_build_slot_conflict(isolated_env, tmp_path: Path):
             "agent_name": "AgentBeta",
             "slot": "test-runner",
             "ttl_seconds": 3600,
-            "exclusive": True
-        }
+            "exclusive": True,
+        },
     )
 
     data2 = json.loads(result2[0].text)
@@ -106,6 +109,7 @@ async def test_renew_build_slot(isolated_env, tmp_path: Path):
     await ensure_archive(settings, "testproject")
 
     import os
+
     os.environ["WORKTREES_ENABLED"] = "1"
 
     # Acquire slot
@@ -116,19 +120,14 @@ async def test_renew_build_slot(isolated_env, tmp_path: Path):
             "agent_name": "TestAgent",
             "slot": "build",
             "ttl_seconds": 1800,
-            "exclusive": True
-        }
+            "exclusive": True,
+        },
     )
 
     # Renew slot
     result = await server._mcp_server.call_tool(
         "renew_build_slot",
-        {
-            "project_key": "testproject",
-            "agent_name": "TestAgent",
-            "slot": "build",
-            "extend_seconds": 1800
-        }
+        {"project_key": "testproject", "agent_name": "TestAgent", "slot": "build", "extend_seconds": 1800},
     )
 
     data = json.loads(result[0].text)
@@ -152,6 +151,7 @@ async def test_release_build_slot(isolated_env, tmp_path: Path):
     archive = await ensure_archive(settings, "testproject")
 
     import os
+
     os.environ["WORKTREES_ENABLED"] = "1"
 
     # Acquire slot
@@ -162,18 +162,13 @@ async def test_release_build_slot(isolated_env, tmp_path: Path):
             "agent_name": "TestAgent",
             "slot": "deploy",
             "ttl_seconds": 3600,
-            "exclusive": True
-        }
+            "exclusive": True,
+        },
     )
 
     # Release slot
     result = await server._mcp_server.call_tool(
-        "release_build_slot",
-        {
-            "project_key": "testproject",
-            "agent_name": "TestAgent",
-            "slot": "deploy"
-        }
+        "release_build_slot", {"project_key": "testproject", "agent_name": "TestAgent", "slot": "deploy"}
     )
 
     data = json.loads(result[0].text)
@@ -197,6 +192,7 @@ async def test_build_slot_expiry(isolated_env, tmp_path: Path):
     archive = await ensure_archive(settings, "testproject")
 
     import os
+
     os.environ["WORKTREES_ENABLED"] = "1"
 
     # Manually create an expired slot
@@ -210,7 +206,7 @@ async def test_build_slot_expiry(isolated_env, tmp_path: Path):
         "branch": "main",
         "exclusive": True,
         "acquired_ts": (expired_time - timedelta(hours=1)).isoformat(),
-        "expires_ts": expired_time.isoformat()
+        "expires_ts": expired_time.isoformat(),
     }
 
     slot_file = slot_dir / "OldAgent__main.json"
@@ -224,8 +220,8 @@ async def test_build_slot_expiry(isolated_env, tmp_path: Path):
             "agent_name": "NewAgent",
             "slot": "expired-slot",
             "ttl_seconds": 3600,
-            "exclusive": True
-        }
+            "exclusive": True,
+        },
     )
 
     data = json.loads(result[0].text)
@@ -242,6 +238,7 @@ async def test_build_slot_disabled_gate(isolated_env, tmp_path: Path):
     await ensure_archive(settings, "testproject")
 
     import os
+
     os.environ["WORKTREES_ENABLED"] = "0"
 
     # Try to acquire slot with gate disabled
@@ -252,8 +249,8 @@ async def test_build_slot_disabled_gate(isolated_env, tmp_path: Path):
             "agent_name": "TestAgent",
             "slot": "build",
             "ttl_seconds": 3600,
-            "exclusive": True
-        }
+            "exclusive": True,
+        },
     )
 
     data = json.loads(result[0].text)
@@ -269,6 +266,7 @@ async def test_build_slot_non_exclusive(isolated_env, tmp_path: Path):
     await ensure_archive(settings, "testproject")
 
     import os
+
     os.environ["WORKTREES_ENABLED"] = "1"
 
     # First agent acquires non-exclusive slot
@@ -279,8 +277,8 @@ async def test_build_slot_non_exclusive(isolated_env, tmp_path: Path):
             "agent_name": "AgentA",
             "slot": "read-cache",
             "ttl_seconds": 3600,
-            "exclusive": False
-        }
+            "exclusive": False,
+        },
     )
 
     data1 = json.loads(result1[0].text)
@@ -294,8 +292,8 @@ async def test_build_slot_non_exclusive(isolated_env, tmp_path: Path):
             "agent_name": "AgentB",
             "slot": "read-cache",
             "ttl_seconds": 3600,
-            "exclusive": False
-        }
+            "exclusive": False,
+        },
     )
 
     data2 = json.loads(result2[0].text)
@@ -312,6 +310,7 @@ async def test_build_slot_ttl_validation(isolated_env, tmp_path: Path):
     await ensure_archive(settings, "testproject")
 
     import os
+
     os.environ["WORKTREES_ENABLED"] = "1"
 
     # Try to acquire slot with very short TTL
@@ -322,8 +321,8 @@ async def test_build_slot_ttl_validation(isolated_env, tmp_path: Path):
             "agent_name": "TestAgent",
             "slot": "build",
             "ttl_seconds": 30,  # Below minimum
-            "exclusive": True
-        }
+            "exclusive": True,
+        },
     )
 
     # Should still work, but TTL should be clamped to minimum

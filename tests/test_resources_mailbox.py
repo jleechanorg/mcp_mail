@@ -44,11 +44,15 @@ async def test_views_ack_required_and_ack_overdue_resources(isolated_env):
         # Backdate created_ts in DB to ensure it's older than 1 minute
         backdate = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(minutes=5)
         async with get_session() as session:
-            await session.execute(text("UPDATE messages SET created_ts = :ts WHERE id = :mid"), {"ts": backdate, "mid": mid})
+            await session.execute(
+                text("UPDATE messages SET created_ts = :ts WHERE id = :mid"), {"ts": backdate, "mid": mid}
+            )
             await session.commit()
 
         # ack-overdue with ttl_minutes=1 should include it
-        blocks2 = await client.read_resource("resource://views/ack-overdue/RedStone?project=Backend&ttl_minutes=1&limit=10")
+        blocks2 = await client.read_resource(
+            "resource://views/ack-overdue/RedStone?project=Backend&ttl_minutes=1&limit=10"
+        )
         assert blocks2 and "NeedsAck" in (blocks2[0].text or "")
 
         # After acknowledgement, it should disappear from ack-required
@@ -120,5 +124,3 @@ async def test_outbox_and_message_resource(isolated_env):
         # Message resource returns full payload with body
         blocks2 = await client.read_resource(f"resource://message/{mid}?project=Backend")
         assert blocks2 and "OutboxMsg" in (blocks2[0].text or "")
-
-

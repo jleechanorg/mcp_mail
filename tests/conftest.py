@@ -29,9 +29,10 @@ def isolated_env(tmp_path, monkeypatch):
         yield
     finally:
         # Close any Git Repo objects before cleanup to prevent subprocess warnings
-# Suppress ResourceWarnings during cleanup since Python 3.11+ warns about resources
+        # Suppress ResourceWarnings during cleanup since Python 3.11+ warns about resources
         # being cleaned up by GC, which is exactly what we want
         import warnings
+
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=ResourceWarning)
             try:

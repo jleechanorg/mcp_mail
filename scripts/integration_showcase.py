@@ -208,7 +208,9 @@ class Stepper:
         header.add_row("Intent", description)
 
         self.console.print(Panel(header, title="Executing", border_style="bright_magenta"))
-        self.console.print(Panel(_syntax_blob(arguments, lexer=highlight_language), title="Payload →", border_style="cyan"))
+        self.console.print(
+            Panel(_syntax_blob(arguments, lexer=highlight_language), title="Payload →", border_style="cyan")
+        )
 
         try:
             result = await self.client.call_tool(tool, arguments)
@@ -229,12 +231,7 @@ class Stepper:
         project: str,
         summary: str = "",
     ) -> None:
-        created = (
-            payload.get("created_ts")
-            or payload.get("created")
-            or payload.get("timestamp")
-            or ""
-        )
+        created = payload.get("created_ts") or payload.get("created") or payload.get("timestamp") or ""
         self.events.append(
             MessageEvent(
                 message_id=int(payload["id"]),
@@ -259,11 +256,13 @@ class Stepper:
             key = event.thread_id or f"msg-{event.message_id}"
             threads.setdefault(key, []).append(event)
         for thread_id, items in sorted(threads.items()):
-            branch = tree.add(f"[bold yellow]{thread_id}[/] ({len(items)} message{'s' if len(items)!=1 else ''})")
+            branch = tree.add(f"[bold yellow]{thread_id}[/] ({len(items)} message{'s' if len(items) != 1 else ''})")
             for item in items:
                 recipients = ", ".join(item.recipients) or "—"
                 timestamp = item.created or "unknown time"
-                meta = f"[dim]{timestamp}[/] • [cyan]{item.project}[/] • [green]{item.sender}[/] → [white]{recipients}[/]"
+                meta = (
+                    f"[dim]{timestamp}[/] • [cyan]{item.project}[/] • [green]{item.sender}[/] → [white]{recipients}[/]"
+                )
                 detail = f"{meta} • {item.subject}"
                 if item.summary:
                     detail += f"\n    [dim]{item.summary}[/]"
@@ -468,7 +467,9 @@ Every tool call is narrated before execution, inputs/outputs are syntax highligh
             },
         )
         reservation_payload = reservation_result.data
-        console.print(Panel(_syntax_blob(reservation_payload), title="Active file reservation ledger", border_style="yellow"))
+        console.print(
+            Panel(_syntax_blob(reservation_payload), title="Active file reservation ledger", border_style="yellow")
+        )
 
         conflict_attempt = await stepper.call_tool(
             actor=agents["green"].codename,
@@ -573,7 +574,9 @@ Every tool call is narrated before execution, inputs/outputs are syntax highligh
                     ),
                 },
             )
-            stepper.capture_message(payload=reply.data, project=projects["backend"].label, summary="GreenStone confirms task ownership.")
+            stepper.capture_message(
+                payload=reply.data, project=projects["backend"].label, summary="GreenStone confirms task ownership."
+            )
 
         # ------------------------------------------------------------------ #
         # Cross-project messaging (backend ↔ frontend)

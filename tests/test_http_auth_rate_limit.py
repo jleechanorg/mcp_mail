@@ -40,7 +40,9 @@ async def test_http_jwt_rbac_and_rate_limit(monkeypatch):
         headers = {"Authorization": "Bearer token123"}
 
         # Reader can call read-only tool
-        r = await client.post(settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}}))
+        r = await client.post(
+            settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}})
+        )
         assert r.status_code == 200
         body = r.json()
         # Response is MCP JSON-RPC format with structuredContent
@@ -58,8 +60,11 @@ async def test_http_jwt_rbac_and_rate_limit(monkeypatch):
         assert r.status_code == 403
 
         # Rate limit triggers on third tools call within window
-        r1 = await client.post(settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}}))
+        r1 = await client.post(
+            settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}})
+        )
         assert r1.status_code == 200
-        r2 = await client.post(settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}}))
+        r2 = await client.post(
+            settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}})
+        )
         assert r2.status_code == 429
-

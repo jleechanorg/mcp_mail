@@ -50,8 +50,7 @@ def retry_on_db_lock(max_retries: int = 5, base_delay: float = 0.1, max_delay: f
                     # Check if it's a lock-related error
                     error_msg = str(e).lower()
                     is_lock_error = any(
-                        phrase in error_msg
-                        for phrase in ["database is locked", "database is busy", "locked"]
+                        phrase in error_msg for phrase in ["database is locked", "database is busy", "locked"]
                     )
 
                     if not is_lock_error or attempt >= max_retries:
@@ -113,7 +112,7 @@ def _build_engine(settings: DatabaseSettings) -> AsyncEngine:
             try:
                 # Handle both bytes and str (SQLite can return either)
                 if isinstance(val, bytes):
-                    val = val.decode('utf-8')
+                    val = val.decode("utf-8")
                 return dt_module.datetime.fromisoformat(val)
             except (ValueError, AttributeError, TypeError, UnicodeDecodeError, OverflowError):
                 # Return None for any conversion failure:
@@ -239,6 +238,7 @@ def _check_and_fix_duplicate_agent_names(connection) -> None:
     (global uniqueness). Any duplicate names are automatically renamed by appending a number.
     """
     import logging
+
     logger = logging.getLogger(__name__)
 
     # Find all duplicate names (case-insensitive)
@@ -255,7 +255,9 @@ def _check_and_fix_duplicate_agent_names(connection) -> None:
     if not duplicates:
         return  # No duplicates, safe to proceed
 
-    logger.warning(f"Found {len(duplicates)} agent name(s) used in multiple projects. Auto-renaming for global uniqueness...")
+    logger.warning(
+        f"Found {len(duplicates)} agent name(s) used in multiple projects. Auto-renaming for global uniqueness..."
+    )
 
     for name_lower, _count in duplicates:
         # Get all agents with this name
@@ -336,15 +338,9 @@ def _setup_fts(connection) -> None:
         """
     )
     # Additional performance indexes for common access patterns
-    connection.exec_driver_sql(
-        "CREATE INDEX IF NOT EXISTS idx_messages_created_ts ON messages(created_ts)"
-    )
-    connection.exec_driver_sql(
-        "CREATE INDEX IF NOT EXISTS idx_messages_thread_id ON messages(thread_id)"
-    )
-    connection.exec_driver_sql(
-        "CREATE INDEX IF NOT EXISTS idx_messages_importance ON messages(importance)"
-    )
+    connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_messages_created_ts ON messages(created_ts)")
+    connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_messages_thread_id ON messages(thread_id)")
+    connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_messages_importance ON messages(importance)")
     connection.exec_driver_sql(
         "CREATE INDEX IF NOT EXISTS idx_messages_sender_created ON messages(sender_id, created_ts DESC)"
     )
@@ -357,4 +353,3 @@ def _setup_fts(connection) -> None:
     connection.exec_driver_sql(
         "CREATE INDEX IF NOT EXISTS idx_message_recipients_agent ON message_recipients(agent_id)"
     )
-

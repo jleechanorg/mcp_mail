@@ -17,6 +17,7 @@ if _DOTENV_PATH.exists():
 else:
     # Fall back to environment variables only when .env doesn't exist (e.g., in CI)
     from decouple import config as _env_config
+
     _decouple_config: Final[DecoupleConfig] = _env_config  # type: ignore[assignment]
 
 
@@ -198,8 +199,12 @@ def get_settings() -> Settings:
         rate_limit_enabled=_bool(_decouple_config("HTTP_RATE_LIMIT_ENABLED", default="false"), default=False),
         rate_limit_per_minute=_int(_decouple_config("HTTP_RATE_LIMIT_PER_MINUTE", default="60"), default=60),
         rate_limit_backend=_decouple_config("HTTP_RATE_LIMIT_BACKEND", default="memory").lower(),
-        rate_limit_tools_per_minute=_int(_decouple_config("HTTP_RATE_LIMIT_TOOLS_PER_MINUTE", default="60"), default=60),
-        rate_limit_resources_per_minute=_int(_decouple_config("HTTP_RATE_LIMIT_RESOURCES_PER_MINUTE", default="120"), default=120),
+        rate_limit_tools_per_minute=_int(
+            _decouple_config("HTTP_RATE_LIMIT_TOOLS_PER_MINUTE", default="60"), default=60
+        ),
+        rate_limit_resources_per_minute=_int(
+            _decouple_config("HTTP_RATE_LIMIT_RESOURCES_PER_MINUTE", default="120"), default=120
+        ),
         rate_limit_redis_url=_decouple_config("HTTP_RATE_LIMIT_REDIS_URL", default=""),
         rate_limit_tools_burst=_int(_decouple_config("HTTP_RATE_LIMIT_TOOLS_BURST", default="0"), default=0),
         rate_limit_resources_burst=_int(_decouple_config("HTTP_RATE_LIMIT_RESOURCES_BURST", default="0"), default=0),
@@ -222,7 +227,9 @@ def get_settings() -> Settings:
             "HTTP_RBAC_READONLY_TOOLS",
             default="health_check,fetch_inbox,whois,search_messages,summarize_thread,summarize_threads",
         ),
-        allow_localhost_unauthenticated=_bool(_decouple_config("HTTP_ALLOW_LOCALHOST_UNAUTHENTICATED", default="true"), default=True),
+        allow_localhost_unauthenticated=_bool(
+            _decouple_config("HTTP_ALLOW_LOCALHOST_UNAUTHENTICATED", default="true"), default=True
+        ),
     )
 
     database_settings = DatabaseSettings(
@@ -235,7 +242,9 @@ def get_settings() -> Settings:
         root=_decouple_config("STORAGE_ROOT", default="~/.mcp_agent_mail_git_mailbox_repo"),
         git_author_name=_decouple_config("GIT_AUTHOR_NAME", default="mcp-agent"),
         git_author_email=_decouple_config("GIT_AUTHOR_EMAIL", default="mcp-agent@example.com"),
-        inline_image_max_bytes=_int(_decouple_config("INLINE_IMAGE_MAX_BYTES", default=str(64 * 1024)), default=64 * 1024),
+        inline_image_max_bytes=_int(
+            _decouple_config("INLINE_IMAGE_MAX_BYTES", default=str(64 * 1024)), default=64 * 1024
+        ),
         convert_images=_bool(_decouple_config("CONVERT_IMAGES", default="true"), default=True),
         keep_original_images=_bool(_decouple_config("KEEP_ORIGINAL_IMAGES", default="false"), default=False),
     )
@@ -284,18 +293,32 @@ def get_settings() -> Settings:
         storage=storage_settings,
         cors=cors_settings,
         llm=llm_settings,
-        file_reservations_cleanup_enabled=_bool(_decouple_config("FILE_RESERVATIONS_CLEANUP_ENABLED", default="false"), default=False),
-        file_reservations_cleanup_interval_seconds=_int(_decouple_config("FILE_RESERVATIONS_CLEANUP_INTERVAL_SECONDS", default="60"), default=60),
-        file_reservation_inactivity_seconds=_int(_decouple_config("FILE_RESERVATION_INACTIVITY_SECONDS", default="1800"), default=1800),
-        file_reservation_activity_grace_seconds=_int(_decouple_config("FILE_RESERVATION_ACTIVITY_GRACE_SECONDS", default="900"), default=900),
-        file_reservations_enforcement_enabled=_bool(_decouple_config("FILE_RESERVATIONS_ENFORCEMENT_ENABLED", default="true"), default=True),
+        file_reservations_cleanup_enabled=_bool(
+            _decouple_config("FILE_RESERVATIONS_CLEANUP_ENABLED", default="false"), default=False
+        ),
+        file_reservations_cleanup_interval_seconds=_int(
+            _decouple_config("FILE_RESERVATIONS_CLEANUP_INTERVAL_SECONDS", default="60"), default=60
+        ),
+        file_reservation_inactivity_seconds=_int(
+            _decouple_config("FILE_RESERVATION_INACTIVITY_SECONDS", default="1800"), default=1800
+        ),
+        file_reservation_activity_grace_seconds=_int(
+            _decouple_config("FILE_RESERVATION_ACTIVITY_GRACE_SECONDS", default="900"), default=900
+        ),
+        file_reservations_enforcement_enabled=_bool(
+            _decouple_config("FILE_RESERVATIONS_ENFORCEMENT_ENABLED", default="true"), default=True
+        ),
         ack_ttl_enabled=_bool(_decouple_config("ACK_TTL_ENABLED", default="false"), default=False),
         ack_ttl_seconds=_int(_decouple_config("ACK_TTL_SECONDS", default="1800"), default=1800),
         ack_ttl_scan_interval_seconds=_int(_decouple_config("ACK_TTL_SCAN_INTERVAL_SECONDS", default="60"), default=60),
         ack_escalation_enabled=_bool(_decouple_config("ACK_ESCALATION_ENABLED", default="false"), default=False),
         ack_escalation_mode=_decouple_config("ACK_ESCALATION_MODE", default="log"),
-        ack_escalation_claim_ttl_seconds=_int(_decouple_config("ACK_ESCALATION_CLAIM_TTL_SECONDS", default="3600"), default=3600),
-        ack_escalation_claim_exclusive=_bool(_decouple_config("ACK_ESCALATION_CLAIM_EXCLUSIVE", default="false"), default=False),
+        ack_escalation_claim_ttl_seconds=_int(
+            _decouple_config("ACK_ESCALATION_CLAIM_TTL_SECONDS", default="3600"), default=3600
+        ),
+        ack_escalation_claim_exclusive=_bool(
+            _decouple_config("ACK_ESCALATION_CLAIM_EXCLUSIVE", default="false"), default=False
+        ),
         ack_escalation_claim_holder_name=_decouple_config("ACK_ESCALATION_CLAIM_HOLDER_NAME", default=""),
         tools_log_enabled=_bool(_decouple_config("TOOLS_LOG_ENABLED", default="true"), default=True),
         log_rich_enabled=_bool(_decouple_config("LOG_RICH_ENABLED", default="true"), default=True),
@@ -303,9 +326,13 @@ def get_settings() -> Settings:
         log_include_trace=_bool(_decouple_config("LOG_INCLUDE_TRACE", default="false"), default=False),
         log_json_enabled=_bool(_decouple_config("LOG_JSON_ENABLED", default="false"), default=False),
         tool_metrics_emit_enabled=_bool(_decouple_config("TOOL_METRICS_EMIT_ENABLED", default="false"), default=False),
-        tool_metrics_emit_interval_seconds=_int(_decouple_config("TOOL_METRICS_EMIT_INTERVAL_SECONDS", default="60"), default=60),
+        tool_metrics_emit_interval_seconds=_int(
+            _decouple_config("TOOL_METRICS_EMIT_INTERVAL_SECONDS", default="60"), default=60
+        ),
         retention_report_enabled=_bool(_decouple_config("RETENTION_REPORT_ENABLED", default="false"), default=False),
-        retention_report_interval_seconds=_int(_decouple_config("RETENTION_REPORT_INTERVAL_SECONDS", default="3600"), default=3600),
+        retention_report_interval_seconds=_int(
+            _decouple_config("RETENTION_REPORT_INTERVAL_SECONDS", default="3600"), default=3600
+        ),
         retention_max_age_days=_int(_decouple_config("RETENTION_MAX_AGE_DAYS", default="180"), default=180),
         quota_enabled=_bool(_decouple_config("QUOTA_ENABLED", default="false"), default=False),
         quota_attachments_limit_bytes=_int(_decouple_config("QUOTA_ATTACHMENTS_LIMIT_BYTES", default="0"), default=0),
@@ -315,7 +342,9 @@ def get_settings() -> Settings:
             default="demo,test*,testproj*,testproject,backendproj*,frontendproj*",
         ),
         agent_name_enforcement_mode=_agent_name_mode(_decouple_config("AGENT_NAME_ENFORCEMENT_MODE", default="coerce")),
-        messaging_auto_register_recipients=_bool(_decouple_config("MESSAGING_AUTO_REGISTER_RECIPIENTS", default="true"), default=True),
+        messaging_auto_register_recipients=_bool(
+            _decouple_config("MESSAGING_AUTO_REGISTER_RECIPIENTS", default="true"), default=True
+        ),
         tools_mode=_tools_mode(_decouple_config("MCP_TOOLS_MODE", default="")),
     )
 

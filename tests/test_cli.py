@@ -49,6 +49,8 @@ def test_cli_serve_http_uses_settings(isolated_env, monkeypatch):
     assert result.exit_code == 0
     assert call_args["host"] == "127.0.0.1"
     assert call_args["port"] == 8765
+
+
 def test_cli_migrate(monkeypatch):
     runner = CliRunner()
     invoked: dict[str, bool] = {"called": False}

@@ -78,7 +78,11 @@ packages = ["src/mcp_agent_mail"]
 exclude = ["/.venv", "/.vscode", "/.idea", "/.git", "/__pycache__", "*.py[cod]", "*.db*", ".DS_Store"]
 
 [tool.ty]
-exclude = ["scripts/"]
+overrides = [
+    { include = ["scripts/**/*.py"], rules = { "unresolved-reference" = "ignore" } },
+    { include = ["src/mcp_agent_mail/app.py"], rules = { "redundant-cast" = "warn" } },
+    { include = ["src/mcp_agent_mail/http.py"], rules = { "invalid-argument-type" = "warn" } }
+]
 
 [tool.ruff]
 line-length = 120

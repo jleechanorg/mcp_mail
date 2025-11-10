@@ -68,5 +68,3 @@ async def test_complete_system_user_handles_missing_router(monkeypatch):
 
     out = await complete_system_user("sys", "user")
     assert out.model
-
-

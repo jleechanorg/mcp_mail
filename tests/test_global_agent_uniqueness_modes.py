@@ -59,17 +59,23 @@ async def test_agent_names_coerce_mode_auto_generates_unique_names(isolated_env)
 
         # Verify that the old agent was retired
         async with get_session() as session:
-            proj1 = (await session.execute(
-                select(Project).where(Project.human_key == "/tmp/project1")
-            )).scalars().first()
+            proj1 = (
+                (await session.execute(select(Project).where(Project.human_key == "/tmp/project1"))).scalars().first()
+            )
             assert proj1 is not None
 
-            retired_agents = (await session.execute(
-                select(Agent).where(
-                    Agent.project_id == proj1.id,
-                    func.lower(Agent.name) == "alice",
+            retired_agents = (
+                (
+                    await session.execute(
+                        select(Agent).where(
+                            Agent.project_id == proj1.id,
+                            func.lower(Agent.name) == "alice",
+                        )
+                    )
                 )
-            )).scalars().all()
+                .scalars()
+                .all()
+            )
             assert len(retired_agents) == 1
             assert retired_agents[0].is_active is False
             assert retired_agents[0].deleted_ts is not None
@@ -228,27 +234,26 @@ async def test_reusing_name_retires_previous_agent(isolated_env):
         assert result_b.data["project_id"] != result_a.data["project_id"]
 
         async with get_session() as session:
-            proj_a = (
-                await session.execute(select(Project).where(Project.human_key == proj_a_key))
-            ).scalars().first()
+            proj_a = (await session.execute(select(Project).where(Project.human_key == proj_a_key))).scalars().first()
             assert proj_a is not None
-            agents_a = (
-                await session.execute(select(Agent).where(Agent.project_id == proj_a.id))
-            ).scalars().all()
+            agents_a = (await session.execute(select(Agent).where(Agent.project_id == proj_a.id))).scalars().all()
             assert len(agents_a) == 1
             retired = agents_a[0]
             assert retired.is_active is False
             assert retired.deleted_ts is not None
 
             active_convo = (
-                await session.execute(
-                    select(Agent)
-                    .where(
-                        func.lower(Agent.name) == "convo",
-                        cast(Any, Agent.is_active).is_(True),
+                (
+                    await session.execute(
+                        select(Agent).where(
+                            func.lower(Agent.name) == "convo",
+                            cast(Any, Agent.is_active).is_(True),
+                        )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             assert len(active_convo) == 1
             assert active_convo[0].project_id != proj_a.id
 

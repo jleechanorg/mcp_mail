@@ -95,9 +95,7 @@ async def _get_agent_record(project: Project, agent_name: str) -> Agent:
         raise ValueError("Project must have an id before querying agents")
     await ensure_schema()
     async with get_session() as session:
-        result = await session.execute(
-            select(Agent).where(Agent.project_id == project.id, Agent.name == agent_name)
-        )
+        result = await session.execute(select(Agent).where(Agent.project_id == project.id, Agent.name == agent_name))
         agent = result.scalars().first()
         if not agent:
             raise ValueError(f"Agent '{agent_name}' not registered for project '{project.human_key}'")
@@ -124,6 +122,7 @@ def serve_http(
 
     # Display awesome startup banner with database stats
     from . import rich_logger
+
     rich_logger.display_startup_banner(settings, resolved_host, resolved_port, resolved_path)
 
     server = build_mcp_server()
@@ -131,6 +130,7 @@ def serve_http(
     # Disable WebSockets: HTTP-only MCP transport. Stay compatible with tests that
     # monkeypatch uvicorn.run without the 'ws' parameter.
     import inspect as _inspect
+
     _sig = _inspect.signature(uvicorn.run)
     _kwargs: dict[str, Any] = {"host": resolved_host, "port": resolved_port, "log_level": "info"}
     if "ws" in _sig.parameters:
@@ -172,7 +172,9 @@ def share_export(
             help="Launch an interactive wizard (future enhancement; currently prints guidance).",
         ),
     ] = False,
-    projects: Annotated[list[str] | None, typer.Option("--project", "-p", help="Limit export to specific project slugs or human keys.")] = None,
+    projects: Annotated[
+        list[str] | None, typer.Option("--project", "-p", help="Limit export to specific project slugs or human keys.")
+    ] = None,
     inline_threshold: Annotated[
         int,
         typer.Option(
@@ -234,8 +236,12 @@ def share_export(
             show_default=True,
         ),
     ] = True,
-    signing_key: Annotated[Optional[Path], typer.Option("--signing-key", help="Path to Ed25519 signing key (32-byte seed).")]=None,
-    signing_public_out: Annotated[Optional[Path], typer.Option("--signing-public-out", help="Write public key to this file after signing.")]=None,
+    signing_key: Annotated[
+        Optional[Path], typer.Option("--signing-key", help="Path to Ed25519 signing key (32-byte seed).")
+    ] = None,
+    signing_public_out: Annotated[
+        Optional[Path], typer.Option("--signing-public-out", help="Write public key to this file after signing.")
+    ] = None,
     age_recipients: Annotated[
         Optional[list[str]],
         typer.Option(
@@ -251,10 +257,7 @@ def share_export(
         projects = []
     scrub_preset = (scrub_preset or "standard").strip().lower()
     if scrub_preset not in SCRUB_PRESETS:
-        console.print(
-            "[red]Invalid scrub preset:[/] "
-            f"{scrub_preset}. Choose one of: {', '.join(SCRUB_PRESETS)}."
-        )
+        console.print(f"[red]Invalid scrub preset:[/] {scrub_preset}. Choose one of: {', '.join(SCRUB_PRESETS)}.")
         raise typer.Exit(code=1)
     raw_output = _resolve_path(output)
     temp_dir: Optional[tempfile.TemporaryDirectory[str]] = None
@@ -303,9 +306,7 @@ def share_export(
     console.print(f"[cyan]Creating snapshot:[/] {snapshot_path}")
 
     if detach_threshold <= inline_threshold:
-        console.print(
-            "[yellow]Adjusting detach threshold to exceed inline threshold to avoid conflicts.[/]"
-        )
+        console.print("[yellow]Adjusting detach threshold to exceed inline threshold to avoid conflicts.[/]")
         detach_threshold = inline_threshold + max(1024, inline_threshold // 2 or 1)
 
     hosting_hints = detect_hosting_hints(output_path)
@@ -434,9 +435,8 @@ def share_export(
     chunk_manifest = bundle_artifacts.chunk_manifest
     if chunk_manifest:
         console.print(
-            f"[cyan]Chunked database into {chunk_manifest['chunk_count']} files of ~{chunk_manifest['chunk_size']//1024} KiB.[/]"
+            f"[cyan]Chunked database into {chunk_manifest['chunk_count']} files of ~{chunk_manifest['chunk_size'] // 1024} KiB.[/]"
         )
-
 
     if signing_key is not None:
         try:
@@ -447,9 +447,7 @@ def share_export(
                 output_path,
                 public_out=public_out_path,
             )
-            console.print(
-                f"[green]✓ Signed manifest (Ed25519, public key {signature_info['public_key']})[/]"
-            )
+            console.print(f"[green]✓ Signed manifest (Ed25519, public key {signature_info['public_key']})[/]")
         except ShareExportError as exc:
             console.print(f"[red]Manifest signing failed:[/] {exc}")
             if temp_dir is not None:
@@ -595,9 +593,7 @@ def _run_share_export_wizard(
     )
     preset_value = (preset_input or default_scrub_preset).strip().lower()
     if preset_value not in SCRUB_PRESETS:
-        console.print(
-            f"[yellow]Unknown preset '{preset_value}'. Using {default_scrub_preset} instead.[/]"
-        )
+        console.print(f"[yellow]Unknown preset '{preset_value}'. Using {default_scrub_preset} instead.[/]")
         preset_value = default_scrub_preset
 
     zip_bundle = typer.confirm("Package the output directory as a .zip archive?", default=True)
@@ -675,7 +671,9 @@ def _start_preview_server(bundle_path: Path, host: str, port: int) -> ThreadingH
 
 @share_app.command("update")
 def share_update(
-    bundle: Annotated[str, typer.Argument(help="Path to the existing bundle directory (e.g., your GitHub Pages repo).")],
+    bundle: Annotated[
+        str, typer.Argument(help="Path to the existing bundle directory (e.g., your GitHub Pages repo).")
+    ],
     projects: Annotated[
         list[str] | None,
         typer.Option(
@@ -712,8 +710,12 @@ def share_update(
         bool,
         typer.Option("--zip/--no-zip", help="Package the updated bundle into a ZIP archive.", show_default=True),
     ] = False,
-    signing_key: Annotated[Optional[Path], typer.Option("--signing-key", help="Path to Ed25519 signing key (32-byte seed).")]=None,
-    signing_public_out: Annotated[Optional[Path], typer.Option("--signing-public-out", help="Write public key to this file after signing.")]=None,
+    signing_key: Annotated[
+        Optional[Path], typer.Option("--signing-key", help="Path to Ed25519 signing key (32-byte seed).")
+    ] = None,
+    signing_public_out: Annotated[
+        Optional[Path], typer.Option("--signing-public-out", help="Write public key to this file after signing.")
+    ] = None,
     age_recipients: Annotated[
         Optional[list[str]],
         typer.Option(
@@ -745,14 +747,19 @@ def share_update(
     scrub_preset = (scrub_preset_override or stored_config.scrub_preset or "standard").strip().lower()
     if scrub_preset not in SCRUB_PRESETS:
         console.print(
-            "[red]Invalid scrub preset override:[/] "
-            f"{scrub_preset}. Choose one of: {', '.join(SCRUB_PRESETS)}."
+            f"[red]Invalid scrub preset override:[/] {scrub_preset}. Choose one of: {', '.join(SCRUB_PRESETS)}."
         )
         raise typer.Exit(code=1)
 
-    inline_threshold = inline_threshold_override if inline_threshold_override is not None else stored_config.inline_threshold
-    detach_threshold = detach_threshold_override if detach_threshold_override is not None else stored_config.detach_threshold
-    chunk_threshold = chunk_threshold_override if chunk_threshold_override is not None else stored_config.chunk_threshold
+    inline_threshold = (
+        inline_threshold_override if inline_threshold_override is not None else stored_config.inline_threshold
+    )
+    detach_threshold = (
+        detach_threshold_override if detach_threshold_override is not None else stored_config.detach_threshold
+    )
+    chunk_threshold = (
+        chunk_threshold_override if chunk_threshold_override is not None else stored_config.chunk_threshold
+    )
     chunk_size = chunk_size_override if chunk_size_override is not None else stored_config.chunk_size
 
     if inline_threshold < 0:
@@ -769,9 +776,7 @@ def share_update(
         raise typer.Exit(code=1)
 
     if detach_threshold <= inline_threshold:
-        console.print(
-            "[yellow]Adjusting detach threshold to exceed inline threshold to avoid conflicts.[/]"
-        )
+        console.print("[yellow]Adjusting detach threshold to exceed inline threshold to avoid conflicts.[/]")
         detach_threshold = inline_threshold + max(1024, inline_threshold // 2 or 1)
 
     existing_signature = (bundle_path / "manifest.sig.json").exists()
@@ -863,7 +868,7 @@ def share_update(
         chunk_manifest = bundle_artifacts.chunk_manifest
         if chunk_manifest:
             console.print(
-                f"[cyan]Chunked database into {chunk_manifest['chunk_count']} files of ~{chunk_manifest['chunk_size']//1024} KiB.[/]"
+                f"[cyan]Chunked database into {chunk_manifest['chunk_count']} files of ~{chunk_manifest['chunk_size'] // 1024} KiB.[/]"
             )
 
         console.print(f"[cyan]Synchronizing updated bundle into:[/] {bundle_path}")
@@ -881,9 +886,7 @@ def share_update(
                 public_out=public_out_path,
                 overwrite=True,
             )
-            console.print(
-                f"[green]✓ Signed manifest (Ed25519, public key {signature_info['public_key']})[/]"
-            )
+            console.print(f"[green]✓ Signed manifest (Ed25519, public key {signature_info['public_key']})[/]")
         except ShareExportError as exc:
             console.print(f"[red]Manifest signing failed:[/] {exc}")
             raise typer.Exit(code=1) from exc
@@ -942,7 +945,9 @@ def share_update(
         console.print("[yellow]Search fallback active (FTS5 unavailable in current sqlite build).[/]")
     if chunk_manifest:
         console.print("[green]✓ Chunk manifest refreshed (mailbox.sqlite3.config.json updated).[/]")
-        console.print("[dim]Existing chunk files beyond the new chunk count remain on disk; remove them manually if needed.[/]")
+        console.print(
+            "[dim]Existing chunk files beyond the new chunk count remain on disk; remove them manually if needed.[/]"
+        )
 
     if zip_bundle and archive_path:
         console.print(f"[green]✓ Bundle archive available at {archive_path}[/]")
@@ -1396,6 +1401,7 @@ def list_projects(
                 entry["agent_count"] = agent_count
             projects_json.append(entry)
         import sys
+
         json.dump(projects_json, sys.stdout, indent=2)
         sys.stdout.write("\n")
     else:
@@ -1419,7 +1425,13 @@ def list_projects(
 def guard_install(
     project: str,
     repo: Annotated[Path, typer.Argument(..., help="Path to git repo")],
-    prepush: Annotated[bool, typer.Option("--prepush/--no-prepush", help="Also install a pre-push guard.",)] = False,
+    prepush: Annotated[
+        bool,
+        typer.Option(
+            "--prepush/--no-prepush",
+            help="Also install a pre-push guard.",
+        ),
+    ] = False,
 ) -> None:
     """Install the advisory pre-commit guard into the given repository."""
 
@@ -1432,6 +1444,7 @@ def guard_install(
         if prepush:
             try:
                 from .guard import install_prepush_guard as _install_prepush
+
                 await _install_prepush(settings, project_record.slug, repo_path)
             except Exception as exc:
                 console.print(f"[yellow]Warning: failed to install pre-push guard: {exc}[/]")
@@ -1472,8 +1485,10 @@ def file_reservations_list(
             raise ValueError("Project must have an id")
         await ensure_schema()
         async with get_session() as session:
-            stmt = select(FileReservation, Agent.name).join(Agent, FileReservation.agent_id == Agent.id).where(
-                FileReservation.project_id == project_record.id
+            stmt = (
+                select(FileReservation, Agent.name)
+                .join(Agent, FileReservation.agent_id == Agent.id)
+                .where(FileReservation.project_id == project_record.id)
             )
             if active_only:
                 stmt = stmt.where(cast(Any, FileReservation.released_ts).is_(None))
@@ -1504,9 +1519,17 @@ def file_reservations_list(
         )
     console.print(table)
 
+
 @app.command("amctl-env")
 def amctl_env(
-    project_path: Annotated[Path, typer.Option("--path", "-p", help="Path to repo/worktree",)] = Path(),
+    project_path: Annotated[
+        Path,
+        typer.Option(
+            "--path",
+            "-p",
+            help="Path to repo/worktree",
+        ),
+    ] = Path(),
     agent: Annotated[Optional[str], typer.Option("--agent", "-a", help="Agent name (defaults to $AGENT_NAME)")] = None,
 ) -> None:
     """
@@ -1516,6 +1539,7 @@ def amctl_env(
     agent_name = agent or os.environ.get("AGENT_NAME") or "Unknown"
     # Reuse server helper for identity
     from mcp_agent_mail.app import _resolve_project_identity as _resolve_ident  # type: ignore
+
     ident = _resolve_ident(str(p))
     slug = ident["slug"]
     project_uid = ident["project_uid"]
@@ -1524,6 +1548,7 @@ def amctl_env(
     if not branch:
         try:
             from git import Repo as _Repo
+
             repo = _Repo(str(p), search_parent_directories=True)
             try:
                 branch = repo.active_branch.name
@@ -1534,7 +1559,9 @@ def amctl_env(
     # Compute cache key and artifact dir
     settings = get_settings()
     cache_key = f"am-cache-{project_uid}-{agent_name}-{branch}"
-    artifact_dir = Path(settings.storage.root).expanduser().resolve() / "projects" / slug / "artifacts" / agent_name / branch
+    artifact_dir = (
+        Path(settings.storage.root).expanduser().resolve() / "projects" / slug / "artifacts" / agent_name / branch
+    )
     # Print as KEY=VALUE lines
     console.print(f"SLUG={slug}")
     console.print(f"PROJECT_UID={project_uid}")
@@ -1548,7 +1575,14 @@ def amctl_env(
 def am_run(
     slot: Annotated[str, typer.Argument(help="Build slot name (e.g., frontend-build)")],
     cmd: Annotated[list[str], typer.Argument(..., help="Command to run")],
-    project_path: Annotated[Path, typer.Option("--path", "-p", help="Path to repo/worktree",)] = Path(),
+    project_path: Annotated[
+        Path,
+        typer.Option(
+            "--path",
+            "-p",
+            help="Path to repo/worktree",
+        ),
+    ] = Path(),
     agent: Annotated[Optional[str], typer.Option("--agent", "-a", help="Agent name (defaults to $AGENT_NAME)")] = None,
 ) -> None:
     """
@@ -1560,6 +1594,7 @@ def am_run(
     p = project_path.expanduser().resolve()
     agent_name = agent or os.environ.get("AGENT_NAME") or "Unknown"
     from mcp_agent_mail.app import _resolve_project_identity as _resolve_ident  # type: ignore
+
     ident = _resolve_ident(str(p))
     slug = ident["slug"]
     project_uid = ident["project_uid"]
@@ -1567,6 +1602,7 @@ def am_run(
     if not branch:
         try:
             from git import Repo as _Repo
+
             repo = _Repo(str(p), search_parent_directories=True)
             try:
                 branch = repo.active_branch.name
@@ -1580,7 +1616,7 @@ def am_run(
 
     def _safe_component(value: str) -> str:
         s = value.strip()
-        for ch in ("/", "\\\\", ":", "*", "?", "\"", "<", ">", "|", " "):
+        for ch in ("/", "\\\\", ":", "*", "?", '"', "<", ">", "|", " "):
             s = s.replace(ch, "_")
         return s or "unknown"
 
@@ -1611,15 +1647,18 @@ def am_run(
     def _lease_path(slot_dir: Path) -> Path:
         holder = _safe_component(f"{agent_name}__{branch or 'unknown'}")
         return slot_dir / f"{holder}.json"
+
     env = os.environ.copy()
-    env.update({
-        "AM_SLOT": slot,
-        "SLUG": slug,
-        "PROJECT_UID": project_uid or "",
-        "BRANCH": branch,
-        "AGENT": agent_name,
-        "CACHE_KEY": f"am-cache-{project_uid}-{agent_name}-{branch}",
-    })
+    env.update(
+        {
+            "AM_SLOT": slot,
+            "SLUG": slug,
+            "PROJECT_UID": project_uid or "",
+            "BRANCH": branch,
+            "AGENT": agent_name,
+            "CACHE_KEY": f"am-cache-{project_uid}-{agent_name}-{branch}",
+        }
+    )
     lease_path: Optional[Path] = None
     renew_stop = threading.Event()
     renew_thread: Optional[threading.Thread] = None
@@ -1629,15 +1668,16 @@ def am_run(
             slot_dir = asyncio.run(_ensure_slot_paths())
             active = _read_active(slot_dir)
             conflicts = [
-                e for e in active
+                e
+                for e in active
                 if e.get("exclusive", True) and not (e.get("agent") == agent_name and e.get("branch") == branch)
             ]
             if conflicts and guard_mode == "warn":
                 console.print("[yellow]Build slot conflicts (advisory, proceeding):[/]")
                 for c in conflicts:
                     console.print(
-                        f"  - slot={c.get('slot','')} agent={c.get('agent','')} "
-                        f"branch={c.get('branch','')} expires={c.get('expires_ts','')}"
+                        f"  - slot={c.get('slot', '')} agent={c.get('agent', '')} "
+                        f"branch={c.get('branch', '')} expires={c.get('expires_ts', '')}"
                     )
             lease_path = _lease_path(slot_dir)
             payload = {
@@ -1650,6 +1690,7 @@ def am_run(
             }
             with suppress(Exception):
                 lease_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
             def _renewer() -> None:
                 interval = max(60, ttl_seconds // 2)
                 while not renew_stop.wait(interval):
@@ -1665,6 +1706,7 @@ def am_run(
                             lease_path.write_text(json.dumps(current, indent=2), encoding="utf-8")
                     except Exception:
                         continue
+
             renew_thread = threading.Thread(target=_renewer, name="am-run-renew", daemon=True)
             renew_thread.start()
         console.print(f"[cyan]$ {' '.join(cmd)}[/]  [dim](slot={slot})[/]")
@@ -1690,6 +1732,7 @@ def am_run(
                     renew_thread.join(timeout=1.0)
     if rc != 0:
         raise typer.Exit(code=rc)
+
 
 @mail_app.command("status")
 def mail_status(
@@ -1718,9 +1761,10 @@ def mail_status(
                 path = u.split(":", 1)[1]
             else:
                 from urllib.parse import urlparse as _urlparse
+
                 pr = _urlparse(u)
                 host = pr.hostname or ""
-                path = (pr.path or "")
+                path = pr.path or ""
         except Exception:
             return None
         if not host:
@@ -1737,6 +1781,7 @@ def mail_status(
     normalized_remote: Optional[str] = None
     try:
         from git import Repo as _Repo  # local import to avoid CLI startup cost
+
         repo = _Repo(str(p), search_parent_directories=True)
         try:
             url = repo.git.remote("get-url", remote_name).strip() or None
@@ -1752,6 +1797,7 @@ def mail_status(
 
     # Compute a candidate slug using the same logic as the server helper (summarized)
     from mcp_agent_mail.app import _compute_project_slug as _compute_slug  # type: ignore
+
     slug_value = _compute_slug(str(p))
 
     table = Table(title="Mail routing status", show_lines=False)
@@ -1788,7 +1834,9 @@ def guard_status(
 
     hooks_path = _git(p, "config", "--get", "core.hooksPath")
     if hooks_path:
-        if hooks_path.startswith("/") or ((((len(hooks_path) > 1) and (hooks_path[1:3] == ":\\")) or (hooks_path[1:3] == ":/"))):
+        if hooks_path.startswith("/") or (
+            ((len(hooks_path) > 1) and (hooks_path[1:3] == ":\\")) or (hooks_path[1:3] == ":/")
+        ):
             hooks_dir = Path(hooks_path)
         else:
             root = _git(p, "rev-parse", "--show-toplevel") or str(p)
@@ -1814,6 +1862,7 @@ def guard_status(
     table.add_row("pre-push", "present" if pre_push.exists() else "missing")
     console.print(table)
 
+
 @projects_app.command("adopt")
 def projects_adopt(
     source: Annotated[str, typer.Argument(..., help="Old project slug or human key")],
@@ -1824,6 +1873,7 @@ def projects_adopt(
     Plan consolidation of legacy per-worktree projects into a canonical project.
     NOTE: Apply is not yet implemented; this command currently prints a dry-run only.
     """
+
     async def _load(slug_or_key: str) -> Project:
         return await _get_project_record(slug_or_key)
 
@@ -1863,6 +1913,7 @@ def projects_adopt(
     # Describe filesystem moves (archive layout)
     settings = get_settings()
     from .storage import ensure_archive as _ensure_archive
+
     src_archive = asyncio.run(_ensure_archive(settings, src.slug))
     dst_archive = asyncio.run(_ensure_archive(settings, dst.slug))
     plan.append(f"Move Git artifacts: {src_archive.root} -> {dst_archive.root}")
@@ -1875,6 +1926,7 @@ def projects_adopt(
 
     if dry_run:
         return
+
     # Apply phase
     async def _apply() -> None:
         if src.id is None or dst.id is None:
@@ -1882,8 +1934,12 @@ def projects_adopt(
         # Detect agent name conflicts
         await ensure_schema()
         async with get_session() as session:
-            src_agents = [row[0] for row in (await session.execute(select(Agent.name).where(Agent.project_id == src.id))).all()]
-            dst_agents = [row[0] for row in (await session.execute(select(Agent.name).where(Agent.project_id == dst.id))).all()]
+            src_agents = [
+                row[0] for row in (await session.execute(select(Agent.name).where(Agent.project_id == src.id))).all()
+            ]
+            dst_agents = [
+                row[0] for row in (await session.execute(select(Agent.name).where(Agent.project_id == dst.id))).all()
+            ]
             dup = sorted(set(src_agents).intersection(set(dst_agents)))
             if dup:
                 raise typer.BadParameter(f"Agent name conflicts in target project: {', '.join(dup)}")
@@ -1891,6 +1947,7 @@ def projects_adopt(
         settings = get_settings()
         # local import to minimize top-level churn and keep ordering stable
         from .storage import AsyncFileLock as _AsyncFileLock, ensure_archive as _ensure_archive  # type: ignore
+
         src_archive = asyncio.run(_ensure_archive(settings, src.slug))
         dst_archive = asyncio.run(_ensure_archive(settings, dst.slug))
         moved_relpaths: list[str] = []
@@ -1907,14 +1964,18 @@ def projects_adopt(
             await asyncio.to_thread(path.replace, dest_path)
             moved_relpaths.append(dest_path.relative_to(dst_archive.repo_root).as_posix())
         from .storage import _commit as _archive_commit  # type: ignore
+
         async with _AsyncFileLock(dst_archive.lock_path):
             await _archive_commit(dst_archive.repo, settings, f"adopt: move {src.slug} into {dst.slug}", moved_relpaths)
         # Re-key database rows (agents, messages, file_reservations)
         async with get_session() as session:
             from sqlalchemy import update as _update  # local import to avoid top-of-file churn
+
             await session.execute(_update(Agent).where(Agent.project_id == src.id).values(project_id=dst.id))
             await session.execute(_update(Message).where(Message.project_id == src.id).values(project_id=dst.id))
-            await session.execute(_update(FileReservation).where(FileReservation.project_id == src.id).values(project_id=dst.id))
+            await session.execute(
+                _update(FileReservation).where(FileReservation.project_id == src.id).values(project_id=dst.id)
+            )
             await session.commit()
         # Write aliases.json under target
         aliases_path = dst_archive.root / "aliases.json"
@@ -1937,6 +1998,7 @@ def projects_adopt(
     except Exception as exc:
         raise typer.BadParameter(str(exc)) from exc
 
+
 @file_reservations_app.command("active")
 def file_reservations_active(
     project: str = typer.Argument(..., help="Project slug or human key"),
@@ -1953,7 +2015,9 @@ def file_reservations_active(
             stmt = (
                 select(FileReservation, Agent.name)
                 .join(Agent, FileReservation.agent_id == Agent.id)
-                .where(FileReservation.project_id == project_record.id, cast(Any, FileReservation.released_ts).is_(None))
+                .where(
+                    FileReservation.project_id == project_record.id, cast(Any, FileReservation.released_ts).is_(None)
+                )
                 .order_by(asc(FileReservation.expires_ts))
                 .limit(limit)
             )
@@ -2058,6 +2122,7 @@ def file_reservations_soon(
         )
     console.print(table)
 
+
 @acks_app.command("pending")
 def acks_pending(
     project: str = typer.Argument(..., help="Project slug or human key"),
@@ -2103,6 +2168,7 @@ def acks_pending(
     table.add_column("Ack Age")
 
     now = datetime.now(timezone.utc)
+
     def _age(dt: datetime) -> str:
         # Coerce naive datetimes from SQLite to UTC for arithmetic
         if dt.tzinfo is None:
@@ -2165,8 +2231,10 @@ def acks_remind(
 
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(minutes=min_age_minutes)
+
     def _aware(dt: datetime) -> datetime:
         return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
     stale = [(m, rts, ats, k) for (m, rts, ats, k) in rows if _aware(m.created_ts) <= cutoff]
 
     table = Table(title=f"ACK Reminders (>{min_age_minutes}m) for {agent_record.name}")
@@ -2247,6 +2315,7 @@ def acks_overdue(
     table.add_column("Kind")
 
     now = datetime.now(timezone.utc)
+
     def _age(dt: datetime) -> str:
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
@@ -2270,9 +2339,6 @@ def acks_overdue(
         console.print(table)
 
 
-
-
-
 @app.command("list-acks")
 def list_acks(
     project_key: str = typer.Option(..., "--project", help="Project human key or slug."),
@@ -2285,7 +2351,9 @@ def list_acks(
         await ensure_schema()
         async with get_session() as session:
             # Resolve project and agent
-            proj_result = await session.execute(select(Project).where((Project.slug == slugify(project_key)) | (Project.human_key == project_key)))
+            proj_result = await session.execute(
+                select(Project).where((Project.slug == slugify(project_key)) | (Project.human_key == project_key))
+            )
             project = proj_result.scalars().first()
             if not project:
                 raise typer.BadParameter(f"Project not found for key: {project_key}")
@@ -2362,9 +2430,7 @@ def config_set_port(
             action = "Created"
 
         # Write to temporary file in same directory (for atomic move)
-        temp_fd, temp_path = tempfile.mkstemp(
-            dir=env_path.parent, prefix=".env.tmp.", text=True
-        )
+        temp_fd, temp_path = tempfile.mkstemp(dir=env_path.parent, prefix=".env.tmp.", text=True)
         try:
             # Write content with secure permissions from the start
             # (best-effort on Windows where Unix permissions don't apply)

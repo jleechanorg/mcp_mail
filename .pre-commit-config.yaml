@@ -1,0 +1,21 @@
+# Pre-commit hooks to ensure code quality before committing
+# Install: pip install pre-commit && pre-commit install
+# Run manually: pre-commit run --all-files
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: ty-check
+        name: ty type check
+        entry: bash -c 'uvx ty check'
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-commit]

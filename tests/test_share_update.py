@@ -1,4 +1,5 @@
 """Tests for share update command and incremental export functionality."""
+
 from __future__ import annotations
 
 import json
@@ -50,12 +51,8 @@ def _create_snapshot_with_data(snapshot_path: Path, num_messages: int = 5) -> No
         )
 
         # Insert test data
-        conn.execute(
-            "INSERT INTO projects (id, slug, human_key) VALUES (1, 'test-proj', 'Test Project')"
-        )
-        conn.execute(
-            "INSERT INTO agents (id, project_id, name) VALUES (1, 1, 'TestAgent')"
-        )
+        conn.execute("INSERT INTO projects (id, slug, human_key) VALUES (1, 'test-proj', 'Test Project')")
+        conn.execute("INSERT INTO agents (id, project_id, name) VALUES (1, 1, 'TestAgent')")
 
         for i in range(1, num_messages + 1):
             conn.execute(
@@ -66,7 +63,7 @@ def _create_snapshot_with_data(snapshot_path: Path, num_messages: int = 5) -> No
                 )
                 VALUES (?, 1, 1, ?, ?, ?, 'normal', 0, ?, '[]')
                 """,
-                (i, f"thread-{i}", f"Subject {i}", f"Body {i}", f"2025-01-{i:02d}T00:00:00Z")
+                (i, f"thread-{i}", f"Subject {i}", f"Body {i}", f"2025-01-{i:02d}T00:00:00Z"),
             )
 
         conn.commit()
@@ -88,16 +85,12 @@ def test_finalize_snapshot_creates_all_optimizations(tmp_path: Path):
     conn = sqlite3.connect(str(snapshot))
     try:
         # Verify materialized views were created
-        cursor = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%_mv'"
-        )
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%_mv'")
         mv_tables = {row[0] for row in cursor.fetchall()}
         assert "message_overview_mv" in mv_tables
 
         # Verify performance indexes were created
-        cursor = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'"
-        )
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'")
         indexes = {row[0] for row in cursor.fetchall()}
         assert "idx_messages_subject_lower" in indexes
 
@@ -107,9 +100,7 @@ def test_finalize_snapshot_creates_all_optimizations(tmp_path: Path):
         assert "subject_lower" in columns
 
         # Verify ANALYZE was run
-        cursor = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='sqlite_stat1'"
-        )
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='sqlite_stat1'")
         stat_tables = cursor.fetchall()
         assert len(stat_tables) == 1
 
@@ -210,14 +201,16 @@ def test_bundle_attachments_with_detachment(tmp_path: Path):
         )
 
         # Create large attachment
-        attachments = json.dumps([
-            {
-                "type": "file",
-                "path": "large_file.bin",
-                "media_type": "application/octet-stream",
-                "size_bytes": 20000  # Larger than typical detach threshold
-            }
-        ])
+        attachments = json.dumps(
+            [
+                {
+                    "type": "file",
+                    "path": "large_file.bin",
+                    "media_type": "application/octet-stream",
+                    "size_bytes": 20000,  # Larger than typical detach threshold
+                }
+            ]
+        )
 
         conn.execute("INSERT INTO projects (id, slug) VALUES (1, 'test')")
         conn.execute("INSERT INTO agents (id, name) VALUES (1, 'Agent')")
@@ -226,7 +219,7 @@ def test_bundle_attachments_with_detachment(tmp_path: Path):
             INSERT INTO messages (id, project_id, sender_id, thread_id, created_ts, attachments)
             VALUES (1, 1, 1, 'thread-1', '2025-01-01T00:00:00Z', ?)
             """,
-            (attachments,)
+            (attachments,),
         )
 
         conn.commit()
@@ -248,7 +241,7 @@ def test_bundle_attachments_with_detachment(tmp_path: Path):
         storage_root,
         storage_root=storage_root,
         inline_threshold=1024,
-        detach_threshold=10000  # File is larger than this
+        detach_threshold=10000,  # File is larger than this
     )
 
     # Verify detached bundle was created
@@ -269,16 +262,12 @@ def test_performance_indexes_multiple_calls(tmp_path: Path):
     conn = sqlite3.connect(str(snapshot))
     try:
         # Verify indexes still exist and are functional
-        cursor = conn.execute(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'"
-        )
+        cursor = conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'")
         count = cursor.fetchone()[0]
         assert count > 0
 
         # Verify lowercase columns work
-        cursor = conn.execute(
-            "SELECT COUNT(*) FROM messages WHERE subject_lower IS NOT NULL"
-        )
+        cursor = conn.execute("SELECT COUNT(*) FROM messages WHERE subject_lower IS NOT NULL")
         count = cursor.fetchone()[0]
         assert count > 0
 
@@ -350,7 +339,7 @@ def test_lowercase_column_population(tmp_path: Path):
                 INSERT INTO messages (id, project_id, sender_id, thread_id, subject, body_md, created_ts, attachments)
                 VALUES (?, 1, 1, ?, ?, 'body', '2025-01-01T00:00:00Z', '[]')
                 """,
-                (i, f"thread-{i}", subject)
+                (i, f"thread-{i}", subject),
             )
 
         conn.commit()
@@ -363,9 +352,7 @@ def test_lowercase_column_population(tmp_path: Path):
     conn = sqlite3.connect(str(snapshot))
     try:
         # Verify lowercase columns are populated
-        cursor = conn.execute(
-            "SELECT id, subject, subject_lower FROM messages ORDER BY id"
-        )
+        cursor = conn.execute("SELECT id, subject, subject_lower FROM messages ORDER BY id")
         rows = cursor.fetchall()
 
         assert rows[0][2] == "uppercase subject"
@@ -433,9 +420,7 @@ def test_fts_search_overview_mv_creation(tmp_path: Path):
     conn = sqlite3.connect(str(snapshot))
     try:
         # Check if FTS search overview was created
-        cursor = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='fts_search_overview_mv'"
-        )
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='fts_search_overview_mv'")
         tables = cursor.fetchall()
 
         # Should be created if FTS5 is available

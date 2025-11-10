@@ -1,4 +1,5 @@
 """Tests for pre-push guard functionality."""
+
 from __future__ import annotations
 
 import os
@@ -14,23 +15,9 @@ from mcp_agent_mail.storage import ensure_archive, write_file_reservation_record
 
 def _init_git_repo(repo_path: Path) -> None:
     """Initialize a git repository with dummy config."""
-    subprocess.run(
-        ["git", "init"],
-        cwd=str(repo_path),
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE
-    )
-    subprocess.run(
-        ["git", "config", "user.email", "test@example.com"],
-        cwd=str(repo_path),
-        check=True
-    )
-    subprocess.run(
-        ["git", "config", "user.name", "Test User"],
-        cwd=str(repo_path),
-        check=True
-    )
+    subprocess.run(["git", "init"], cwd=str(repo_path), check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(repo_path), check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(repo_path), check=True)
 
 
 def _create_commit(repo_path: Path, filename: str, content: str = "test") -> None:
@@ -39,17 +26,13 @@ def _create_commit(repo_path: Path, filename: str, content: str = "test") -> Non
     file_path.parent.mkdir(parents=True, exist_ok=True)
     file_path.write_text(content)
 
-    subprocess.run(
-        ["git", "add", filename],
-        cwd=str(repo_path),
-        check=True
-    )
+    subprocess.run(["git", "add", filename], cwd=str(repo_path), check=True)
     subprocess.run(
         ["git", "commit", "-m", f"Add {filename}"],
         cwd=str(repo_path),
         check=True,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE
+        stderr=subprocess.PIPE,
     )
 
 
@@ -58,16 +41,12 @@ def _run_prepush_hook(
     repo_path: Path,
     agent_name: str,
     local_ref: str = "refs/heads/main",
-    remote_ref: str = "refs/heads/main"
+    remote_ref: str = "refs/heads/main",
 ) -> subprocess.CompletedProcess:
     """Run the pre-push hook script."""
     # Get the local SHA
     result = subprocess.run(
-        ["git", "rev-parse", local_ref.split("/")[-1]],
-        cwd=str(repo_path),
-        capture_output=True,
-        text=True,
-        check=True
+        ["git", "rev-parse", local_ref.split("/")[-1]], cwd=str(repo_path), capture_output=True, text=True, check=True
     )
     local_sha = result.stdout.strip()
 
@@ -86,7 +65,7 @@ def _run_prepush_hook(
         input=hook_input,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True
+        text=True,
     )
 
 
@@ -125,7 +104,7 @@ async def test_prepush_conflict_detected(isolated_env, tmp_path: Path):
             "agent": "OtherAgent",
             "path_pattern": "src/app.py",
             "exclusive": True,
-        }
+        },
     )
 
     # Render pre-push script
@@ -158,7 +137,7 @@ async def test_prepush_warn_mode(isolated_env, tmp_path: Path):
             "agent": "OtherAgent",
             "path_pattern": "src/*.py",
             "exclusive": True,
-        }
+        },
     )
 
     # Render pre-push script
@@ -179,11 +158,7 @@ async def test_prepush_warn_mode(isolated_env, tmp_path: Path):
     env["AGENT_MAIL_GUARD_MODE"] = "warn"
 
     result = subprocess.run(
-        ["git", "rev-parse", "main"],
-        cwd=str(repo_path),
-        capture_output=True,
-        text=True,
-        check=True
+        ["git", "rev-parse", "main"], cwd=str(repo_path), capture_output=True, text=True, check=True
     )
     local_sha = result.stdout.strip()
 
@@ -196,7 +171,7 @@ async def test_prepush_warn_mode(isolated_env, tmp_path: Path):
         input=hook_input,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True
+        text=True,
     )
 
     # Should pass in warn mode but print warning
@@ -217,7 +192,7 @@ async def test_prepush_multiple_commits(isolated_env, tmp_path: Path):
             "agent": "OtherAgent",
             "path_pattern": "src/config.py",
             "exclusive": True,
-        }
+        },
     )
 
     # Render pre-push script
@@ -258,7 +233,7 @@ async def test_prepush_glob_pattern_matching(isolated_env, tmp_path: Path):
             "agent": "OtherAgent",
             "path_pattern": "tests/**/*.py",
             "exclusive": True,
-        }
+        },
     )
 
     # Render pre-push script
@@ -292,7 +267,7 @@ async def test_prepush_gate_disabled(isolated_env, tmp_path: Path):
             "agent": "OtherAgent",
             "path_pattern": "**/*.py",
             "exclusive": True,
-        }
+        },
     )
 
     # Render pre-push script
@@ -312,11 +287,7 @@ async def test_prepush_gate_disabled(isolated_env, tmp_path: Path):
     env["WORKTREES_ENABLED"] = "0"
 
     result = subprocess.run(
-        ["git", "rev-parse", "main"],
-        cwd=str(repo_path),
-        capture_output=True,
-        text=True,
-        check=True
+        ["git", "rev-parse", "main"], cwd=str(repo_path), capture_output=True, text=True, check=True
     )
     local_sha = result.stdout.strip()
 
@@ -329,7 +300,7 @@ async def test_prepush_gate_disabled(isolated_env, tmp_path: Path):
         input=hook_input,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True
+        text=True,
     )
 
     # Should pass when gate is disabled
@@ -349,7 +320,7 @@ async def test_prepush_self_reservation_allowed(isolated_env, tmp_path: Path):
             "agent": "TestAgent",
             "path_pattern": "src/app.py",
             "exclusive": True,
-        }
+        },
     )
 
     # Render pre-push script

@@ -1,4 +1,5 @@
 """Integration tests for CLI commands added in Tier 1 and Tier 2."""
+
 from __future__ import annotations
 
 import subprocess
@@ -33,10 +34,7 @@ async def test_amctl_env_basic(isolated_env, tmp_path: Path):
     _init_test_git_repo(repo_path)
 
     # Run amctl env
-    result = runner.invoke(
-        app,
-        ["amctl", "env", "--path", str(repo_path), "--agent", "TestAgent"]
-    )
+    result = runner.invoke(app, ["amctl", "env", "--path", str(repo_path), "--agent", "TestAgent"])
 
     assert result.exit_code == 0, result.output
 
@@ -69,10 +67,7 @@ async def test_amctl_env_with_branch(isolated_env, tmp_path: Path):
     subprocess.run(["git", "checkout", "-b", "feature/test"], cwd=str(repo_path), check=True, capture_output=True)
 
     # Run amctl env
-    result = runner.invoke(
-        app,
-        ["amctl", "env", "--path", str(repo_path), "--agent", "TestAgent"]
-    )
+    result = runner.invoke(app, ["amctl", "env", "--path", str(repo_path), "--agent", "TestAgent"])
 
     assert result.exit_code == 0
     assert "BRANCH=feature/test" in result.stdout or "BRANCH=feature-test" in result.stdout
@@ -92,10 +87,7 @@ async def test_amctl_env_agent_from_environment(isolated_env, tmp_path: Path, mo
     monkeypatch.setenv("AGENT_NAME", "EnvAgent")
 
     # Run amctl env without --agent flag
-    result = runner.invoke(
-        app,
-        ["amctl", "env", "--path", str(repo_path)]
-    )
+    result = runner.invoke(app, ["amctl", "env", "--path", str(repo_path)])
 
     assert result.exit_code == 0
     assert "AGENT=EnvAgent" in result.stdout
@@ -111,10 +103,7 @@ async def test_amctl_env_cache_key_format(isolated_env, tmp_path: Path):
     repo_path.mkdir()
     _init_test_git_repo(repo_path)
 
-    result = runner.invoke(
-        app,
-        ["amctl", "env", "--path", str(repo_path), "--agent", "TestAgent"]
-    )
+    result = runner.invoke(app, ["amctl", "env", "--path", str(repo_path), "--agent", "TestAgent"])
 
     assert result.exit_code == 0
 
@@ -137,10 +126,7 @@ async def test_amctl_env_artifact_dir_path(isolated_env, tmp_path: Path):
     repo_path.mkdir()
     _init_test_git_repo(repo_path)
 
-    result = runner.invoke(
-        app,
-        ["amctl", "env", "--path", str(repo_path), "--agent", "TestAgent"]
-    )
+    result = runner.invoke(app, ["amctl", "env", "--path", str(repo_path), "--agent", "TestAgent"])
 
     assert result.exit_code == 0
 
@@ -169,10 +155,7 @@ async def test_am_run_basic_command(isolated_env, tmp_path: Path, monkeypatch):
     _init_test_git_repo(repo_path)
 
     # Run am-run with a simple command
-    result = runner.invoke(
-        app,
-        ["am-run", "test-slot", "echo", "hello", "--path", str(repo_path)]
-    )
+    result = runner.invoke(app, ["am-run", "test-slot", "echo", "hello", "--path", str(repo_path)])
 
     # Should succeed (note: actual execution depends on how am-run handles the command)
     # The command might not execute in test environment, but we can check it doesn't error
@@ -192,8 +175,7 @@ async def test_am_run_with_agent_flag(isolated_env, tmp_path: Path, monkeypatch)
     _init_test_git_repo(repo_path)
 
     result = runner.invoke(
-        app,
-        ["am-run", "build-slot", "--agent", "CustomAgent", "--path", str(repo_path), "--", "echo", "test"]
+        app, ["am-run", "build-slot", "--agent", "CustomAgent", "--path", str(repo_path), "--", "echo", "test"]
     )
 
     # Check it runs without error
@@ -218,10 +200,7 @@ async def test_am_run_creates_build_slot(isolated_env, tmp_path: Path, monkeypat
     script_path.write_text("#!/bin/bash\nexit 0\n")
     script_path.chmod(0o755)
 
-    runner.invoke(
-        app,
-        ["am-run", "quick-test", "--path", str(repo_path), "--", str(script_path)]
-    )
+    runner.invoke(app, ["am-run", "quick-test", "--path", str(repo_path), "--", str(script_path)])
 
     # Check if slot was created
     slot_dir = archive.root / "build_slots" / "quick-test"
@@ -255,10 +234,7 @@ exit 0
 """)
     script_path.chmod(0o755)
 
-    result = runner.invoke(
-        app,
-        ["am-run", "env-test", "--path", str(repo_path), "--", str(script_path)]
-    )
+    result = runner.invoke(app, ["am-run", "env-test", "--path", str(repo_path), "--", str(script_path)])
 
     # Check output contains environment variables
     # Note: This might not work in all test environments
@@ -295,7 +271,7 @@ async def test_am_run_conflict_warning(isolated_env, tmp_path: Path, monkeypatch
         "branch": "main",
         "exclusive": True,
         "acquired_ts": datetime.now(timezone.utc).isoformat(),
-        "expires_ts": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        "expires_ts": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
     }
 
     slot_file = slot_dir / "OtherAgent__main.json"
@@ -308,10 +284,7 @@ async def test_am_run_conflict_warning(isolated_env, tmp_path: Path, monkeypatch
 
     # Run am-run with same slot (different agent)
     monkeypatch.setenv("AGENT_NAME", "TestAgent")
-    result = runner.invoke(
-        app,
-        ["am-run", "conflict-test", "--path", str(repo_path), "--", str(script_path)]
-    )
+    result = runner.invoke(app, ["am-run", "conflict-test", "--path", str(repo_path), "--", str(script_path)])
 
     # In warn mode, should complete but may show warning
     # Check for warning message
@@ -325,10 +298,7 @@ def test_amctl_env_non_git_directory(isolated_env, tmp_path: Path):
     non_git = tmp_path / "not-git"
     non_git.mkdir()
 
-    result = runner.invoke(
-        app,
-        ["amctl", "env", "--path", str(non_git), "--agent", "TestAgent"]
-    )
+    result = runner.invoke(app, ["amctl", "env", "--path", str(non_git), "--agent", "TestAgent"])
 
     # Should still work but branch might be "unknown"
     assert result.exit_code == 0
@@ -348,10 +318,7 @@ async def test_guard_install_with_prepush(isolated_env, tmp_path: Path):
     _init_test_git_repo(repo_path)
 
     # Install guard with prepush
-    result = runner.invoke(
-        app,
-        ["guard", "install", "test-project", str(repo_path), "--prepush"]
-    )
+    result = runner.invoke(app, ["guard", "install", "test-project", str(repo_path), "--prepush"])
 
     # Should succeed
     assert result.exit_code == 0
@@ -375,16 +342,10 @@ async def test_guard_status_command(isolated_env, tmp_path: Path):
     _init_test_git_repo(repo_path)
 
     # Install guards first
-    runner.invoke(
-        app,
-        ["guard", "install", "test-project", str(repo_path), "--prepush"]
-    )
+    runner.invoke(app, ["guard", "install", "test-project", str(repo_path), "--prepush"])
 
     # Check guard status
-    result = runner.invoke(
-        app,
-        ["guard", "status", str(repo_path)]
-    )
+    result = runner.invoke(app, ["guard", "status", str(repo_path)])
 
     # Should succeed and show status
     assert result.exit_code == 0

@@ -57,11 +57,9 @@ async def test_guard_render_and_conflict_message(isolated_env, tmp_path: Path):
     _stdout_bytes, stderr_bytes = await proc_hook.communicate()
     # Expect non-zero due to conflict and helpful message
     assert proc_hook.returncode != 0
-    stderr_text = (stderr_bytes.decode("utf-8", "ignore") if stderr_bytes else "")
+    stderr_text = stderr_bytes.decode("utf-8", "ignore") if stderr_bytes else ""
     assert "file_reservation" in stderr_text.lower() or "exclusive" in stderr_text.lower()
 
     # Uninstall guard path returns True and removes file
     removed = await uninstall_guard(repo_dir)
     assert removed is True
-
-

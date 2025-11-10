@@ -164,10 +164,7 @@ def _create_params_display(ctx: ToolCallContext) -> Panel | None:
         all_params.update(ctx.kwargs)
 
     # Filter out internal/context parameters
-    filtered_params = {
-        k: v for k, v in all_params.items()
-        if k not in {"ctx", "context", "_ctx"}
-    }
+    filtered_params = {k: v for k, v in all_params.items() if k not in {"ctx", "context", "_ctx"}}
 
     if not filtered_params:
         return None
@@ -617,7 +614,9 @@ def create_data_tree(data: dict[str, Any], root_label: str = "Data") -> Tree:
                     branch = parent.add(f"[bold bright_cyan]{escape(str(key))}[/bold bright_cyan]")
                     add_items(branch, value)
                 elif isinstance(value, list):
-                    branch = parent.add(f"[bold bright_magenta]{escape(str(key))}[/bold bright_magenta] [dim](list)[/dim]")
+                    branch = parent.add(
+                        f"[bold bright_magenta]{escape(str(key))}[/bold bright_magenta] [dim](list)[/dim]"
+                    )
                     for i, item in enumerate(value):
                         if isinstance(item, (dict, list)):
                             subbranch = branch.add(f"[dim]{i}[/dim]")
@@ -625,7 +624,9 @@ def create_data_tree(data: dict[str, Any], root_label: str = "Data") -> Tree:
                         else:
                             branch.add(f"[dim]{i}:[/dim] [white]{escape(str(item))}[/white]")
                 else:
-                    parent.add(f"[bright_yellow]{escape(str(key))}[/bright_yellow]: [white]{escape(str(value))}[/white]")
+                    parent.add(
+                        f"[bright_yellow]{escape(str(key))}[/bright_yellow]: [white]{escape(str(value))}[/white]"
+                    )
         elif isinstance(items, list):
             for i, item in enumerate(items):
                 if isinstance(item, (dict, list)):
@@ -754,11 +755,11 @@ def display_startup_banner(settings: Any, host: str, port: int, path: str) -> No
     server_table.add_row("📁 Storage", f"[dim]{settings.storage.root}[/dim]")
     server_table.add_row(
         "🔒 Auth",
-        "[bold bright_green]ENABLED[/bold bright_green]" if settings.http.bearer_token else "[dim]disabled[/dim]"
+        "[bold bright_green]ENABLED[/bold bright_green]" if settings.http.bearer_token else "[dim]disabled[/dim]",
     )
     server_table.add_row(
         "📝 Tool Logging",
-        "[bold bright_green]ENABLED[/bold bright_green]" if settings.tools_log_enabled else "[dim]disabled[/dim]"
+        "[bold bright_green]ENABLED[/bold bright_green]" if settings.tools_log_enabled else "[dim]disabled[/dim]",
     )
 
     # Database stats table
@@ -776,7 +777,9 @@ def display_startup_banner(settings: Any, host: str, port: int, path: str) -> No
     stats_table.add_row("📦 Projects", f"[bold bright_green]{db_stats['projects']}[/bold bright_green]")
     stats_table.add_row("🤖 Agents", f"[bold bright_green]{db_stats['agents']}[/bold bright_green]")
     stats_table.add_row("📬 Messages", f"[bold bright_green]{db_stats['messages']}[/bold bright_green]")
-    stats_table.add_row("🔐 File Reservations", f"[bold bright_green]{db_stats['file_reservations']}[/bold bright_green]")
+    stats_table.add_row(
+        "🔐 File Reservations", f"[bold bright_green]{db_stats['file_reservations']}[/bold bright_green]"
+    )
 
     # Display tables side by side
     columns = Columns([server_table, stats_table], equal=True, expand=True)
@@ -845,12 +848,14 @@ def display_startup_banner(settings: Any, host: str, port: int, path: str) -> No
         success_msg.append("performance metrics", style="bold bright_yellow")
         success_msg.append("! 🎨✨", style="white")
 
-        console.print(Panel(
-            Align.center(success_msg),
-            border_style="bright_green",
-            box=box.HEAVY,
-            padding=(0, 2),
-        ))
+        console.print(
+            Panel(
+                Align.center(success_msg),
+                border_style="bright_green",
+                box=box.HEAVY,
+                padding=(0, 2),
+            )
+        )
 
     console.print()
     console.print(Rule(style="bright_blue", characters="═"))

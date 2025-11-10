@@ -101,4 +101,3 @@ async def test_attachment_inline_vs_file_threshold(isolated_env, monkeypatch):
         atts2 = (r_file.data.get("deliveries") or [{}])[0].get("payload", {}).get("attachments", [])
         assert any(a.get("type") == "file" for a in atts2)
     img_path.unlink(missing_ok=True)
-

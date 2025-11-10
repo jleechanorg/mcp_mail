@@ -3,6 +3,7 @@
 
 This helps diagnose why Rich output might not be showing colors.
 """
+
 import os
 import sys
 
@@ -24,9 +25,15 @@ print(f"  sys.stdin.isatty(): {sys.stdin.isatty()}\n")
 
 print("Environment Variables:")
 env_vars = [
-    "TERM", "COLORTERM", "NO_COLOR", "FORCE_COLOR",
-    "CLICOLOR", "CLICOLOR_FORCE", "TERM_PROGRAM",
-    "WT_SESSION", "WT_PROFILE_ID",  # Windows Terminal
+    "TERM",
+    "COLORTERM",
+    "NO_COLOR",
+    "FORCE_COLOR",
+    "CLICOLOR",
+    "CLICOLOR_FORCE",
+    "TERM_PROGRAM",
+    "WT_SESSION",
+    "WT_PROFILE_ID",  # Windows Terminal
 ]
 for var in env_vars:
     value = os.environ.get(var, "(not set)")

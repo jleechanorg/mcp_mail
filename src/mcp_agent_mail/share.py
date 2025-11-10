@@ -125,12 +125,12 @@ HOSTING_GUIDES: dict[str, dict[str, object]] = {
         "instructions": [
             "Copy `viewer/`, `manifest.json`, and `mailbox.sqlite3` into your `docs/` folder or gh-pages branch.",
             "Add a `.nojekyll` file so `.wasm` assets are served with correct MIME types.",
-            "**CRITICAL**: Edit `viewer/index.html` and uncomment the line `<script src=\"./coi-serviceworker.js\"></script>` (around line 63).",
+            '**CRITICAL**: Edit `viewer/index.html` and uncomment the line `<script src="./coi-serviceworker.js"></script>` (around line 63).',
             "This service worker enables Cross-Origin-Isolation (COOP/COEP headers) required for OPFS caching and optimal sqlite-wasm performance.",
             "GitHub Pages does not support the `_headers` file, so the service worker intercepts requests and adds the required headers.",
             "Commit and push, then enable GitHub Pages for your repository branch in repository settings.",
             "On first visit, the page will reload automatically once the service worker activates (this is normal behavior).",
-            "Verify isolation: open browser DevTools console and check that `window.crossOriginIsolated === true`."
+            "Verify isolation: open browser DevTools console and check that `window.crossOriginIsolated === true`.",
         ],
     },
     "cloudflare_pages": {
@@ -141,7 +141,7 @@ HOSTING_GUIDES: dict[str, dict[str, object]] = {
             "The included `_headers` file will automatically apply `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` headers.",
             "These headers are required for OPFS caching and optimal sqlite-wasm performance.",
             "Verify isolation: open browser DevTools console and check that `window.crossOriginIsolated === true`.",
-            "For attachments >25 MiB, push them to R2 and reference the signed URLs in the manifest."
+            "For attachments >25 MiB, push them to R2 and reference the signed URLs in the manifest.",
         ],
     },
     "netlify": {
@@ -152,7 +152,7 @@ HOSTING_GUIDES: dict[str, dict[str, object]] = {
             "These headers are required for OPFS caching and optimal sqlite-wasm performance.",
             "Deploy the bundle directory (or ZIP) via CLI or the Netlify UI.",
             "Verify isolation: open browser DevTools console and check that `window.crossOriginIsolated === true`.",
-            "Verify `.wasm` assets are served with `application/wasm` using Netlify's response headers tooling."
+            "Verify `.wasm` assets are served with `application/wasm` using Netlify's response headers tooling.",
         ],
     },
     "s3": {
@@ -161,7 +161,7 @@ HOSTING_GUIDES: dict[str, dict[str, object]] = {
         "instructions": [
             "Upload the bundle directory to your bucket (e.g., via `aws s3 sync`).",
             "Set `Content-Type` metadata: `.wasm` → `application/wasm`, SQLite files → `application/octet-stream`.",
-            "When fronted by CloudFront, configure response headers for COOP/COEP and caching policies."
+            "When fronted by CloudFront, configure response headers for COOP/COEP and caching policies.",
         ],
     },
 }
@@ -289,7 +289,9 @@ def detect_hosting_hints(output_dir: Path) -> list[HostingHint]:
         )
 
     preferred_order = ["github_pages", "cloudflare_pages", "netlify", "s3"]
-    hints.sort(key=lambda hint: preferred_order.index(hint.key) if hint.key in preferred_order else len(preferred_order))
+    hints.sort(
+        key=lambda hint: preferred_order.index(hint.key) if hint.key in preferred_order else len(preferred_order)
+    )
     return hints
 
 
@@ -324,7 +326,9 @@ def build_how_to_deploy(hosting_hints: Sequence[HostingHint]) -> str:
     for note in GENERIC_HOSTING_NOTES:
         sections.append(f"- {note}")
     sections.append("")
-    sections.append("Review `manifest.json` before publication to confirm the included projects, hashing, and scrubbing policies.")
+    sections.append(
+        "Review `manifest.json` before publication to confirm the included projects, hashing, and scrubbing policies."
+    )
 
     return "\n".join(sections)
 
@@ -395,9 +399,7 @@ def sign_manifest(
     try:
         from nacl.signing import SigningKey  # type: ignore
     except ImportError as exc:  # pragma: no cover - optional dependency
-        raise ShareExportError(
-            "PyNaCl is required for Ed25519 signing. Install it with `uv add PyNaCl`."
-        ) from exc
+        raise ShareExportError("PyNaCl is required for Ed25519 signing. Install it with `uv add PyNaCl`.") from exc
 
     # Expand and validate manifest path
     manifest_path = manifest_path.expanduser().resolve()
@@ -675,9 +677,7 @@ def _scrub_text(value: str) -> tuple[str, int]:
 def _normalize_scrub_preset(preset: str) -> str:
     key = (preset or "standard").strip().lower()
     if key not in SCRUB_PRESETS:
-        raise ShareExportError(
-            f"Unknown scrub preset '{preset}'. Supported presets: {', '.join(SCRUB_PRESETS)}"
-        )
+        raise ShareExportError(f"Unknown scrub preset '{preset}'. Supported presets: {', '.join(SCRUB_PRESETS)}")
     return key
 
 
@@ -1510,8 +1510,7 @@ def _verify_viewer_vendor_assets() -> None:
                 data = asset_path.read_bytes()
             except FileNotFoundError as exc:
                 raise ShareExportError(
-                    "Viewer vendor asset "
-                    f"'{filename}' missing. Run scripts/update_sqlite_vendor.py to refresh assets."
+                    f"Viewer vendor asset '{filename}' missing. Run scripts/update_sqlite_vendor.py to refresh assets."
                 ) from exc
             digest = hashlib.sha256(data).hexdigest()
             if digest != expected:
@@ -1610,9 +1609,7 @@ def verify_bundle(bundle_path: Path, *, public_key: Optional[str] = None) -> dic
             continue
         actual = _compute_sri(target)
         if actual != expected:
-            sri_failures.append(
-                f"SRI mismatch for {relative_path}: expected {expected}, got {actual}"
-            )
+            sri_failures.append(f"SRI mismatch for {relative_path}: expected {expected}, got {actual}")
 
     signature_checked = False
     signature_verified = False
@@ -1723,10 +1720,7 @@ def write_bundle_scaffolding(
 ) -> None:
     """Create manifest and helper docs around the freshly minted snapshot."""
 
-    project_entries = [
-        {"slug": record.slug, "human_key": record.human_key}
-        for record in scope.projects
-    ]
+    project_entries = [{"slug": record.slug, "human_key": record.human_key} for record in scope.projects]
 
     viewer_sri = _build_viewer_sri(output_dir)
 
@@ -1888,7 +1882,7 @@ def package_directory_as_zip(source_dir: Path, destination: Path) -> Path:
             info.compress_type = ZIP_DEFLATED
             info.date_time = (1980, 1, 1, 0, 0, 0)
             mode = path.stat().st_mode & 0o777
-            info.external_attr = (mode << 16)
+            info.external_attr = mode << 16
 
             with path.open("rb") as data, archive.open(info, "w") as zip_file:
                 shutil.copyfileobj(data, zip_file, length=1 << 20)
