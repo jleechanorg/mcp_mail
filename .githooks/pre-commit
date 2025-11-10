@@ -1,0 +1,46 @@
+#!/bin/bash
+# Pre-commit hook to run ruff and type checks
+
+set -e
+
+echo "Running pre-commit checks..."
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Check if we're in the right directory
+if [ ! -f "pyproject.toml" ]; then
+    echo -e "${RED}Error: pyproject.toml not found. Are you in the repository root?${NC}"
+    exit 1
+fi
+
+# Run ruff with auto-fix
+echo -e "${YELLOW}Running ruff check --fix --unsafe-fixes...${NC}"
+if uvx ruff check --fix --unsafe-fixes; then
+    echo -e "${GREEN}✓ Ruff checks passed${NC}"
+else
+    echo -e "${RED}✗ Ruff checks failed${NC}"
+    exit 1
+fi
+
+# Run type checks with ty
+echo -e "${YELLOW}Running ty check...${NC}"
+if uvx ty check; then
+    echo -e "${GREEN}✓ Type checks passed${NC}"
+else
+    echo -e "${RED}✗ Type checks failed${NC}"
+    echo -e "${YELLOW}Note: Type checks failed but won't block commit (warnings only)${NC}"
+    # Don't exit 1 here since the user mentioned ty passes but still reports warnings
+fi
+
+# If ruff made any fixes, add them to the commit
+if ! git diff --quiet; then
+    echo -e "${YELLOW}Ruff made automatic fixes. Adding them to the commit...${NC}"
+    git add -u
+fi
+
+echo -e "${GREEN}All pre-commit checks complete!${NC}"
+exit 0
