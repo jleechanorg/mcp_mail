@@ -1250,10 +1250,21 @@ def _copy_bundle_contents(source: Path, destination: Path) -> None:
                 parent = parent.parent
 
     # Remove files that are no longer present in the source bundle.
-    existing_files = {path for path in destination.rglob("*") if path.is_file()}
+    existing_files = {
+        path for path in destination.rglob("*") if path.is_file() or path.is_symlink()
+    }
     for stale_file in existing_files - desired_files:
-        # Unlink without following symlinks (we never export symlinks, but be defensive).
-        stale_file.unlink(missing_ok=True)
+        try:
+            if stale_file.is_symlink():
+                # Remove the symlink itself without following its target.
+                stale_file.unlink()
+                continue
+            stale_file.unlink()
+        except FileNotFoundError:
+            # File disappeared between discovery and removal attempt.
+            continue
+        except OSError as exc:  # pragma: no cover - filesystem edge cases
+            console.print(f"[yellow]Warning:[/] Failed to remove stale file {stale_file}: {exc}")
 
     # Remove directories that are no longer needed (deepest first).
     existing_dirs = {path for path in destination.rglob("*") if path.is_dir()}
