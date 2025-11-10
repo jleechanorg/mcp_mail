@@ -28,7 +28,7 @@
 
 ## 🌟 Fork Attribution
 
-### **This repository is forked from [https://github.com/jleechanorg/mcp_mail](https://github.com/jleechanorg/mcp_mail). Full credit goes to the original author for creating this innovative multi-agent coordination system.
+### **This repository is forked from [https://github.com/Dicklesworthstone/mcp_agent_mail](https://github.com/Dicklesworthstone/mcp_agent_mail). Full credit goes to the original author for creating this innovative multi-agent coordination system.
 
 Full credit goes to the original author for creating this innovative multi-agent coordination system.
 
