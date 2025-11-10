@@ -28,7 +28,7 @@
 
 ## 🌟 Fork Attribution
 
-**This repository is a fork of [Dicklesworthstone/mcp_agent_mail](https://github.com/Dicklesworthstone/mcp_agent_mail)**
+### **This repository is forked from [https://github.com/Dicklesworthstone/mcp_agent_mail](https://github.com/Dicklesworthstone/mcp_agent_mail). Full credit goes to the original author for creating this innovative multi-agent coordination system.
 
 Full credit goes to the original author for creating this innovative multi-agent coordination system.
 
