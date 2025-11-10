@@ -4033,6 +4033,215 @@ def build_mcp_server() -> FastMCP:
                     pass
             raise
 
+    @mcp.tool(name="search_mailbox")
+    @_instrument_tool(
+        "search_mailbox",
+        cluster=CLUSTER_SEARCH,
+        capabilities={"search", "read"},
+        project_arg="project_key",
+        agent_arg="requesting_agent",
+    )
+    async def search_mailbox(
+        ctx: Context,
+        project_key: str,
+        query: str,
+        requesting_agent: Optional[str] = None,
+        agent_filter: Optional[str] = None,
+        limit: int = 20,
+        include_bodies: bool = True,
+    ) -> list[dict[str, Any]]:
+        """
+        Search through mailboxes for messages matching a query.
+
+        This tool helps agents learn from prior conversations and coordinate by searching
+        historical messages. **Always search before tackling challenging tasks** to see
+        what prior learnings exist.
+
+        Search Priority
+        ---------------
+        1. Global mailbox (all messages in the project) - searched first
+        2. Specific agent mailbox (if agent_filter is specified)
+
+        Parameters
+        ----------
+        project_key : str
+            Project identifier to search within.
+        query : str
+            Search terms. Supports FTS5 syntax:
+            - Simple: "feature implementation"
+            - Phrase: '"exact phrase"'
+            - Boolean: "bug AND fix", "error OR warning", "test NOT failed"
+            - Prefix: "auth*" matches "authentication", "authorization", etc.
+        requesting_agent : str, optional
+            Name of the agent performing the search (for audit purposes).
+        agent_filter : str, optional
+            Restrict search to messages sent to/from this specific agent.
+        limit : int
+            Maximum number of results to return (default 20).
+        include_bodies : bool
+            Include full message bodies in results (default True).
+
+        Returns
+        -------
+        list[dict]
+            Matching messages ranked by relevance. Each includes:
+            { id, subject, from, to, created_ts, relevance_score, snippet, [body_md] }
+
+        Usage Examples
+        --------------
+        # Search for prior authentication work
+        search_mailbox(project_key="my-app", query="authentication implementation")
+
+        # Find error discussions
+        search_mailbox(project_key="my-app", query="error OR exception OR bug")
+
+        # Check specific agent's conversations
+        search_mailbox(project_key="my-app", query="database", agent_filter="AliceAgent")
+
+        Best Practices
+        --------------
+        - Search the global mailbox before starting complex tasks
+        - Use specific keywords from your current task
+        - Review search results to avoid duplicating work
+        - Learn from past solutions and mistakes
+        """
+        if get_settings().tools_log_enabled:
+            try:
+                import importlib as _imp
+                _rc = _imp.import_module("rich.console")
+                _rp = _imp.import_module("rich.panel")
+                Console = _rc.Console
+                Panel = _rp.Panel
+                Console().print(Panel.fit(
+                    f"project={project_key}\nquery={query}\nagent_filter={agent_filter}\nlimit={limit}",
+                    title="tool: search_mailbox",
+                    border_style="green"
+                ))
+            except Exception:
+                pass
+
+        try:
+            project = await _get_project_by_identifier(project_key)
+            global_inbox_name = get_global_inbox_name(project)
+
+            # Prepare FTS5 query (escape double quotes, wrap in quotes for phrase search if needed)
+            fts_query = query.strip()
+
+            await ensure_schema()
+            async with get_session() as session:
+                # Search using FTS5 virtual table
+                # rank gives us relevance score (lower is better in FTS5)
+                fts_stmt = text("""
+                    SELECT
+                        fts.message_id,
+                        -rank as relevance_score,
+                        snippet(fts_messages, 1, '<mark>', '</mark>', '...', 32) as subject_snippet,
+                        snippet(fts_messages, 2, '<mark>', '</mark>', '...', 64) as body_snippet
+                    FROM fts_messages fts
+                    WHERE fts_messages MATCH :query
+                    ORDER BY rank
+                    LIMIT :limit
+                """)
+
+                fts_result = await session.execute(
+                    fts_stmt,
+                    {"query": fts_query, "limit": limit * 2}  # Get more results for filtering
+                )
+                fts_rows = fts_result.fetchall()
+
+                if not fts_rows:
+                    await ctx.info(f"No messages found matching query: {query}")
+                    return []
+
+                message_ids = [row[0] for row in fts_rows]
+                relevance_map = {row[0]: (row[1], row[2], row[3]) for row in fts_rows}
+
+                # Now fetch full message details with recipient info
+                # Join with agents to get sender/recipient names
+                sender_alias = aliased(Agent)
+                recipient_alias = aliased(Agent)
+
+                messages_stmt = (
+                    select(
+                        Message,
+                        sender_alias.name.label("sender_name"),
+                        MessageRecipient.kind,
+                        recipient_alias.name.label("recipient_name"),
+                        recipient_alias.id.label("recipient_id")
+                    )
+                    .join(sender_alias, Message.sender_id == sender_alias.id)
+                    .join(MessageRecipient, MessageRecipient.message_id == Message.id)
+                    .join(recipient_alias, MessageRecipient.agent_id == recipient_alias.id)
+                    .where(Message.id.in_(message_ids))
+                )
+
+                # Apply agent filter if specified
+                if agent_filter:
+                    agent_filter_obj = await _get_agent_by_name(agent_filter)
+                    messages_stmt = messages_stmt.where(
+                        or_(
+                            Message.sender_id == agent_filter_obj.id,
+                            MessageRecipient.agent_id == agent_filter_obj.id
+                        )
+                    )
+
+                messages_result = await session.execute(messages_stmt)
+                message_rows = messages_result.all()
+
+                # Group recipients by message
+                messages_dict: dict[int, dict[str, Any]] = {}
+                for msg, sender_name, kind, recipient_name, recipient_id in message_rows:
+                    msg_id = msg.id
+                    if msg_id not in messages_dict:
+                        relevance_score, subject_snippet, body_snippet = relevance_map[msg_id]
+
+                        # Check if this message went to global inbox (prioritize these)
+                        is_global = any(
+                            r_name == global_inbox_name
+                            for _, _, _, r_name, _ in message_rows
+                            if _ == msg
+                        )
+
+                        payload = _message_to_dict(msg, include_body=include_bodies)
+                        payload["from"] = sender_name
+                        payload["to"] = []
+                        payload["cc"] = []
+                        payload["bcc"] = []
+                        payload["relevance_score"] = float(relevance_score)
+                        payload["subject_snippet"] = subject_snippet
+                        payload["body_snippet"] = body_snippet
+                        payload["in_global_inbox"] = is_global
+                        messages_dict[msg_id] = payload
+
+                    # Add recipient to appropriate list
+                    if kind == "to":
+                        messages_dict[msg_id]["to"].append(recipient_name)
+                    elif kind == "cc":
+                        messages_dict[msg_id]["cc"].append(recipient_name)
+                    elif kind == "bcc":
+                        messages_dict[msg_id]["bcc"].append(recipient_name)
+
+                # Convert to list and sort by relevance, prioritizing global inbox messages
+                results = list(messages_dict.values())
+                results.sort(
+                    key=lambda x: (
+                        -1 if x["in_global_inbox"] else 0,  # Global inbox first
+                        -x["relevance_score"]  # Then by relevance
+                    ),
+                    reverse=True
+                )
+                results = results[:limit]
+
+                await ctx.info(
+                    f"Found {len(results)} messages matching query '{query}' "
+                    f"({sum(1 for r in results if r['in_global_inbox'])} in global inbox)"
+                )
+                return results
+
+        except Exception as exc:
+            _rich_error_panel("search_mailbox", {"error": str(exc)})
+            raise
+
     @mcp.tool(name="macro_start_session")
     @_instrument_tool(
         "macro_start_session",
