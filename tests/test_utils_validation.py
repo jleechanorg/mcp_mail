@@ -1,8 +1,6 @@
 """Tests for utility functions added in Tier 1 and Tier 2."""
 from __future__ import annotations
 
-import pytest
-
 from mcp_agent_mail.utils import (
     generate_agent_name,
     sanitize_agent_name,
@@ -160,7 +158,7 @@ def test_validate_agent_name_format_all_adjectives():
     from mcp_agent_mail.utils import ADJECTIVES, NOUNS
 
     # Test first adjective with first noun
-    first_combo = f"{list(ADJECTIVES)[0]}{list(NOUNS)[0]}"
+    first_combo = f"{next(iter(ADJECTIVES))}{next(iter(NOUNS))}"
     assert validate_agent_name_format(first_combo) is True
 
 
@@ -169,7 +167,7 @@ def test_validate_agent_name_format_all_nouns():
     from mcp_agent_mail.utils import ADJECTIVES, NOUNS
 
     # Test first noun with first adjective
-    first_combo = f"{list(ADJECTIVES)[0]}{list(NOUNS)[0]}"
+    first_combo = f"{next(iter(ADJECTIVES))}{next(iter(NOUNS))}"
     assert validate_agent_name_format(first_combo) is True
 
 
@@ -196,6 +194,7 @@ def test_sanitize_agent_name_unicode():
 
     result = sanitize_agent_name("Blüe©Lake")
     # Should keep only alphanumeric ASCII
+    assert result is not None
     assert "Blue" in result or "Ble" in result or "Lake" in result
 
 

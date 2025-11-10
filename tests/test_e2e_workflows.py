@@ -3,14 +3,13 @@ from __future__ import annotations
 
 import json
 import subprocess
-from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import pytest
 
 from mcp_agent_mail import build_mcp_server
 from mcp_agent_mail.config import get_settings
-from mcp_agent_mail.guard import render_precommit_script, render_prepush_script
+from mcp_agent_mail.guard import render_prepush_script
 from mcp_agent_mail.storage import ensure_archive, write_file_reservation_record
 
 
@@ -40,7 +39,7 @@ async def test_e2e_build_slots_with_file_reservations(isolated_env, tmp_path: Pa
     """End-to-end test: Build slots combined with file reservations."""
     server = build_mcp_server()
     settings = get_settings()
-    archive = await ensure_archive(settings, "e2e-project")
+    await ensure_archive(settings, "e2e-project")
 
     import os
     os.environ["WORKTREES_ENABLED"] = "1"
@@ -178,12 +177,11 @@ async def test_e2e_pre_push_guard_with_build_slots(isolated_env, tmp_path: Path)
 @pytest.mark.asyncio
 async def test_e2e_materialized_views_with_share_export(isolated_env, tmp_path: Path):
     """End-to-end test: Create messages, export with materialized views and indexes."""
+    import sqlite3
+
     from mcp_agent_mail.share import (
-        build_materialized_views,
-        create_performance_indexes,
         finalize_snapshot_for_export,
     )
-    import sqlite3
 
     # Create a snapshot database
     snapshot = tmp_path / "export.sqlite3"
@@ -257,10 +255,7 @@ async def test_e2e_materialized_views_with_share_export(isolated_env, tmp_path: 
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
 
-    finalize_snapshot_for_export(
-        snapshot,
-        storage_root=storage_root
-    )
+    finalize_snapshot_for_export(snapshot)
 
     # Verify all optimizations were applied
     conn = sqlite3.connect(str(snapshot))
@@ -412,18 +407,15 @@ async def test_e2e_guard_lifecycle(isolated_env, tmp_path: Path):
     archive = await ensure_archive(settings, "guard-lifecycle")
 
     # Install guards
-    from mcp_agent_mail.guard import install_guard
+    from mcp_agent_mail.guard import install_guard, install_prepush_guard
 
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_git_repo(repo)
 
     # Install both pre-commit and pre-push guards
-    install_guard(
-        repo_path=str(repo),
-        archive=archive,
-        prepush=True
-    )
+    await install_guard(settings, "guard-lifecycle", repo)
+    await install_prepush_guard(settings, "guard-lifecycle", repo)
 
     # Verify hooks were installed
     precommit_hook = repo / ".git" / "hooks" / "pre-commit"
@@ -472,6 +464,7 @@ async def test_e2e_database_optimizations_query_performance(isolated_env, tmp_pa
     """End-to-end test: Verify database optimizations improve query performance."""
     import sqlite3
     import time
+
     from mcp_agent_mail.share import build_materialized_views, create_performance_indexes
 
     # Create a snapshot with many messages
@@ -525,7 +518,7 @@ async def test_e2e_database_optimizations_query_performance(isolated_env, tmp_pa
         "SELECT * FROM messages WHERE LOWER(subject) LIKE '%subject 5%' ORDER BY created_ts DESC"
     )
     results_before = cursor.fetchall()
-    time_before = time.time() - start
+    time.time() - start
     conn.close()
 
     # Apply optimizations
@@ -554,6 +547,7 @@ async def test_e2e_database_optimizations_query_performance(isolated_env, tmp_pa
 async def test_e2e_incremental_share_updates(isolated_env, tmp_path: Path):
     """End-to-end test: Multiple share exports with incremental updates."""
     import sqlite3
+
     from mcp_agent_mail.share import finalize_snapshot_for_export
 
     storage_root = tmp_path / "storage"
@@ -593,7 +587,7 @@ async def test_e2e_incremental_share_updates(isolated_env, tmp_path: Path):
         conn.close()
 
     # Export v1
-    finalize_snapshot_for_export(snapshot_v1, storage_root=storage_root)
+    finalize_snapshot_for_export(snapshot_v1)
 
     # Verify v1 has optimizations
     conn = sqlite3.connect(str(snapshot_v1))
@@ -621,7 +615,7 @@ async def test_e2e_incremental_share_updates(isolated_env, tmp_path: Path):
         conn.close()
 
     # Export v2 (incremental update)
-    finalize_snapshot_for_export(snapshot_v2, storage_root=storage_root)
+    finalize_snapshot_for_export(snapshot_v2)
 
     # Verify v2 has all messages in materialized view
     conn = sqlite3.connect(str(snapshot_v2))

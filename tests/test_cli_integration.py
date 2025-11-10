@@ -1,7 +1,6 @@
 """Integration tests for CLI commands added in Tier 1 and Tier 2."""
 from __future__ import annotations
 
-import os
 import subprocess
 from pathlib import Path
 
@@ -121,7 +120,7 @@ async def test_amctl_env_cache_key_format(isolated_env, tmp_path: Path):
 
     # Cache key should have format: am-cache-{project_uid}-{agent}-{branch}
     lines = result.stdout.split("\n")
-    cache_key_line = [line for line in lines if line.startswith("CACHE_KEY=")][0]
+    cache_key_line = next(line for line in lines if line.startswith("CACHE_KEY="))
     cache_key = cache_key_line.split("=", 1)[1]
 
     assert cache_key.startswith("am-cache-")
@@ -147,7 +146,7 @@ async def test_amctl_env_artifact_dir_path(isolated_env, tmp_path: Path):
 
     # Extract ARTIFACT_DIR
     lines = result.stdout.split("\n")
-    artifact_line = [line for line in lines if line.startswith("ARTIFACT_DIR=")][0]
+    artifact_line = next(line for line in lines if line.startswith("ARTIFACT_DIR="))
     artifact_dir = artifact_line.split("=", 1)[1]
 
     # Should include agent name and branch
@@ -219,7 +218,7 @@ async def test_am_run_creates_build_slot(isolated_env, tmp_path: Path, monkeypat
     script_path.write_text("#!/bin/bash\nexit 0\n")
     script_path.chmod(0o755)
 
-    result = runner.invoke(
+    runner.invoke(
         app,
         ["am-run", "quick-test", "--path", str(repo_path), "--", str(script_path)]
     )
@@ -284,8 +283,8 @@ async def test_am_run_conflict_warning(isolated_env, tmp_path: Path, monkeypatch
     _init_test_git_repo(repo_path)
 
     # Manually create an existing slot
-    from datetime import datetime, timezone, timedelta
     import json
+    from datetime import datetime, timedelta, timezone
 
     slot_dir = archive.root / "build_slots" / "conflict-test"
     slot_dir.mkdir(parents=True, exist_ok=True)
