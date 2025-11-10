@@ -112,14 +112,14 @@ uv run pytest --cov=mcp_agent_mail --cov-report=term-missing
 
 ## CI/CD
 
-All pull requests are automatically checked by GitHub Actions for:
+All pushes to any branch are automatically checked by GitHub Actions for:
 - **Ruff linting** - Code style and quality
 - **Type checking with ty** - Static type analysis
 - **Security scanning with Bandit** - Common security vulnerabilities
 - **Dependency vulnerability checks with Safety** - Known CVEs in dependencies
 - **Test suite** - Functional correctness
 
-Make sure your code passes all checks before submitting a PR. Security and dependency checks are informational and won't block PRs, but should be reviewed and addressed when possible.
+Make sure your code passes all checks before pushing. Security and dependency checks are informational and won't fail builds, but should be reviewed and addressed when possible.
 
 ## Code Style
 

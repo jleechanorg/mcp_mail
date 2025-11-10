@@ -79,7 +79,7 @@ Based on the current codebase scan, here are the most common security findings:
 
 ## CI/CD Pipeline
 
-All checks run automatically on every push and pull request:
+All checks run automatically on every push to any branch:
 
 ```yaml
 Jobs:
