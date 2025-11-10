@@ -52,13 +52,13 @@ The pre-commit hook performs the following checks:
 - **Security Scanning (Bandit)**: Scans code for common security vulnerabilities
   - Checks for hardcoded credentials, SQL injection risks, unsafe functions, etc.
   - Security issues are reported but won't block the commit
-  - Run `uvx bandit -r src/` for detailed security reports
+  - Run `uv run bandit -r src/` for detailed security reports
 
 - **Dependency Vulnerability Check (Safety)**: Scans dependencies for known vulnerabilities
   - Checks all installed packages against the Safety vulnerability database
   - Alerts you to known CVEs in your dependencies
   - Vulnerabilities are reported but won't block the commit
-  - Run `uvx safety check` for detailed vulnerability reports
+  - Run `uv run safety check` for detailed vulnerability reports
 
 ### Skipping Hooks
 
@@ -85,16 +85,16 @@ uvx ruff check
 uvx ty check
 
 # Run security scan
-uvx bandit -r src/
+uv run bandit -r src/
 
 # Run security scan with verbose output
-uvx bandit -r src/ -ll
+uv run bandit -r src/ -ll
 
 # Check dependencies for vulnerabilities
-uvx safety check
+uv run safety check
 
 # Get detailed JSON report of vulnerabilities
-uvx safety check --json
+uv run safety check --json
 ```
 
 ### Running Tests

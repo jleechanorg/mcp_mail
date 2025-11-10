@@ -21,8 +21,8 @@ This document provides a quick reference for all the code quality tools used in 
 # Run all checks manually
 uvx ruff check --fix --unsafe-fixes  # Lint and auto-fix
 uvx ty check                         # Type check
-uvx bandit -r src/ -ll               # Security scan
-uvx safety check                     # Dependency check
+uv run bandit -r src/ -ll            # Security scan
+uv run safety check                  # Dependency check
 uv run pytest                        # Run tests
 
 # Skip pre-commit hook (not recommended)
@@ -116,7 +116,7 @@ password = os.getenv("PASSWORD")  # nosec B105
 Create `.safety-policy.yml` to ignore specific CVEs:
 ```yaml
 security:
-  ignore-cvs:
+  ignore-cves:
     - CVE-2023-12345  # Reason: False positive
 ```
 
