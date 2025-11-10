@@ -59,6 +59,7 @@ from .share import (
     summarize_snapshot,
     write_bundle_scaffolding,
 )
+from .storage import ensure_archive
 from .utils import slugify
 
 # Suppress annoying bleach CSS sanitizer warning from dependencies
@@ -1123,6 +1124,435 @@ def file_reservations_list(
         )
     console.print(table)
 
+@amctl_app.command("env")
+def amctl_env(
+    project_path: Annotated[Path, typer.Option("--path", "-p", help="Path to repo/worktree",)] = Path(),
+    agent: Annotated[Optional[str], typer.Option("--agent", "-a", help="Agent name (defaults to $AGENT_NAME)")] = None,
+) -> None:
+    """
+    Print environment variables useful for build wrappers (slots, caches, artifacts).
+    """
+    p = project_path.expanduser().resolve()
+    agent_name = agent or os.environ.get("AGENT_NAME") or "Unknown"
+    # Reuse server helper for identity
+    from mcp_agent_mail.app import _resolve_project_identity as _resolve_ident  # type: ignore
+    ident = _resolve_ident(str(p))
+    slug = ident["slug"]
+    project_uid = ident["project_uid"]
+    # Determine branch
+    branch = ident.get("branch") or ""
+    if not branch:
+        try:
+            from git import Repo as _Repo
+            repo = _Repo(str(p), search_parent_directories=True)
+            try:
+                branch = repo.active_branch.name
+            except Exception:
+                branch = repo.git.rev_parse("--abbrev-ref", "HEAD").strip()
+        except Exception:
+            branch = "unknown"
+    # Compute cache key and artifact dir
+    settings = get_settings()
+    cache_key = f"am-cache-{project_uid}-{agent_name}-{branch}"
+    artifact_dir = Path(settings.storage.root).expanduser().resolve() / "projects" / slug / "artifacts" / agent_name / branch
+    # Print as KEY=VALUE lines
+    console.print(f"SLUG={slug}")
+    console.print(f"PROJECT_UID={project_uid}")
+    console.print(f"BRANCH={branch}")
+    console.print(f"AGENT={agent_name}")
+    console.print(f"CACHE_KEY={cache_key}")
+    console.print(f"ARTIFACT_DIR={artifact_dir}")
+
+
+@app.command(name="am-run")
+def am_run(
+    slot: Annotated[str, typer.Argument(help="Build slot name (e.g., frontend-build)")],
+    cmd: Annotated[list[str], typer.Argument(help="Command to run", nargs=-1)],
+    project_path: Annotated[Path, typer.Option("--path", "-p", help="Path to repo/worktree",)] = Path(),
+    agent: Annotated[Optional[str], typer.Option("--agent", "-a", help="Agent name (defaults to $AGENT_NAME)")] = None,
+) -> None:
+    """
+    Build wrapper that prepares environment variables and manages a build slot:
+    - Acquires the slot (advisory), prints conflicts in warn mode.
+    - Renews lease in the background while the child runs.
+    - Releases the slot on exit.
+    """
+    p = project_path.expanduser().resolve()
+    agent_name = agent or os.environ.get("AGENT_NAME") or "Unknown"
+    from mcp_agent_mail.app import _resolve_project_identity as _resolve_ident  # type: ignore
+    ident = _resolve_ident(str(p))
+    slug = ident["slug"]
+    project_uid = ident["project_uid"]
+    branch = ident.get("branch") or ""
+    if not branch:
+        try:
+            from git import Repo as _Repo
+            repo = _Repo(str(p), search_parent_directories=True)
+            try:
+                branch = repo.active_branch.name
+            except Exception:
+                branch = repo.git.rev_parse("--abbrev-ref", "HEAD").strip()
+        except Exception:
+            branch = "unknown"
+    settings = get_settings()
+    guard_mode = (os.environ.get("AGENT_MAIL_GUARD_MODE", "block") or "block").strip().lower()
+    worktrees_enabled = bool(settings.worktrees_enabled)
+
+    def _safe_component(value: str) -> str:
+        s = value.strip()
+        for ch in ("/", "\\\\", ":", "*", "?", "\"", "<", ">", "|", " "):
+            s = s.replace(ch, "_")
+        return s or "unknown"
+
+    async def _ensure_slot_paths() -> Path:
+        archive = await ensure_archive(settings, slug)
+        slot_dir = archive.root / "build_slots" / _safe_component(slot)
+        slot_dir.mkdir(parents=True, exist_ok=True)
+        return slot_dir
+
+    def _read_active(slot_dir: Path) -> list[dict[str, Any]]:
+        now = datetime.now(timezone.utc)
+        results: list[dict[str, Any]] = []
+        for f in slot_dir.glob("*.json"):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                exp = data.get("expires_ts")
+                if exp:
+                    try:
+                        if datetime.fromisoformat(exp) <= now:
+                            continue
+                    except Exception:
+                        pass
+                results.append(data)
+            except Exception:
+                continue
+        return results
+
+    def _lease_path(slot_dir: Path) -> Path:
+        holder = _safe_component(f"{agent_name}__{branch or 'unknown'}")
+        return slot_dir / f"{holder}.json"
+    env = os.environ.copy()
+    env.update({
+        "AM_SLOT": slot,
+        "SLUG": slug,
+        "PROJECT_UID": project_uid or "",
+        "BRANCH": branch,
+        "AGENT": agent_name,
+        "CACHE_KEY": f"am-cache-{project_uid}-{agent_name}-{branch}",
+    })
+    lease_path: Optional[Path] = None
+    renew_stop = threading.Event()
+    renew_thread: Optional[threading.Thread] = None
+    ttl_seconds = 3600
+    try:
+        if worktrees_enabled:
+            slot_dir = asyncio.run(_ensure_slot_paths())
+            active = _read_active(slot_dir)
+            conflicts = [
+                e for e in active
+                if e.get("exclusive", True) and not (e.get("agent") == agent_name and e.get("branch") == branch)
+            ]
+            if conflicts and guard_mode == "warn":
+                console.print("[yellow]Build slot conflicts (advisory, proceeding):[/]")
+                for c in conflicts:
+                    console.print(
+                        f"  - slot={c.get('slot','')} agent={c.get('agent','')} "
+                        f"branch={c.get('branch','')} expires={c.get('expires_ts','')}"
+                    )
+            lease_path = _lease_path(slot_dir)
+            payload = {
+                "slot": slot,
+                "agent": agent_name,
+                "branch": branch,
+                "exclusive": True,
+                "acquired_ts": datetime.now(timezone.utc).isoformat(),
+                "expires_ts": (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).isoformat(),
+            }
+            with suppress(Exception):
+                lease_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            def _renewer() -> None:
+                interval = max(60, ttl_seconds // 2)
+                while not renew_stop.wait(interval):
+                    try:
+                        now = datetime.now(timezone.utc)
+                        new_exp = now + timedelta(seconds=max(60, ttl_seconds // 2))
+                        try:
+                            current = json.loads(lease_path.read_text(encoding="utf-8")) if lease_path else {}
+                        except Exception:
+                            current = {}
+                        current.update({"expires_ts": new_exp.isoformat()})
+                        if lease_path:
+                            lease_path.write_text(json.dumps(current, indent=2), encoding="utf-8")
+                    except Exception:
+                        continue
+            renew_thread = threading.Thread(target=_renewer, name="am-run-renew", daemon=True)
+            renew_thread.start()
+        console.print(f"[cyan]$ {' '.join(cmd)}[/]  [dim](slot={slot})[/]")
+        rc = subprocess.run(list(cmd), env=env, check=False).returncode
+    except FileNotFoundError:
+        rc = 127
+    finally:
+        if worktrees_enabled and lease_path:
+            try:
+                now = datetime.now(timezone.utc)
+                try:
+                    data = json.loads(lease_path.read_text(encoding="utf-8"))
+                except Exception:
+                    data = {}
+                data.update({"released_ts": now.isoformat(), "expires_ts": now.isoformat()})
+                with suppress(Exception):
+                    lease_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+            finally:
+                renew_stop.set()
+                if renew_thread and renew_thread.is_alive():
+                    renew_thread.join(timeout=1.0)
+    if rc != 0:
+        raise typer.Exit(code=rc)
+
+@mail_app.command("status")
+def mail_status(
+    project_path: Annotated[
+        Path,
+        typer.Argument(..., help="Absolute path to a repo/worktree directory (use '.' for current)."),
+    ],
+) -> None:
+    """
+    Print routing diagnostics: gate state, configured identity mode, normalized remote (if any),
+    and the slug that would be used for this path.
+    """
+    settings = get_settings()
+    p = project_path.expanduser().resolve()
+    gate = settings.worktrees_enabled
+    mode = (settings.project_identity_mode or "dir").strip().lower()
+    remote_name = (settings.project_identity_remote or "origin").strip()
+
+    def _norm_remote(url: Optional[str]) -> Optional[str]:
+        if not url:
+            return None
+        u = url.strip()
+        try:
+            if u.startswith("git@"):
+                host = u.split("@", 1)[1].split(":", 1)[0]
+                path = u.split(":", 1)[1]
+            else:
+                from urllib.parse import urlparse as _urlparse
+                pr = _urlparse(u)
+                host = pr.hostname or ""
+                path = (pr.path or "")
+        except Exception:
+            return None
+        if not host:
+            return None
+        path = path.lstrip("/")
+        if path.endswith(".git"):
+            path = path[:-4]
+        parts = [seg for seg in path.split("/") if seg]
+        if len(parts) < 2:
+            return None
+        owner, repo = parts[0], parts[1]
+        return f"{host}/{owner}/{repo}"
+
+    normalized_remote: Optional[str] = None
+    try:
+        from git import Repo as _Repo  # local import to avoid CLI startup cost
+        repo = _Repo(str(p), search_parent_directories=True)
+        try:
+            url = repo.git.remote("get-url", remote_name).strip() or None
+        except Exception:
+            try:
+                r = next((r for r in repo.remotes if r.name == remote_name), None)
+                url = next(iter(r.urls), None) if r and r.urls else None
+            except Exception:
+                url = None
+        normalized_remote = _norm_remote(url)
+    except Exception:
+        normalized_remote = None
+
+    # Compute a candidate slug using the same logic as the server helper (summarized)
+    from mcp_agent_mail.app import _compute_project_slug as _compute_slug  # type: ignore
+    slug_value = _compute_slug(str(p))
+
+    table = Table(title="Mail routing status", show_lines=False)
+    table.add_column("Field")
+    table.add_column("Value")
+    table.add_row("WORKTREES_ENABLED", "true" if gate else "false")
+    table.add_row("PROJECT_IDENTITY_MODE", mode or "dir")
+    table.add_row("PROJECT_IDENTITY_REMOTE", remote_name)
+    table.add_row("normalized_remote", normalized_remote or "")
+    table.add_row("slug", slug_value)
+    table.add_row("path", str(p))
+    console.print(table)
+
+
+@guard_app.command("status")
+def guard_status(
+    repo: Annotated[Path, typer.Argument(..., help="Path to git repo")],
+) -> None:
+    """
+    Print guard status: gate/mode, resolved hooks directory, and presence of hooks.
+    """
+    settings = get_settings()
+    p = repo.expanduser().resolve()
+    gate = settings.worktrees_enabled
+    mode = (settings.project_identity_mode or "dir").strip().lower()
+    guard_mode = (os.environ.get("AGENT_MAIL_GUARD_MODE", "block") or "block").strip().lower()
+
+    def _git(cwd: Path, *args: str) -> str | None:
+        try:
+            cp = subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True, text=True)
+            return cp.stdout.strip()
+        except Exception:
+            return None
+
+    hooks_path = _git(p, "config", "--get", "core.hooksPath")
+    if hooks_path:
+        if hooks_path.startswith("/") or ((((len(hooks_path) > 1) and (hooks_path[1:3] == ":\\")) or (hooks_path[1:3] == ":/"))):
+            hooks_dir = Path(hooks_path)
+        else:
+            root = _git(p, "rev-parse", "--show-toplevel") or str(p)
+            hooks_dir = Path(root) / hooks_path
+    else:
+        git_dir = _git(p, "rev-parse", "--git-dir") or ".git"
+        g = Path(git_dir)
+        if not g.is_absolute():
+            g = p / g
+        hooks_dir = g / "hooks"
+
+    pre_commit = hooks_dir / "pre-commit"
+    pre_push = hooks_dir / "pre-push"
+
+    table = Table(title="Guard status", show_lines=False)
+    table.add_column("Field")
+    table.add_column("Value")
+    table.add_row("WORKTREES_ENABLED", "true" if gate else "false")
+    table.add_row("AGENT_MAIL_GUARD_MODE", guard_mode)
+    table.add_row("PROJECT_IDENTITY_MODE", mode or "dir")
+    table.add_row("hooks_dir", str(hooks_dir))
+    table.add_row("pre-commit", "present" if pre_commit.exists() else "missing")
+    table.add_row("pre-push", "present" if pre_push.exists() else "missing")
+    console.print(table)
+
+@projects_app.command("adopt")
+def projects_adopt(
+    source: Annotated[str, typer.Argument(..., help="Old project slug or human key")],
+    target: Annotated[str, typer.Argument(..., help="New project slug or project_uid (future)")],
+    dry_run: Annotated[bool, typer.Option("--dry-run/--apply", help="Show plan without applying changes.")] = True,
+) -> None:
+    """
+    Plan consolidation of legacy per-worktree projects into a canonical project.
+    NOTE: Apply is not yet implemented; this command currently prints a dry-run only.
+    """
+    async def _load(slug_or_key: str) -> Project:
+        return await _get_project_record(slug_or_key)
+
+    try:
+        src, dst = asyncio.run(asyncio.gather(_load(source), _load(target)))
+    except Exception as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    if src.id == dst.id:
+        console.print("[yellow]Source and target refer to the same project; nothing to do.[/]")
+        return
+
+    plan: list[str] = []
+    plan.append(f"Source: id={src.id} slug={src.slug} key={src.human_key}")
+    plan.append(f"Target: id={dst.id} slug={dst.slug} key={dst.human_key}")
+
+    # Heuristic: same repo if git-common-dir hashes match
+    def _git(path: Path, *args: str) -> str | None:
+        try:
+            cp = subprocess.run(["git", "-C", str(path), *args], check=True, capture_output=True, text=True)
+            return cp.stdout.strip()
+        except Exception:
+            return None
+
+    src_gdir = _git(Path(src.human_key), "rev-parse", "--git-common-dir")
+    dst_gdir = _git(Path(dst.human_key), "rev-parse", "--git-common-dir")
+    same_repo = bool(src_gdir and dst_gdir and Path(src_gdir).resolve() == Path(dst_gdir).resolve())
+    plan.append(f"Same repo (git-common-dir): {'yes' if same_repo else 'no'}")
+
+    if not same_repo:
+        console.print("[red]Refusing to adopt: projects do not appear to belong to the same repository.[/]")
+        return
+
+    # Describe filesystem moves (archive layout)
+    settings = get_settings()
+    from .storage import ensure_archive as _ensure_archive
+    src_archive = asyncio.run(_ensure_archive(settings, src.slug))
+    dst_archive = asyncio.run(_ensure_archive(settings, dst.slug))
+    plan.append(f"Move Git artifacts: {src_archive.root} -> {dst_archive.root}")
+    plan.append("Re-key DB rows: source project_id -> target project_id (messages, agents, file_reservations, etc.)")
+    plan.append("Write aliases.json under target 'projects/<slug>/' with former_slugs")
+
+    console.print("[bold]Projects adopt plan (dry-run)[/bold]")
+    for line in plan:
+        console.print(f"- {line}")
+
+    if dry_run:
+        return
+    # Apply phase
+    async def _apply() -> None:
+        if src.id is None or dst.id is None:
+            raise typer.BadParameter("Projects must be persisted (id not null).")
+        # Detect agent name conflicts
+        await ensure_schema()
+        async with get_session() as session:
+            src_agents = [row[0] for row in (await session.execute(select(Agent.name).where(Agent.project_id == src.id))).all()]
+            dst_agents = [row[0] for row in (await session.execute(select(Agent.name).where(Agent.project_id == dst.id))).all()]
+            dup = sorted(set(src_agents).intersection(set(dst_agents)))
+            if dup:
+                raise typer.BadParameter(f"Agent name conflicts in target project: {', '.join(dup)}")
+        # Move Git artifacts
+        settings = get_settings()
+        # local import to minimize top-level churn and keep ordering stable
+        from .storage import AsyncFileLock as _AsyncFileLock, ensure_archive as _ensure_archive  # type: ignore
+        src_archive = asyncio.run(_ensure_archive(settings, src.slug))
+        dst_archive = asyncio.run(_ensure_archive(settings, dst.slug))
+        moved_relpaths: list[str] = []
+        for path in sorted(src_archive.root.rglob("*"), key=str):
+            if not path.is_file():
+                continue
+            if path.name.endswith(".lock") or path.name.endswith(".lock.owner.json"):
+                continue
+            rel_from_root = path.relative_to(src_archive.root)
+            dest_path = dst_archive.root / rel_from_root
+            await asyncio.to_thread(dest_path.parent.mkdir, parents=True, exist_ok=True)
+            if dest_path.exists():
+                continue
+            await asyncio.to_thread(path.replace, dest_path)
+            moved_relpaths.append(dest_path.relative_to(dst_archive.repo_root).as_posix())
+        from .storage import _commit as _archive_commit  # type: ignore
+        async with _AsyncFileLock(dst_archive.lock_path):
+            await _archive_commit(dst_archive.repo, settings, f"adopt: move {src.slug} into {dst.slug}", moved_relpaths)
+        # Re-key database rows (agents, messages, file_reservations)
+        async with get_session() as session:
+            from sqlalchemy import update as _update  # local import to avoid top-of-file churn
+            await session.execute(_update(Agent).where(Agent.project_id == src.id).values(project_id=dst.id))
+            await session.execute(_update(Message).where(Message.project_id == src.id).values(project_id=dst.id))
+            await session.execute(_update(FileReservation).where(FileReservation.project_id == src.id).values(project_id=dst.id))
+            await session.commit()
+        # Write aliases.json under target
+        aliases_path = dst_archive.root / "aliases.json"
+        try:
+            existing = {}
+            if aliases_path.exists():
+                existing = json.loads(aliases_path.read_text(encoding="utf-8"))
+            former = set(existing.get("former_slugs", []))
+            former.add(src.slug)
+            existing["former_slugs"] = sorted(former)
+            await asyncio.to_thread(aliases_path.write_text, json.dumps(existing, indent=2), "utf-8")
+            rel_alias = aliases_path.relative_to(dst_archive.repo_root).as_posix()
+            await _archive_commit(dst_archive.repo, settings, f"adopt: record alias for {src.slug}", [rel_alias])
+        except Exception as exc:
+            console.print(f"[yellow]Warning: failed to write aliases.json: {exc}[/]")
+
+    try:
+        asyncio.run(_apply())
+        console.print("[green]Adoption apply completed.[/]")
+    except Exception as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
 @file_reservations_app.command("active")
 def file_reservations_active(
