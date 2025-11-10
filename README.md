@@ -1,6 +1,6 @@
 <div align="center">
 
-# MCP Agent Mail
+# MCP Mail (Forked from mcp_agent_mail)
 
 [![PyPI version](https://badge.fury.io/py/mcp-mail.svg)](https://pypi.org/project/mcp-mail/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
