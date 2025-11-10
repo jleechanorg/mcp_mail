@@ -5,7 +5,6 @@
 [![PyPI version](https://badge.fury.io/py/mcp-mail.svg)](https://pypi.org/project/mcp-mail/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Downloads](https://pepy.tech/badge/mcp-mail)](https://pepy.tech/project/mcp-mail)
 
 **A mail-like coordination layer for coding agents**
 
