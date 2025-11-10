@@ -4172,7 +4172,7 @@ def build_mcp_server() -> FastMCP:
                     .join(sender_alias, Message.sender_id == sender_alias.id)
                     .join(MessageRecipient, MessageRecipient.message_id == Message.id)
                     .join(recipient_alias, MessageRecipient.agent_id == recipient_alias.id)
-                    .where(Message.id.in_(message_ids))
+                    .where(cast(Any, Message.id).in_(message_ids))
                 )
 
                 # Apply agent filter if specified
@@ -4190,7 +4190,7 @@ def build_mcp_server() -> FastMCP:
 
                 # Group recipients by message
                 messages_dict: dict[int, dict[str, Any]] = {}
-                for msg, sender_name, kind, recipient_name, recipient_id in message_rows:
+                for msg, sender_name, kind, recipient_name, _recipient_id in message_rows:
                     msg_id = msg.id
                     if msg_id not in messages_dict:
                         relevance_score, subject_snippet, body_snippet = relevance_map[msg_id]
