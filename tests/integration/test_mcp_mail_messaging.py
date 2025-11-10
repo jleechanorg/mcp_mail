@@ -559,7 +559,7 @@ async def test_malformed_message_handling(mcp_mail_repo):
 
     # Manually write a malformed line
     messages_file = mcp_mail_repo / ".mcp_mail" / "messages.jsonl"
-    with open(messages_file, "a") as f:
+    with messages_file.open("a") as f:
         f.write("this is not json\n")
 
     # Write another good message
