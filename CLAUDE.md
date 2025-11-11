@@ -57,7 +57,7 @@ Example usage:
 gh pr create --title "My PR" --body "Description"
 
 # For direct API calls
-curl -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/repos/owner/repo
+curl -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/owner/repo
 ```
 
 Example GitHub Actions workflow:

@@ -25,7 +25,7 @@ gh pr create --title "Feature: Add new capability" --body "Description"
 gh issue create --title "Bug: Fix error" --body "Details"
 
 # Direct GitHub API calls
-curl -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/repos/owner/repo/pulls
+curl -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/owner/repo/pulls
 
 # Git with authentication (if needed)
 git clone https://x-access-token:$GITHUB_TOKEN@github.com/owner/repo.git
@@ -39,7 +39,7 @@ Example GitHub Actions workflow:
 
 - name: Call GitHub API
   run: |
-    curl -H "Authorization: token $GITHUB_TOKEN" \
+    curl -H "Authorization: Bearer $GITHUB_TOKEN" \
          https://api.github.com/repos/owner/repo/pulls
 ```
 
