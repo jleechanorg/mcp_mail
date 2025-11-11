@@ -12,7 +12,7 @@ worker_class = "uvicorn.workers.UvicornWorker"
 
 # Graceful timeouts to match long running tasks.
 keepalive = 5
-graceful_timeout = 60
+graceful_timeout = 180  # Increased to 180 seconds (60% of timeout) to better match long-running operations
 timeout = 300  # Increased from 120 to 300 seconds (5 minutes) to handle slow fetch operations
 
 # Location for PID/log files (customize as desired).
