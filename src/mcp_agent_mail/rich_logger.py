@@ -449,13 +449,13 @@ def tool_call_logger(
 
 def log_info(message: str, **kwargs) -> None:
     """Log an informational message with Rich formatting."""
-    text = Text(f"ℹ️  {message}", style="bold bright_cyan")  # noqa: RUF001
+    text = Text(f"ℹ️  {message}", style="bold bright_cyan")
     if kwargs:
         details = _safe_json_format(kwargs, max_length=500)
         syntax = Syntax(details, "json", theme="dracula", line_numbers=False, word_wrap=True)
         panel = Panel(
             syntax,
-            title="[bold bright_cyan]ℹ️  Details[/bold bright_cyan]",  # noqa: RUF001
+            title="[bold bright_cyan]ℹ️  Details[/bold bright_cyan]",
             border_style="bright_cyan",
             box=box.ROUNDED,
             padding=(0, 1),
@@ -666,7 +666,7 @@ def log_message_with_metadata(
         header = Text(f"❌ {message}", style="bold bright_red")
         border_style = "bright_red"
     else:
-        header = Text(f"ℹ️  {message}", style="bold bright_cyan")  # noqa: RUF001
+        header = Text(f"ℹ️  {message}", style="bold bright_cyan")
         border_style = "bright_cyan"
 
     components.append(header)

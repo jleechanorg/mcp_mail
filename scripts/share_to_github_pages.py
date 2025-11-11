@@ -1017,6 +1017,7 @@ def main() -> None:
         clear_resume_state()
 
     elif deployment.get("type") == "github-new":
+        # Create repo
         success, repo_full_name = create_github_repo(
             deployment.get("repo_name", "mailbox-viewer"),
             deployment.get("private", False),
@@ -1025,125 +1026,77 @@ def main() -> None:
         if not success:
             sys.exit(1)
 
-        # Preview
-        if not Confirm.ask("\nPreview the bundle before deploying?", default=True):
-            satisfied = True
-        else:
-            satisfied = preview_bundle(temp_path)
+        # Init and push (use bundle_path directly, no need to copy)
+        if not init_and_push_repo(bundle_path, repo_full_name):
+            sys.exit(1)
 
-        if not satisfied:
-            console.print("[yellow]Deployment cancelled[/]")
-            sys.exit(0)
-
-        # Deploy based on target
-        if deployment.get("type") == "local":
-            output_path = Path(deployment.get("path", "./mailbox-export")).expanduser().resolve()
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(temp_path, output_path, dirs_exist_ok=True)
-            console.print(f"\n[bold green]✓ Exported to: {output_path}[/]")
+        # Enable Pages
+        success, pages_url = enable_github_pages(repo_full_name)
+        if success:
+            console.print(
+                Panel.fit(
+                    f"[bold green]Deployment Complete![/]\n\n"
+                    f"Repository: https://github.com/{repo_full_name}\n"
+                    f"GitHub Pages: {pages_url}\n\n"
+                    f"[dim]Note: Pages may take 1-2 minutes to become available[/]",
+                    title="Success",
+                    border_style="green",
+                )
+            )
 
             if signing_pub:
-                console.print(f"[green]✓ Signing public key: {signing_pub}[/]")
+                console.print(f"\n[cyan]Signing public key saved to:[/] {signing_pub}")
+                console.print("[dim]Share this with viewers to verify bundle authenticity[/]")
 
-            console.print(
-                "\n[cyan]To refresh this deployment later, run:[/]\n"
-                f"  uv run python -m mcp_agent_mail.cli share update {shlex.quote(str(bundle_path))}\n"
-                f"  wrangler pages deploy {shlex.quote(str(bundle_path))} --project-name {deployment.get('project_name', 'mailbox-viewer')} --branch main"
-            )
-
-            console.print(
-                "\n[cyan]To publish fresh mailbox data later, run:[/]\n"
-                f"  uv run python -m mcp_agent_mail.cli share update {shlex.quote(str(bundle_path))}\n"
-                "  git add . && git commit -m \"Refresh mailbox\" && git push"
-            )
-
+            # Save config for next run
             save_config({
                 "project_indices": selected_indices,
                 "project_count": len(selected_projects),
                 "scrub_preset": scrub_preset,
                 "deployment": deployment,
-                "deployment_type": "local",
+                "deployment_type": "github-new",
                 "use_signing": use_signing,
                 "generate_new_key": generate_new_key,
             })
+        else:
+            console.print("\n[yellow]Repository created but Pages setup failed[/]")
+            console.print(f"Visit https://github.com/{repo_full_name}/settings/pages to enable manually")
 
-        elif deployment.get("type") == "github-new":
-            # Create repo
-            success, repo_full_name = create_github_repo(
-                deployment.get("repo_name", "mailbox-viewer"),
-                deployment.get("private", False),
-                deployment.get("description", "MCP Agent Mail static viewer"),
+        clear_resume_state()
+
+    elif deployment.get("type") == "cloudflare-pages":
+        # Deploy to Cloudflare Pages
+        success, pages_url = deploy_to_cloudflare_pages(bundle_path, deployment.get("project_name", "mailbox-viewer"))
+        if success:
+            console.print(
+                Panel.fit(
+                    f"[bold green]Deployment Complete![/]\n\n"
+                    f"Cloudflare Pages: {pages_url}\n\n"
+                    f"[dim]Note: Your site should be live immediately[/]",
+                    title="Success",
+                    border_style="green",
+                )
             )
-            if not success:
-                sys.exit(1)
 
-            # Init and push (use temp_path directly, no need to copy)
-            if not init_and_push_repo(temp_path, repo_full_name):
-                sys.exit(1)
+            if signing_pub:
+                console.print(f"\n[cyan]Signing public key saved to:[/] {signing_pub}")
+                console.print("[dim]Share this with viewers to verify bundle authenticity[/]")
 
-            # Enable Pages
-            success, pages_url = enable_github_pages(repo_full_name)
-            if success:
-                console.print(
-                    Panel.fit(
-                        f"[bold green]Deployment Complete![/]\n\n"
-                        f"Repository: https://github.com/{repo_full_name}\n"
-                        f"GitHub Pages: {pages_url}\n\n"
-                        f"[dim]Note: Pages may take 1-2 minutes to become available[/]",
-                        title="Success",
-                        border_style="green",
-                    )
-                )
+            # Save config for next run
+            save_config({
+                "project_indices": selected_indices,
+                "project_count": len(selected_projects),
+                "scrub_preset": scrub_preset,
+                "deployment": deployment,
+                "deployment_type": "cloudflare-pages",
+                "use_signing": use_signing,
+                "generate_new_key": generate_new_key,
+            })
+        else:
+            console.print("\n[yellow]Cloudflare Pages deployment failed[/]")
+            sys.exit(1)
 
-                if signing_pub:
-                    console.print(f"\n[cyan]Signing public key saved to:[/] {signing_pub}")
-                    console.print("[dim]Share this with viewers to verify bundle authenticity[/]")
-
-                # Save config for next run
-                save_config({
-                    "project_indices": selected_indices,
-                    "project_count": len(selected_projects),
-                    "scrub_preset": scrub_preset,
-                    "deployment": deployment,
-                    "deployment_type": "github-new",
-                    "use_signing": use_signing,
-                    "generate_new_key": generate_new_key,
-                })
-            else:
-                console.print("\n[yellow]Repository created but Pages setup failed[/]")
-                console.print(f"Visit https://github.com/{repo_full_name}/settings/pages to enable manually")
-
-        elif deployment.get("type") == "cloudflare-pages":
-            # Deploy to Cloudflare Pages
-            success, pages_url = deploy_to_cloudflare_pages(temp_path, deployment.get("project_name", "mailbox-viewer"))
-            if success:
-                console.print(
-                    Panel.fit(
-                        f"[bold green]Deployment Complete![/]\n\n"
-                        f"Cloudflare Pages: {pages_url}\n\n"
-                        f"[dim]Note: Your site should be live immediately[/]",
-                        title="Success",
-                        border_style="green",
-                    )
-                )
-
-                if signing_pub:
-                    console.print(f"\n[cyan]Signing public key saved to:[/] {signing_pub}")
-                    console.print("[dim]Share this with viewers to verify bundle authenticity[/]")
-
-                # Save config for next run
-                save_config({
-                    "project_indices": selected_indices,
-                    "project_count": len(selected_projects),
-                    "scrub_preset": scrub_preset,
-                    "deployment": deployment,
-                    "deployment_type": "cloudflare-pages",
-                    "use_signing": use_signing,
-                    "generate_new_key": generate_new_key,
-                })
-            else:
-                console.print("\n[yellow]Cloudflare Pages deployment failed[/]")
-                sys.exit(1)
+        clear_resume_state()
 
 
 if __name__ == "__main__":
