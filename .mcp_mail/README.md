@@ -6,16 +6,16 @@ Git-backed messaging system for AI agents across platforms (local, Codex web, Cl
 
 - **messages.jsonl** - Source of truth (committed to git)
 - **SQLite cache** - Fast parallel reads with WAL mode (optional, .gitignored)
-- **Hash-based IDs** - Collision-free concurrent message creation
-- **Async writes** - Non-blocking git operations for zero latency
+- **UUID-based IDs** - Collision-free concurrent message creation
+- **Append-only writes** - O_APPEND style JSONL appends keep writes simple
 - **Parallel access** - Multiple agents can read/write simultaneously
-- **Cross-repo support** - Messages written to both sender and receiver repos
+- **Git history** - Messages flow through normal commits for auditing
 
 ## Parallel Access Features
 
 ### Concurrent Writes
 - **Atomic appends**: JSONL naturally supports parallel writes via O_APPEND flag
-- **Unique IDs**: Hash-based IDs prevent collisions in concurrent writes
+- **Unique IDs**: UUID-based IDs prevent collisions in concurrent writes
 - **Cache updates**: SQLite cache updated immediately after JSONL write
 
 ### Concurrent Reads
@@ -57,68 +57,126 @@ Git-backed messaging system for AI agents across platforms (local, Codex web, Cl
 ### Basic Operations
 
 ```python
-from mcp_agent_mail.mail import MCPMail
+from __future__ import annotations
 
-# Create mail instance (cache enabled by default for parallel access)
-mail = MCPMail()
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+import uuid
 
-# Send message (parallel-safe, atomic append)
-await mail.send({
-  "to": {"agent": "codex-web", "repo": "/path/to/repo"},
-  "subject": "Hello",
-  "body": "Message content"
+repo_path = Path("/path/to/repo")
+messages_file = repo_path / ".mcp_mail" / "messages.jsonl"
+
+
+def append_message(message: dict) -> dict:
+    """Append a message to messages.jsonl and return the stored payload."""
+
+    enriched = {**message}
+    enriched.setdefault("id", f"msg-{uuid.uuid4()}")
+    enriched.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+    enriched.setdefault(
+        "from",
+        {"agent": "example-agent", "repo": str(repo_path), "branch": "main"},
+    )
+
+    with messages_file.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(enriched) + "\n")
+
+    return enriched
+
+
+def load_messages() -> list[dict]:
+    """Return every well-formed message from messages.jsonl."""
+
+    if not messages_file.exists():
+        return []
+
+    messages: list[dict] = []
+    with messages_file.open(encoding="utf-8") as stream:
+        for line in stream:
+            if not line.strip():
+                continue
+            try:
+                messages.append(json.loads(line))
+            except json.JSONDecodeError:
+                # Malformed lines are ignored so a single bad entry does not
+                # block the rest of the log.
+                continue
+
+    return messages
+
+
+# Write a message and inspect the resulting log
+append_message({
+    "to": {"agent": "codex-web", "repo": "/path/to/repo"},
+    "subject": "Hello",
+    "body": "Message content",
 })
 
-# List messages (parallel reads from SQLite cache)
-messages = await mail.list(unread=True)
-
-# Sync with git
-await mail.sync()
-
-# Close connection (cleanup SQLite)
-mail.close()
+for entry in load_messages():
+    print(entry["subject"], "→", entry["to"]["agent"])
 ```
 
 ### Parallel Access Example
 
 ```python
-# Multiple agents can operate simultaneously
-agent1 = MCPMail('/path/to/repo')
-agent2 = MCPMail('/path/to/repo')
-agent3 = MCPMail('/path/to/repo')
+import asyncio
 
-# Concurrent writes - all succeed without conflicts
-await asyncio.gather(
-  agent1.send({"to": {"agent": "receiver"}, "subject": "From 1", "body": "Content"}),
-  agent2.send({"to": {"agent": "receiver"}, "subject": "From 2", "body": "Content"}),
-  agent3.send({"to": {"agent": "receiver"}, "subject": "From 3", "body": "Content"}),
-)
 
-# Concurrent reads - all get consistent data
-list1, list2, list3 = await asyncio.gather(
-  agent1.list(),
-  agent2.list(to_agent="receiver"),
-  agent3.count(unread=True),
-)
+async def concurrent_writes():
+    await asyncio.gather(
+        asyncio.to_thread(
+            append_message,
+            {"to": {"agent": "receiver"}, "subject": "From 1", "body": "Content"},
+        ),
+        asyncio.to_thread(
+            append_message,
+            {"to": {"agent": "receiver"}, "subject": "From 2", "body": "Content"},
+        ),
+        asyncio.to_thread(
+            append_message,
+            {"to": {"agent": "receiver"}, "subject": "From 3", "body": "Content"},
+        ),
+    )
 
-# Cleanup
-for agent in [agent1, agent2, agent3]:
-    agent.close()
+
+async def concurrent_reads():
+    return await asyncio.gather(
+        asyncio.to_thread(load_messages),
+        asyncio.to_thread(load_messages),
+        asyncio.to_thread(load_messages),
+    )
+
+
+async def main():
+    await concurrent_writes()
+    reads = await concurrent_reads()
+    print(f"Observed {len(reads[0])} messages from three parallel readers")
+
+
+asyncio.run(main())
 ```
 
 ### Configuration Options
 
-```python
-# Enable cache (default - recommended for parallel access)
-mail = MCPMail('/path/to/repo', cache=True)
-
-# Disable cache (JSONL-only mode)
-mail = MCPMail('/path/to/repo', cache=False)
-```
+- **Repository path (required)**: point tools at the git repository that owns
+  the `.mcp_mail/` directory.
+- **Cache toggle (optional)**: the MCP server populates a SQLite cache next to
+  `messages.jsonl`. Agents that only need the JSONL log can ignore it, while
+  high-throughput agents can opt-in to reading from the cache for better
+  latency.
+- **Git integration**: commits are still handled by `git add` / `git commit`.
+  The integration tests in `tests/integration/test_mcp_mail_messaging.py`
+  demonstrate atomic writes followed by commits.
 
 ## MCP Tools
 
-- **mcp_mail.send** - Send message to another agent
-- **mcp_mail.list** - List messages with filters
-- **mcp_mail.read** - Read specific message
-- **mcp_mail.sync** - Pull/push messages via git
+- **send_message** - Send message to another agent via the MCP server
+- **list_messages** - List messages with filters (recipient, thread, unread)
+- **read_message** - Retrieve a specific message by identifier
+- **sync_mailbox** - Trigger git pull/push synchronization
+
+> **Note:** The MCP implementation lives in the `mcp_agent_mail` package. When
+> you launch the server (for example with `uv run python -m mcp_agent_mail`),
+> these tool names are exposed directly on the MCP interface—no intermediate
+> `mcp_mail.*` module prefix is required.
