@@ -162,7 +162,6 @@ async def test_e2e_materialized_views_with_share_export(isolated_env, tmp_path: 
     """End-to-end test: Create messages, export with materialized views and indexes."""
     import sqlite3
 
-
     # Create a snapshot database
     snapshot = tmp_path / "export.sqlite3"
     conn = sqlite3.connect(str(snapshot))
@@ -502,7 +501,6 @@ async def test_e2e_database_optimizations_query_performance(isolated_env, tmp_pa
 async def test_e2e_incremental_share_updates(isolated_env, tmp_path: Path):
     """End-to-end test: Multiple share exports with incremental updates."""
     import sqlite3
-
 
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
