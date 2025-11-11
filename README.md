@@ -116,9 +116,9 @@ This fork extends the original MCP Agent Mail with **9 core enhancements** focus
 
 Every message sent through MCP Agent Mail is stored in **two places** for redundancy and auditability:
 
-**1. Git Repository Archive** (`~/.mcp_agent_mail_git_mailbox_repo/`)
+**1. Git Repository Archive** (`.mcp_mail/` by default - committed to your project)
 ```
-~/.mcp_agent_mail_git_mailbox_repo/
+.mcp_mail/                                  # ← Inside your project directory
 └── projects/
     └── <project-slug>/
         ├── messages/
@@ -136,6 +136,13 @@ Every message sent through MCP Agent Mail is stored in **two places** for redund
         └── file_reservations/
             └── <sha1>.json                 # File lock metadata
 ```
+
+**✅ Benefits of project-local storage (default):**
+- **Transparent collaboration**: All agent conversations committed alongside code
+- **Code review**: Review agent decisions as part of PR reviews
+- **Audit trail**: Full Git history of agent coordination
+- **Portable context**: Clone repo and see all agent communications
+- **Team sharing**: Everyone sees the same agent conversation history
 
 **2. SQLite Database** (`./storage.sqlite3`)
 - Full-text search indexes (FTS5)
@@ -172,27 +179,24 @@ When an agent sends a message via `send_message`, here's what happens:
 - **Portable**: Clone the repo to backup or share message history
 
 **Configuration:**
-- Storage location: `STORAGE_ROOT` env var (default: `~/.mcp_agent_mail_git_mailbox_repo`)
-  - **Global (default)**: `~/.mcp_agent_mail_git_mailbox_repo` - messages stored in user home directory
-  - **Project-local**: `.mcp_mail` - messages stored in project directory and committed to GitHub
+- Storage location: `STORAGE_ROOT` env var (default: `.mcp_mail`)
+  - **Project-local (default)**: `.mcp_mail` - messages stored in project directory and committed to Git
+  - **Global alternative**: `~/.mcp_agent_mail_git_mailbox_repo` - messages stored in user home directory
 - Git author: `GIT_AUTHOR_NAME` and `GIT_AUTHOR_EMAIL` env vars
 
-**💡 Project-Local Storage Option:**
-
-Set `STORAGE_ROOT=.mcp_mail` to store messages inside your project directory instead of globally. This allows you to:
-- ✅ **Commit agent conversations to GitHub** alongside code changes
-- ✅ **Share full audit trail** with your team through Git
-- ✅ **Code review agent decisions** as part of PR reviews
-- ✅ **Track agent collaboration** over time in Git history
-- ✅ **Portable context** - clone repo and see all agent communications
-
-Example:
+**Messages are automatically committed to Git:**
 ```bash
-# Start server with project-local storage
-STORAGE_ROOT=.mcp_mail uv run python -m mcp_agent_mail.http
+# Just run the server - messages go to .mcp_mail/ by default
+uv run python -m mcp_agent_mail.http
 
-# Messages now stored in ./mcp_mail/projects/<slug>/messages/
+# Messages stored in ./mcp_mail/projects/<slug>/messages/
 # Commit to share: git add .mcp_mail && git commit -m "Add agent coordination messages"
+```
+
+**🔒 Want private messages?** Use global storage instead:
+```bash
+# Set STORAGE_ROOT to use global directory (not committed to Git)
+STORAGE_ROOT=~/.mcp_agent_mail_git_mailbox_repo uv run python -m mcp_agent_mail.http
 ```
 
 ---
@@ -1609,7 +1613,7 @@ from decouple import Config as DecoupleConfig, RepositoryEnv
 
 decouple_config = DecoupleConfig(RepositoryEnv(".env"))
 
-STORAGE_ROOT = decouple_config("STORAGE_ROOT", default="~/.mcp_agent_mail_git_mailbox_repo")
+STORAGE_ROOT = decouple_config("STORAGE_ROOT", default=".mcp_mail")
 HTTP_HOST = decouple_config("HTTP_HOST", default="127.0.0.1")
 HTTP_PORT = int(decouple_config("HTTP_PORT", default=8765))
 HTTP_PATH = decouple_config("HTTP_PATH", default="/mcp/")
@@ -1669,7 +1673,7 @@ result = await client.call_tool("list_extended_tools", {})
 
 | Name | Default | Description |
 | :-- | :-- | :-- |
-| `STORAGE_ROOT` | `~/.mcp_agent_mail_git_mailbox_repo` | Root for per-project repos and SQLite DB |
+| `STORAGE_ROOT` | `.mcp_mail` | Root for per-project repos and SQLite DB (project-local by default) |
 | `HTTP_HOST` | `127.0.0.1` | Bind host for HTTP transport |
 | `HTTP_PORT` | `8765` | Bind port for HTTP transport |
 | `HTTP_PATH` | `/mcp/` | HTTP path where MCP endpoint is mounted |
