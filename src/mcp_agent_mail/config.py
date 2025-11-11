@@ -226,7 +226,8 @@ def get_settings() -> Settings:
     )
 
     database_settings = DatabaseSettings(
-        url=_decouple_config("DATABASE_URL", default="sqlite+aiosqlite:///./storage.sqlite3"),
+        # Store SQLite database inside .mcp_mail/ alongside Git archive
+        url=_decouple_config("DATABASE_URL", default="sqlite+aiosqlite:///.mcp_mail/storage.sqlite3"),
         echo=_bool(_decouple_config("DATABASE_ECHO", default="false"), default=False),
     )
 

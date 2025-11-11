@@ -144,12 +144,13 @@ Every message sent through MCP Agent Mail is stored in **two places** for redund
 - **Portable context**: Clone repo and see all agent communications
 - **Team sharing**: Everyone sees the same agent conversation history
 
-**2. SQLite Database** (`./storage.sqlite3`)
+**2. SQLite Database** (`.mcp_mail/storage.sqlite3` - local only, not committed)
 - Full-text search indexes (FTS5)
 - Message metadata (sender, recipients, timestamps)
 - Agent directory and profiles
 - File reservation tracking
 - Fast queries without scanning Git history
+- **Note**: SQLite database is gitignored (`.mcp_mail/*.db*`) - only messages are committed
 
 ### 🔄 Git Commit Flow
 
