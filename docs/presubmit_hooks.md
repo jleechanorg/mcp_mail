@@ -6,25 +6,24 @@ This directory contains presubmit hooks to catch issues locally before they reac
 
 ### Option 1: Using pre-commit framework (Recommended)
 
-Install the pre-commit framework:
+Install the hooks using `uvx` (no global installation needed):
+
+```bash
+uvx pre-commit install --hook-type pre-commit --hook-type pre-push
+```
+
+Run manually to check all files:
+
+```bash
+uvx pre-commit run --all-files
+```
+
+**Note**: `uvx` automatically downloads and runs `pre-commit` without requiring installation. If you prefer to install it globally:
 
 ```bash
 pip install pre-commit
 # or
 uv pip install pre-commit
-```
-
-Install the hooks:
-
-```bash
-pre-commit install
-pre-commit install --hook-type pre-push
-```
-
-Run manually:
-
-```bash
-pre-commit run --all-files
 ```
 
 ### Option 2: Manual git hooks (Alternative)

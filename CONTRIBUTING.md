@@ -24,7 +24,15 @@ We use the [pre-commit framework](https://pre-commit.com/) to ensure code qualit
 
 ### Installing Git Hooks
 
-After cloning the repository, install the git hooks by running:
+After cloning the repository, install the git hooks using one of these methods:
+
+**Option 1: Using uvx (Recommended - No installation needed)**
+
+```bash
+uvx pre-commit install --hook-type pre-commit --hook-type pre-push
+```
+
+**Option 2: Using setup script**
 
 ```bash
 ./scripts/setup_git_hooks.sh
@@ -35,7 +43,7 @@ This script will:
 2. Set up pre-commit and pre-push hooks in your `.git/hooks/` directory
 3. Configure hooks to run automatically on `git commit` and `git push`
 
-Alternatively, you can install manually:
+**Option 3: Manual installation**
 
 ```bash
 uv tool install pre-commit
@@ -71,13 +79,14 @@ Hooks are configured in `.pre-commit-config.yaml`. The configuration includes:
 
 ```bash
 # Run all pre-commit hooks on all files
-pre-commit run --all-files
+uvx pre-commit run --all-files
+# or if pre-commit is installed: pre-commit run --all-files
 
 # Run specific hook
-pre-commit run ruff --all-files
+uvx pre-commit run ruff --all-files
 
 # Run on staged files only (what would run on commit)
-pre-commit run
+uvx pre-commit run
 
 # Update hook versions in config
 pre-commit autoupdate

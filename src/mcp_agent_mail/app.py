@@ -1969,7 +1969,7 @@ async def _find_mentions_in_global_inbox(
             .where(
                 MessageRecipient.agent_id == global_inbox_agent.id,
                 # FTS5 MATCH query - searches subject and body for the agent name
-                text(f"fts_messages MATCH :agent_name"),
+                text("fts_messages MATCH :agent_name"),
             )
             .order_by(desc(Message.created_ts))
             .limit(limit)
