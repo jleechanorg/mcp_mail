@@ -102,6 +102,9 @@ ignore = [
   "E501",
 ]
 
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["ASYNC221"]
+
 [tool.ruff.lint.isort]
 known-first-party = ["mcp_agent_mail"]
 combine-as-imports = true

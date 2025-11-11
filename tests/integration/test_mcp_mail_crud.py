@@ -8,9 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import json
-import shutil
 import subprocess
-import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -195,7 +193,7 @@ async def test_create_message_with_custom_id(mcp_mail_repo):
 @pytest.mark.asyncio
 async def test_create_message_with_metadata(mcp_mail_repo):
     """Test creating a message with metadata."""
-    msg_id = write_message(
+    _msg_id = write_message(
         mcp_mail_repo,
         {
             "to": {"agent": "recipient"},
@@ -270,7 +268,7 @@ async def test_create_threaded_messages(mcp_mail_repo):
 @pytest.mark.asyncio
 async def test_create_message_with_unicode(mcp_mail_repo):
     """Test creating messages with Unicode characters."""
-    msg_id = write_message(
+    _msg_id = write_message(
         mcp_mail_repo,
         {
             "to": {"agent": "recipient"},
@@ -291,7 +289,7 @@ async def test_create_message_with_large_body(mcp_mail_repo):
     """Test creating a message with a large body."""
     large_body = "Lorem ipsum " * 10000  # ~120KB of text
 
-    msg_id = write_message(
+    _msg_id = write_message(
         mcp_mail_repo,
         {
             "to": {"agent": "recipient"},

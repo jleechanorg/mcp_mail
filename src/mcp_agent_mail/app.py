@@ -4174,6 +4174,11 @@ def build_mcp_server() -> FastMCP:
                 sender_alias = aliased(Agent)
                 recipient_alias = aliased(Agent)
 
+                # Fetch agent filter object if specified (for later filtering)
+                agent_filter_obj = None
+                if agent_filter:
+                    agent_filter_obj = await _get_agent(project, agent_filter)
+
                 messages_stmt = (
                     select(
                         Message,
@@ -4190,16 +4195,6 @@ def build_mcp_server() -> FastMCP:
                         Message.project_id == project.id,
                     )
                 )
-
-                # Apply agent filter if specified
-                if agent_filter:
-                    agent_filter_obj = await _get_agent(project, agent_filter)
-                    messages_stmt = messages_stmt.where(
-                        or_(
-                            Message.sender_id == agent_filter_obj.id,
-                            MessageRecipient.agent_id == agent_filter_obj.id
-                        )
-                    )
 
                 messages_result = await session.execute(messages_stmt)
                 message_rows = messages_result.all()
@@ -4233,8 +4228,25 @@ def build_mcp_server() -> FastMCP:
                     elif kind == "bcc":
                         messages_dict[msg_id]["bcc"].append(recipient_name)
 
-                # Convert to list and sort by relevance, prioritizing global inbox messages
+                # Convert to list and apply agent filter if specified
                 results = list(messages_dict.values())
+
+                # Filter messages to only include those involving the agent_filter agent
+                if agent_filter_obj:
+                    filtered_results = []
+                    for msg in results:
+                        # Check if agent is involved (sender or in any recipient list)
+                        is_sender = msg["from"] == agent_filter_obj.name
+                        is_recipient = (
+                            agent_filter_obj.name in msg["to"] or
+                            agent_filter_obj.name in msg.get("cc", []) or
+                            agent_filter_obj.name in msg.get("bcc", [])
+                        )
+                        if is_sender or is_recipient:
+                            filtered_results.append(msg)
+                    results = filtered_results
+
+                # Sort by relevance, prioritizing global inbox messages
                 results.sort(
                     key=lambda x: (
                         0 if x["in_global_inbox"] else 1,  # Global inbox first

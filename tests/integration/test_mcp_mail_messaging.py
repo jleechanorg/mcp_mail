@@ -143,7 +143,7 @@ async def test_basic_message_send_receive(mcp_mail_repo):
     commit_messages(mcp_mail_repo, "Agent 1 sends message")
 
     # Verify git commit
-    result = subprocess.run(  # noqa: ASYNC221
+    result = subprocess.run(
         ["git", "log", "--oneline", "-1"],
         cwd=mcp_mail_repo,
         capture_output=True,
@@ -386,7 +386,7 @@ async def test_git_history_preservation(mcp_mail_repo):
     commit_messages(mcp_mail_repo, "Add message 3")
 
     # Verify git log
-    result = subprocess.run(  # noqa: ASYNC221
+    result = subprocess.run(
         ["git", "log", "--oneline"],
         cwd=mcp_mail_repo,
         capture_output=True,
@@ -402,7 +402,7 @@ async def test_git_history_preservation(mcp_mail_repo):
     assert "Add message 1" in result.stdout
 
     # Verify we can checkout previous state
-    result = subprocess.run(  # noqa: ASYNC221
+    result = subprocess.run(
         ["git", "rev-list", "HEAD"],
         cwd=mcp_mail_repo,
         capture_output=True,
@@ -412,7 +412,7 @@ async def test_git_history_preservation(mcp_mail_repo):
     commits = result.stdout.strip().split("\n")
 
     # Save current branch name
-    branch_result = subprocess.run(  # noqa: ASYNC221
+    branch_result = subprocess.run(
         ["git", "branch", "--show-current"],
         cwd=mcp_mail_repo,
         capture_output=True,
@@ -424,7 +424,7 @@ async def test_git_history_preservation(mcp_mail_repo):
     second_commit = commits[1]  # Second most recent
 
     # Checkout previous commit (detached HEAD)
-    subprocess.run(  # noqa: ASYNC221
+    subprocess.run(
         ["git", "checkout", second_commit],
         cwd=mcp_mail_repo,
         check=True,
@@ -436,7 +436,7 @@ async def test_git_history_preservation(mcp_mail_repo):
     assert len(messages) == 2
 
     # Return to original branch
-    subprocess.run(  # noqa: ASYNC221
+    subprocess.run(
         ["git", "checkout", current_branch],
         cwd=mcp_mail_repo,
         check=True,
@@ -457,20 +457,20 @@ async def test_cross_repo_message_reference(mcp_mail_repo, tmp_path):
     mcp_mail_dir2 = repo2_path / ".mcp_mail"
     mcp_mail_dir2.mkdir()
 
-    subprocess.run(["git", "init"], cwd=repo2_path, check=True, capture_output=True)  # noqa: ASYNC221
-    subprocess.run(  # noqa: ASYNC221
+    subprocess.run(["git", "init"], cwd=repo2_path, check=True, capture_output=True)
+    subprocess.run(
         ["git", "config", "user.email", "test@example.com"],
         cwd=repo2_path,
         check=True,
         capture_output=True,
     )
-    subprocess.run(  # noqa: ASYNC221
+    subprocess.run(
         ["git", "config", "user.name", "Test Agent"],
         cwd=repo2_path,
         check=True,
         capture_output=True,
     )
-    subprocess.run(  # noqa: ASYNC221
+    subprocess.run(
         ["git", "config", "commit.gpgsign", "false"],
         cwd=repo2_path,
         check=True,
@@ -479,8 +479,8 @@ async def test_cross_repo_message_reference(mcp_mail_repo, tmp_path):
 
     (mcp_mail_dir2 / ".gitignore").write_text("*.db\n*.db-shm\n*.db-wal\n")
     (mcp_mail_dir2 / "messages.jsonl").write_text("")
-    subprocess.run(["git", "add", "."], cwd=repo2_path, check=True, capture_output=True)  # noqa: ASYNC221
-    subprocess.run(  # noqa: ASYNC221
+    subprocess.run(["git", "add", "."], cwd=repo2_path, check=True, capture_output=True)
+    subprocess.run(
         ["git", "commit", "-m", "Initial commit"],
         cwd=repo2_path,
         check=True,
