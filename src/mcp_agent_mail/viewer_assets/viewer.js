@@ -1585,25 +1585,13 @@ window.viewerController = function() {
         stmt.bind([id]);
         if (stmt.step()) {
           const row = stmt.getAsObject();
-
-          // Get recipients for this message
-          const recipients = this.getMessageRecipients(row.id);
-
-          // Enrich message with additional fields
-          results.push({
-            ...row,
-            recipients: recipients,
-            excerpt: row.snippet || '',
-            created_relative: this.formatTimestamp(row.created_ts),
-            created_full: this.formatTimestampFull(row.created_ts),
-            read: false // Static viewer doesn't track read state
-          });
+          body = row.body_md || '';
         }
       } finally {
         stmt.free();
       }
 
-      return results;
+      return body;
     },
 
     // Search across ALL messages using SQL: FTS when available, otherwise LIKE.
@@ -1790,26 +1778,36 @@ window.viewerController = function() {
       // This is done in ONE query instead of N queries!
       const map = new Map();
 
+      if (!state.db) return map;
+
       const stmt = state.db.prepare(`
-        SELECT COALESCE(a.name, 'Unknown') AS recipient_name
+        SELECT mr.message_id, COALESCE(a.name, 'Unknown') AS recipient_name
         FROM message_recipients mr
         LEFT JOIN agents a ON a.id = mr.to_agent_id
-        WHERE mr.message_id = ?
-        ORDER BY recipient_name
+        ORDER BY mr.message_id, recipient_name
       `);
 
-      const recipients = [];
       try {
-        stmt.bind([messageId]);
         while (stmt.step()) {
           const row = stmt.getAsObject();
-          recipients.push(row.recipient_name);
+          const msgId = row.message_id;
+          const name = row.recipient_name;
+          
+          if (!map.has(msgId)) {
+            map.set(msgId, []);
+          }
+          map.get(msgId).push(name);
         }
       } finally {
         stmt.free();
       }
 
-      return recipients.length > 0 ? recipients.join(', ') : 'Unknown';
+      // Convert arrays to comma-separated strings
+      for (const [msgId, names] of map.entries()) {
+        map.set(msgId, names.join(', '));
+      }
+
+      return map;
     },
 
     buildThreadsForAlpine(rawThreads) {
