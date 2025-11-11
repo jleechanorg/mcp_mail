@@ -218,3 +218,10 @@ temp.lock.owner.json
 # Share export test output
 out/
 test_slack_webhook.py
+
+# MCP Mail - track messages.jsonl but ignore SQLite cache
+!.mcp_mail/
+!.mcp_mail/messages.jsonl
+.mcp_mail/*.db
+.mcp_mail/*.db-shm
+.mcp_mail/*.db-wal

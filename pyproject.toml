@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp_mail"
-version = "0.1.1"
+version = "0.1.2"
 description = "Coordinated multi-agent messaging and coordination MCP server."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -65,6 +65,8 @@ dev = [
   "pytest-asyncio>=0.23.8",
   "pytest-cov>=5.0.0",
   "ipython>=8.27.0",
+  "bandit>=1.8.0",
+  "safety>=3.0.0",
 ]
 
 [project.urls]

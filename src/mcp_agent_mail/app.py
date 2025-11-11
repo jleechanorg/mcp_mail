@@ -66,6 +66,11 @@ CLUSTER_SEARCH = "search"
 CLUSTER_FILE_RESERVATIONS = "file_reservations"
 CLUSTER_MACROS = "workflow_macros"
 
+# Global inbox configuration
+def get_global_inbox_name(project: Project) -> str:
+    """Get project-specific global inbox name to ensure per-project isolation."""
+    return f"global-inbox-{project.slug}"
+
 
 class ToolExecutionError(Exception):
     def __init__(self, error_type: str, message: str, *, recoverable: bool = True, data: Optional[dict[str, Any]] = None):
@@ -392,7 +397,7 @@ def _split_slug_and_query(raw_value: str) -> tuple[str, dict[str, str]]:
     slug, _, query_string = raw_value.partition("?")
     if not query_string:
         return slug, {}
-    params = cast(dict[str, str], dict(parse_qsl(query_string, keep_blank_values=True)))
+    params = dict(parse_qsl(query_string, keep_blank_values=True))
     return slug, params
 
 
@@ -628,6 +633,7 @@ def _agent_to_dict(agent: Agent) -> dict[str, Any]:
         "last_active_ts": _iso(agent.last_active_ts),
         "project_id": agent.project_id,
         "attachments_policy": getattr(agent, "attachments_policy", "auto"),
+        "contact_policy": getattr(agent, "contact_policy", "auto"),
         "is_active": getattr(agent, "is_active", True),
         "deleted_ts": _iso(deleted_ts) if (deleted_ts := getattr(agent, "deleted_ts", None)) is not None else None,
     }
@@ -682,12 +688,54 @@ async def _ensure_project(human_key: str) -> Project:
         result = await session.execute(select(Project).where(Project.slug == slug))
         project = result.scalars().first()
         if project:
+            # Ensure global inbox agent exists for existing project
+            await _ensure_global_inbox_agent(project)
             return project
         project = Project(slug=slug, human_key=human_key)
         session.add(project)
         await session.commit()
         await session.refresh(project)
+        # Create global inbox agent for new project
+        await _ensure_global_inbox_agent(project)
         return project
+
+
+async def _ensure_global_inbox_agent(project: Project) -> Agent:
+    """Ensure the global inbox agent exists for the given project.
+
+    Each project gets its own global inbox agent with a project-specific name
+    to ensure proper isolation between projects.
+    """
+    if project.id is None:
+        raise ValueError("Project must have an id before creating global inbox agent.")
+
+    global_inbox_name = get_global_inbox_name(project)
+
+    await ensure_schema()
+    async with get_session() as session:
+        # Check if global inbox agent already exists for this project
+        result = await session.execute(
+            select(Agent).where(
+                Agent.project_id == project.id,
+                Agent.name == global_inbox_name,
+            )
+        )
+        existing_agent = result.scalars().first()
+        if existing_agent:
+            return existing_agent
+
+        # Create global inbox agent for this project
+        agent = Agent(
+            project_id=project.id,
+            name=global_inbox_name,
+            program="mcp-mail-system",
+            model="system",
+            task_description=f"Global inbox for project '{project.slug}'.",
+        )
+        session.add(agent)
+        await session.commit()
+        await session.refresh(agent)
+        return agent
 
 
 async def _get_project_by_identifier(identifier: str) -> Project:
@@ -1191,6 +1239,27 @@ async def _create_agent_record(
         return agent
 
 
+async def _build_conflict_info(name: str) -> list[dict[str, Any]]:
+    """Build conflict information for agents with the given name.
+
+    Returns a list of dictionaries containing project, program, model, and task
+    information for all agents currently using the specified name.
+    """
+    try:
+        conflicts = await _lookup_agents_any_project(name)
+        return [
+            {
+                "project": conf_proj.human_key,
+                "program": conf_agent.program,
+                "model": conf_agent.model,
+                "task": conf_agent.task_description,
+            }
+            for conf_proj, conf_agent in conflicts
+        ]
+    except Exception:
+        return []
+
+
 async def _get_or_create_agent(
     project: Project,
     name: Optional[str],
@@ -1198,6 +1267,7 @@ async def _get_or_create_agent(
     model: str,
     task_description: str,
     settings: Settings,
+    force_reclaim: bool = False,
 ) -> Agent:
     if project.id is None:
         raise ValueError("Project must have an id before creating agents.")
@@ -1223,14 +1293,22 @@ async def _get_or_create_agent(
                     # Exists in this project, we'll update it below
                     desired_name = sanitized
                 else:
-                    if mode == "strict":
+                    # Name exists in another project
+                    if mode == "strict" and not force_reclaim:
+                        # In strict mode, require explicit force_reclaim
+                        conflict_info = await _build_conflict_info(sanitized)
                         raise ToolExecutionError(
                             "NAME_TAKEN",
-                            f"Agent name '{sanitized}' is already in use globally.",
+                            f"Agent name '{sanitized}' is already in use. Set force_reclaim=True to override and retire the existing agent(s).",
                             recoverable=True,
-                            data={"name": sanitized, "conflict": "other_project"},
+                            data={
+                                "name": sanitized,
+                                "conflict": "other_project",
+                                "conflicting_agents": conflict_info,
+                                "hint": "Call register_agent with force_reclaim=True to reclaim this name",
+                            },
                         )
-                    # Retire conflicting agents in other projects so this project can take the name.
+                    # Retire conflicting agents in other projects (auto in coerce mode, or forced via force_reclaim)
                     await _retire_conflicting_agents(
                         sanitized,
                         project_to_keep=project,
@@ -1278,11 +1356,22 @@ async def _get_or_create_agent(
                 await session.refresh(agent)
             except IntegrityError as exc:
                 await session.rollback()
+                # Race condition in UPDATE path: agent was being updated in same project,
+                # but name collision occurred (likely with a different project's agent).
+                # This shouldn't happen since we already verified the agent exists in this project,
+                # but could occur if another process retired this agent and created a new one elsewhere.
+                conflict_info = await _build_conflict_info(desired_name)
                 raise ToolExecutionError(
                     "NAME_TAKEN",
-                    f"Agent name '{desired_name}' is already in use globally.",
+                    f"Agent name '{desired_name}' is already in use globally. "
+                    f"This agent may have been retired and the name claimed by another project. "
+                    f"Please retry the operation.",
                     recoverable=True,
-                    data={"name": desired_name},
+                    data={
+                        "name": desired_name,
+                        "race_condition": True,
+                        "conflicting_agents": conflict_info,
+                    },
                 ) from exc
         else:
             agent = Agent(
@@ -1291,6 +1380,7 @@ async def _get_or_create_agent(
                 program=program,
                 model=model,
                 task_description=task_description,
+                contact_policy="auto",
             )
             session.add(agent)
             try:
@@ -1298,12 +1388,21 @@ async def _get_or_create_agent(
                 await session.refresh(agent)
             except IntegrityError as exc:
                 await session.rollback()
-                # Race condition: name was taken between our check and commit
+                # Race condition: name was taken between our check and commit.
+                # Another process claimed this name just before we could commit.
+                conflict_info = await _build_conflict_info(desired_name)
                 raise ToolExecutionError(
                     "NAME_TAKEN",
-                    f"Agent name '{desired_name}' is already in use globally (race condition detected). Please try again.",
+                    f"Agent name '{desired_name}' is already in use globally (race condition). "
+                    f"Another process claimed this name before the commit completed. "
+                    f"Please retry the operation. If the conflict persists, use force_reclaim=True to override.",
                     recoverable=True,
-                    data={"name": desired_name, "race_condition": True},
+                    data={
+                        "name": desired_name,
+                        "race_condition": True,
+                        "conflicting_agents": conflict_info,
+                        "hint": "Retry the operation; if it persists, call register_agent with force_reclaim=True",
+                    },
                 ) from exc
     archive = await ensure_archive(settings, project.slug)
     async with _archive_write_lock(archive):
@@ -1828,6 +1927,71 @@ async def _list_inbox(
 ) -> list[dict[str, Any]]:
     if agent.id is None:
         raise ValueError("Agent must have an id before listing inbox.")
+
+    global_inbox_name = get_global_inbox_name(project)
+
+    # Skip global inbox scanning if the agent IS the global inbox (prevent recursion)
+    if agent.name == global_inbox_name:
+        return await _list_inbox_basic(agent, limit, urgent_only, include_bodies, since_ts)
+
+    # Get regular inbox messages
+    messages = await _list_inbox_basic(agent, limit, urgent_only, include_bodies, since_ts)
+    message_ids_in_inbox = {msg["id"] for msg in messages}
+
+    # Scan global inbox for messages mentioning this agent
+    try:
+        global_inbox_agent = await _get_agent_by_name(global_inbox_name)
+        global_inbox_messages = await _list_inbox_basic(
+            global_inbox_agent,
+            limit=100,  # Scan more messages to find mentions
+            urgent_only=False,
+            include_bodies=True,  # Need bodies to check for mentions
+            since_ts=since_ts
+        )
+
+        # Filter for messages that mention the agent (word-boundary aware, case-insensitive)
+        import re
+        # Use word boundaries to avoid false positives (e.g., "Al" matching "Alice")
+        agent_name_pattern = re.compile(r'\b' + re.escape(agent.name) + r'\b', re.IGNORECASE)
+        mentioned_messages = []
+        for msg in global_inbox_messages:
+            # Skip if already in regular inbox
+            if msg["id"] in message_ids_in_inbox:
+                continue
+
+            # Check if agent name appears as a complete word in subject or body
+            subject = msg.get("subject", "")
+            body = msg.get("body_md", "")
+
+            if agent_name_pattern.search(subject) or agent_name_pattern.search(body):
+                # Mark as from global inbox mention scan
+                msg["source"] = "global_inbox_mention"
+                # Don't include body unless requested
+                if not include_bodies:
+                    msg.pop("body_md", None)
+                mentioned_messages.append(msg)
+
+        # Merge with regular inbox, respecting the limit
+        messages.extend(mentioned_messages)
+        messages = messages[:limit]
+
+    except Exception:
+        # If global inbox doesn't exist or there's an error, just return regular inbox
+        pass
+
+    return messages
+
+
+async def _list_inbox_basic(
+    agent: Agent,
+    limit: int,
+    urgent_only: bool,
+    include_bodies: bool,
+    since_ts: Optional[str],
+) -> list[dict[str, Any]]:
+    """Basic inbox listing without global inbox scanning."""
+    if agent.id is None:
+        raise ValueError("Agent must have an id before listing inbox.")
     sender_alias = aliased(Agent)
     await ensure_schema()
     async with get_session() as session:
@@ -2172,6 +2336,24 @@ async def _get_message(project: Project, message_id: int) -> Message:
         return message
 
 
+async def _get_message_by_id_global(message_id: int) -> Message:
+    """Fetch message by ID globally (ignoring project boundaries).
+
+    Projects are informational only - messages are globally accessible by ID.
+    This allows agents to reply to messages they received regardless of which
+    project context they're currently operating in.
+    """
+    await ensure_schema()
+    async with get_session() as session:
+        result = await session.execute(
+            select(Message).where(Message.id == message_id)
+        )
+        message = result.scalars().first()
+        if not message:
+            raise NoResultFound(f"Message id '{message_id}' not found.")
+        return message
+
+
 async def _get_agent_by_id(project: Project, agent_id: int) -> Agent:
     """Fetch active agent by ID within project."""
     if project.id is None:
@@ -2239,6 +2421,31 @@ async def _update_recipient_timestamp(
         await session.execute(stmt)
         await session.commit()
     return now
+
+
+async def _validate_agent_is_recipient(agent: Agent, message_id: int) -> None:
+    """Validate that an agent is a recipient of a message.
+
+    Raises NoResultFound if the agent is not a recipient of the message.
+    This prevents agents from marking messages as read/acknowledged when
+    they never received them.
+    """
+    if agent.id is None:
+        raise ValueError("Agent must have an id before validation.")
+    await ensure_schema()
+    async with get_session() as session:
+        result = await session.execute(
+            select(MessageRecipient).where(
+                MessageRecipient.message_id == message_id,
+                MessageRecipient.agent_id == agent.id,
+            )
+        )
+        recipient = result.scalars().first()
+        if not recipient:
+            raise NoResultFound(
+                f"Agent '{agent.name}' is not a recipient of message {message_id}. "
+                f"Only recipients can mark messages as read or acknowledged."
+            )
 
 
 # Tool exposure configuration for lazy loading
@@ -2350,6 +2557,17 @@ def build_mcp_server() -> FastMCP:
         to_names = _unique(to_names)
         cc_names = _unique(cc_names)
         bcc_names = _unique(bcc_names)
+
+        # Check if global inbox exists (will be added directly to cc_agents to avoid race condition)
+        global_inbox_name = get_global_inbox_name(project)
+        global_inbox_agent = await _get_agent_by_name_optional(global_inbox_name)
+        # Only add to cc if sender is not the global inbox itself
+        should_cc_global_inbox = (
+            global_inbox_agent is not None
+            and sender.name != global_inbox_name
+            and global_inbox_name not in cc_names
+        )
+
         if to_names or cc_names or bcc_names:
             to_agents = [await _get_agent_by_name(name) for name in to_names]
             cc_agents = [await _get_agent_by_name(name) for name in cc_names]
@@ -2358,6 +2576,14 @@ def build_mcp_server() -> FastMCP:
             to_agents = []
             cc_agents = []
             bcc_agents = []
+
+        # Add global inbox to cc_agents directly (avoids race condition from re-fetching by name)
+        if should_cc_global_inbox:
+            cc_agents.append(global_inbox_agent)
+
+        # Filter out global inbox from cc_agents for outbox visibility (keep in recipient_records)
+        cc_agents_for_outbox = [agent for agent in cc_agents if agent.name != global_inbox_name]
+
         recipient_records: list[tuple[Agent, str]] = [(agent, "to") for agent in to_agents]
         recipient_records.extend((agent, "cc") for agent in cc_agents)
         recipient_records.extend((agent, "bcc") for agent in bcc_agents)
@@ -2455,7 +2681,7 @@ def build_mcp_server() -> FastMCP:
                 {
                     "from": sender.name,
                     "to": [agent.name for agent in to_agents],
-                    "cc": [agent.name for agent in cc_agents],
+                    "cc": [agent.name for agent in cc_agents_for_outbox],
                     "bcc": [agent.name for agent in bcc_agents],
                     "attachments": attachments_meta,
                 }
@@ -2769,6 +2995,7 @@ def build_mcp_server() -> FastMCP:
         name: Optional[str] = None,
         task_description: str = "",
         attachments_policy: str = "auto",
+        force_reclaim: bool = False,
     ) -> dict[str, Any]:
         """
         Create or update an agent identity within a project and persist its profile to Git.
@@ -2812,6 +3039,10 @@ def build_mcp_server() -> FastMCP:
             Names are globally unique; passing the same name updates the profile.
         task_description : str
             Short description of current focus (shows up in directory listings).
+        force_reclaim : bool
+            If True, forcefully reclaim this agent name by retiring any active agents that currently
+            use it, even in other projects. Use this when you want to override existing agents.
+            Default is False. When False, the system will warn you if the name is already taken.
 
         Returns
         -------
@@ -2859,7 +3090,7 @@ def build_mcp_server() -> FastMCP:
         ap = (attachments_policy or "auto").lower()
         if ap not in {"auto", "inline", "file"}:
             ap = "auto"
-        agent = await _get_or_create_agent(project, name, program, model, task_description, settings)
+        agent = await _get_or_create_agent(project, name, program, model, task_description, settings, force_reclaim=force_reclaim)
         # Persist attachment policy if changed
         if getattr(agent, "attachments_policy", None) != ap:
             async with get_session() as session:
@@ -3509,7 +3740,7 @@ def build_mcp_server() -> FastMCP:
         """
         project = await _get_project_by_identifier(project_key)
         sender = await _get_agent_by_name(sender_name)
-        original = await _get_message(project, message_id)
+        original = await _get_message_by_id_global(message_id)
         original_sender = await _get_agent_by_id_global(original.sender_id)
         thread_key = original.thread_id or str(original.id)
         subject_prefix_clean = subject_prefix.strip()
@@ -3729,9 +3960,19 @@ def build_mcp_server() -> FastMCP:
         """
         Mark a specific message as read for the given agent.
 
+        Parameters
+        ----------
+        project_key : str
+            Project identifier (informational only - agents and messages are globally accessible).
+        agent_name : str
+            Name of the agent marking the message as read.
+        message_id : int
+            ID of the message to mark as read.
+
         Notes
         -----
         - Read receipts are per-recipient; this only affects the specified agent.
+        - Agent must be a recipient of the message (raises error if not).
         - This does not send an acknowledgement; use `acknowledge_message` for that.
         - Safe to call multiple times; later calls return the original timestamp.
 
@@ -3764,9 +4005,9 @@ def build_mcp_server() -> FastMCP:
             except Exception:
                 pass
         try:
-            project = await _get_project_by_identifier(project_key)
-            agent = await _get_agent(project, agent_name)
-            await _get_message(project, message_id)
+            agent = await _get_agent_by_name(agent_name)
+            await _get_message_by_id_global(message_id)
+            await _validate_agent_is_recipient(agent, message_id)
             read_ts = await _update_recipient_timestamp(agent, message_id, "read_ts")
             await ctx.info(f"Marked message {message_id} read for '{agent.name}'.")
             return {"message_id": message_id, "read": bool(read_ts), "read_at": _iso(read_ts) if read_ts else None}
@@ -3798,9 +4039,19 @@ def build_mcp_server() -> FastMCP:
         """
         Acknowledge a message addressed to an agent (and mark as read).
 
+        Parameters
+        ----------
+        project_key : str
+            Project identifier (informational only - agents and messages are globally accessible).
+        agent_name : str
+            Name of the agent acknowledging the message.
+        message_id : int
+            ID of the message to acknowledge.
+
         Behavior
         --------
         - Sets both read_ts and ack_ts for the (agent, message) pairing
+        - Agent must be a recipient of the message (raises error if not)
         - Safe to call multiple times; subsequent calls will return the prior timestamps
 
         Idempotency
@@ -3836,9 +4087,9 @@ def build_mcp_server() -> FastMCP:
             except Exception:
                 pass
         try:
-            project = await _get_project_by_identifier(project_key)
-            agent = await _get_agent(project, agent_name)
-            await _get_message(project, message_id)
+            agent = await _get_agent_by_name(agent_name)
+            await _get_message_by_id_global(message_id)
+            await _validate_agent_is_recipient(agent, message_id)
             read_ts = await _update_recipient_timestamp(agent, message_id, "read_ts")
             ack_ts = await _update_recipient_timestamp(agent, message_id, "ack_ts")
             await ctx.info(f"Acknowledged message {message_id} for '{agent.name}'.")
