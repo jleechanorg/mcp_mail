@@ -370,7 +370,7 @@ def _split_slug_and_query(raw_value: str) -> tuple[str, dict[str, str]]:
     slug, _, query_string = raw_value.partition("?")
     if not query_string:
         return slug, {}
-    params = cast(dict[str, str], dict(parse_qsl(query_string, keep_blank_values=True)))
+    params = dict(parse_qsl(query_string, keep_blank_values=True))
     return slug, params
 
 
