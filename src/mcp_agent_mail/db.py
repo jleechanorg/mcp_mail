@@ -129,7 +129,7 @@ def _build_engine(settings: DatabaseSettings) -> AsyncEngine:
         sqlite3.register_converter("timestamp", convert_datetime)
 
         connect_args = {
-            "timeout": 30.0,  # Wait up to 30 seconds for lock (default is 5)
+            "timeout": 60.0,  # Increased from 30 to 60 seconds for lock wait (default is 5)
             "check_same_thread": False,  # Required for async SQLite
         }
 
@@ -154,8 +154,8 @@ def _build_engine(settings: DatabaseSettings) -> AsyncEngine:
             cursor.execute("PRAGMA journal_mode=WAL")
             # Use NORMAL synchronous mode (safer than OFF, faster than FULL)
             cursor.execute("PRAGMA synchronous=NORMAL")
-            # Set busy timeout (wait up to 30 seconds for locks)
-            cursor.execute("PRAGMA busy_timeout=30000")
+            # Set busy timeout (wait up to 60 seconds for locks, increased from 30)
+            cursor.execute("PRAGMA busy_timeout=60000")
             cursor.close()
 
     return engine

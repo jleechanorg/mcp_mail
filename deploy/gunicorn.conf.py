@@ -13,7 +13,7 @@ worker_class = "uvicorn.workers.UvicornWorker"
 # Graceful timeouts to match long running tasks.
 keepalive = 5
 graceful_timeout = 60
-timeout = 120
+timeout = 300  # Increased from 120 to 300 seconds (5 minutes) to handle slow fetch operations
 
 # Location for PID/log files (customize as desired).
 pidfile = str(Path("/var/run/mcp-agent-mail/gunicorn.pid"))
