@@ -179,6 +179,16 @@ async def test_search_mailbox_with_agent_filter(isolated_env):
         )
         results = _extract_result(search_result)
         assert len(results) == 3, "Should find all 3 messages about feature"
+        assert (
+            sorted(
+                results,
+                key=lambda x: (
+                    0 if x.get("in_global_inbox") else 1,
+                    -x.get("relevance_score", 0),
+                ),
+            )
+            == results
+        ), "Results should be ordered by global inbox priority then relevance"
 
         # Search only Alice's messages (sent or received)
         search_result = await client.call_tool(
@@ -273,6 +283,44 @@ async def test_search_mailbox_boolean_operators(isolated_env):
         )
         results = _extract_result(search_result)
         assert len(results) == 2, "Should find 2 messages with bug OR error"
+
+        # Search with NOT operator
+        search_result = await client.call_tool(
+            "search_mailbox",
+            {
+                "project_key": "test-boolean",
+                "query": "authentication NOT bug",
+                "limit": 10,
+            },
+        )
+        results = _extract_result(search_result)
+        assert len(results) == 1, "Should exclude messages mentioning bug"
+        assert "New feature" in results[0]["subject"]
+
+        # Search with phrase query
+        search_result = await client.call_tool(
+            "search_mailbox",
+            {
+                "project_key": "test-boolean",
+                "query": '"authentication bug"',
+                "limit": 10,
+            },
+        )
+        results = _extract_result(search_result)
+        assert len(results) == 1, "Phrase query should return exact match"
+        assert "Bug fix" in results[0]["subject"]
+
+        # Search with prefix query
+        search_result = await client.call_tool(
+            "search_mailbox",
+            {
+                "project_key": "test-boolean",
+                "query": "auth*",
+                "limit": 10,
+            },
+        )
+        results = _extract_result(search_result)
+        assert len(results) == 2, "Prefix query should match authentication variants"
 
 
 @pytest.mark.asyncio
@@ -410,8 +458,12 @@ async def test_search_mailbox_limit(isolated_env):
                 "project_key": "test-limit",
                 "query": "testing",
                 "limit": 5,
+                "include_bodies": False,
             },
         )
 
         results = _extract_result(search_result)
         assert len(results) == 5, "Should return only 5 results due to limit"
+        assert all(
+            "body_md" not in msg for msg in results
+        ), "Bodies should be omitted when include_bodies=False"
