@@ -352,6 +352,14 @@ def _setup_fts(connection) -> None:
     connection.exec_driver_sql(
         "CREATE INDEX IF NOT EXISTS idx_message_recipients_agent ON message_recipients(agent_id)"
     )
+    # Composite index for optimized inbox queries (agent_id + message_id for joins)
+    connection.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS idx_message_recipients_agent_msg ON message_recipients(agent_id, message_id)"
+    )
+    # Composite index for timestamp-ordered queries (created_ts DESC, id for tie-breaking)
+    connection.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS idx_messages_created_ts_desc_id ON messages(created_ts DESC, id)"
+    )
 
     # MIGRATION: Check for duplicate agent names before enforcing global uniqueness
     # This handles upgrading from per-project uniqueness to global uniqueness

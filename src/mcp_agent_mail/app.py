@@ -1911,38 +1911,19 @@ async def _list_inbox(
     messages = await _list_inbox_basic(agent, limit, urgent_only, include_bodies, since_ts)
     message_ids_in_inbox = {msg["id"] for msg in messages}
 
-    # Scan global inbox for messages mentioning this agent
+    # Scan global inbox for messages mentioning this agent using FTS5 (much faster than regex)
     try:
         global_inbox_agent = await _get_agent_by_name(global_inbox_name)
-        global_inbox_messages = await _list_inbox_basic(
-            global_inbox_agent,
-            limit=100,  # Scan more messages to find mentions
-            urgent_only=False,
-            include_bodies=True,  # Need bodies to check for mentions
-            since_ts=since_ts
+        # Use FTS5-based mention search - only fetches messages that actually mention the agent
+        # This is significantly faster than the old approach which loaded 100 messages with bodies
+        mentioned_messages = await _find_mentions_in_global_inbox(
+            agent_name=agent.name,
+            global_inbox_agent=global_inbox_agent,
+            exclude_message_ids=message_ids_in_inbox,
+            include_bodies=include_bodies,
+            since_ts=since_ts,
+            limit=30,  # Reduced from 100 - FTS5 query is precise, doesn't need to over-fetch
         )
-
-        # Filter for messages that mention the agent (word-boundary aware, case-insensitive)
-        import re
-        # Use word boundaries to avoid false positives (e.g., "Al" matching "Alice")
-        agent_name_pattern = re.compile(r'\b' + re.escape(agent.name) + r'\b', re.IGNORECASE)
-        mentioned_messages = []
-        for msg in global_inbox_messages:
-            # Skip if already in regular inbox
-            if msg["id"] in message_ids_in_inbox:
-                continue
-
-            # Check if agent name appears as a complete word in subject or body
-            subject = msg.get("subject", "")
-            body = msg.get("body_md", "")
-
-            if agent_name_pattern.search(subject) or agent_name_pattern.search(body):
-                # Mark as from global inbox mention scan
-                msg["source"] = "global_inbox_mention"
-                # Don't include body unless requested
-                if not include_bodies:
-                    msg.pop("body_md", None)
-                mentioned_messages.append(msg)
 
         # Merge with regular inbox, respecting the limit
         messages.extend(mentioned_messages)
@@ -1951,6 +1932,70 @@ async def _list_inbox(
     except Exception:
         # If global inbox doesn't exist or there's an error, just return regular inbox
         pass
+
+    return messages
+
+
+async def _find_mentions_in_global_inbox(
+    agent_name: str,
+    global_inbox_agent: Agent,
+    exclude_message_ids: set[str],
+    include_bodies: bool,
+    since_ts: Optional[str],
+    limit: int = 30,
+) -> list[dict[str, Any]]:
+    """Use FTS5 to efficiently find messages mentioning the agent in global inbox.
+
+    This is much faster than loading all messages and doing regex in Python.
+    """
+    if global_inbox_agent.id is None:
+        return []
+
+    await ensure_schema()
+    sender_alias = aliased(Agent)
+
+    async with get_session() as session:
+        # Use FTS5 MATCH query for fast full-text search
+        # FTS5 query: agent_name will match complete tokens (words) due to tokenization
+        # This is similar to word boundary matching but faster
+        stmt = (
+            select(Message, MessageRecipient.kind, sender_alias.name)
+            .join(MessageRecipient, MessageRecipient.message_id == Message.id)
+            .join(sender_alias, Message.sender_id == sender_alias.id)
+            .join(
+                # Join with FTS5 virtual table
+                text("fts_messages ON messages.id = fts_messages.rowid")
+            )
+            .where(
+                MessageRecipient.agent_id == global_inbox_agent.id,
+                # FTS5 MATCH query - searches subject and body for the agent name
+                text(f"fts_messages MATCH :agent_name"),
+            )
+            .order_by(desc(Message.created_ts))
+            .limit(limit)
+        )
+
+        if since_ts:
+            since_dt = _parse_iso(since_ts)
+            if since_dt:
+                stmt = stmt.where(Message.created_ts > since_dt)
+
+        # Execute with agent name as parameter (escaped for FTS5)
+        # FTS5 tokenizes on word boundaries, so this effectively does word matching
+        result = await session.execute(stmt, {"agent_name": f'"{agent_name}"'})
+        rows = result.all()
+
+    messages: list[dict[str, Any]] = []
+    for message, recipient_kind, sender_name in rows:
+        # Skip if already in regular inbox
+        if message.id in exclude_message_ids:
+            continue
+
+        payload = _message_to_dict(message, include_body=include_bodies)
+        payload["from"] = sender_name
+        payload["kind"] = recipient_kind
+        payload["source"] = "global_inbox_mention"
+        messages.append(payload)
 
     return messages
 
@@ -2021,28 +2066,31 @@ async def _list_outbox(
         result = await session.execute(stmt)
         message_rows = result.scalars().all()
 
-        # For each message, collect recipients grouped by kind
-        for msg in message_rows:
-            recs = await session.execute(
-                select(MessageRecipient.kind, Agent.name)
+        # Batch load all recipients for all messages in a single query (avoids N+1)
+        message_ids = [msg.id for msg in message_rows]
+        if message_ids:
+            recipients_result = await session.execute(
+                select(MessageRecipient.message_id, MessageRecipient.kind, Agent.name)
                 .join(Agent, MessageRecipient.agent_id == Agent.id)
-                .where(MessageRecipient.message_id == msg.id)
+                .where(MessageRecipient.message_id.in_(message_ids))
             )
-            to_list: list[str] = []
-            cc_list: list[str] = []
-            bcc_list: list[str] = []
-            for kind, name in recs.all():
-                if kind == "to":
-                    to_list.append(name)
-                elif kind == "cc":
-                    cc_list.append(name)
-                elif kind == "bcc":
-                    bcc_list.append(name)
+            # Group recipients by message_id
+            recipients_by_message: dict[str, dict[str, list[str]]] = {}
+            for msg_id, kind, name in recipients_result.all():
+                if msg_id not in recipients_by_message:
+                    recipients_by_message[msg_id] = {"to": [], "cc": [], "bcc": []}
+                recipients_by_message[msg_id][kind].append(name)
+        else:
+            recipients_by_message = {}
+
+        # Build message payloads with pre-loaded recipients
+        for msg in message_rows:
+            recipients = recipients_by_message.get(msg.id, {"to": [], "cc": [], "bcc": []})
             payload = _message_to_dict(msg, include_body=include_bodies)
             payload["from"] = agent.name
-            payload["to"] = to_list
-            payload["cc"] = cc_list
-            payload["bcc"] = bcc_list
+            payload["to"] = recipients["to"]
+            payload["cc"] = recipients["cc"]
+            payload["bcc"] = recipients["bcc"]
             messages.append(payload)
     return messages
 
