@@ -35,40 +35,80 @@ Full credit goes to the original author for creating this innovative multi-agent
 > **Note**: This was copied as a standalone repository rather than kept as a fork because Codex web appears to ignore forks in its repository indexing. Here was my first attempt at a normal fork: [jleechanorg/mcp_agent_mail](https://github.com/jleechanorg/mcp_agent_mail)
 ## Fork Improvements
 
-This fork extends the original MCP Agent Mail with **5 core enhancements** focused on usability and efficiency:
+This fork extends the original MCP Agent Mail with **9 core enhancements** focused on removing coordination barriers and improving efficiency:
 
-### 🚀 Core Improvements
+### 🚀 Token Efficiency
 
-- **🎯 Lazy Loading System (Phase 2 Complete)** - Reduces token usage by ~65% with intelligent tool loading:
+- **🎯 Lazy Loading System (Phase 2 Complete)** - Reduces token usage by ~65%:
   - **Core mode** (default): 8 essential tools + 2 meta-tools = 10 tools loaded
   - **Extended mode**: 15 additional tools loaded on-demand via `call_extended_tool`
-  - Meta-tools for discovery: `list_extended_tools` shows all available extended tools with descriptions
+  - Meta-tools: `list_extended_tools` (discovery) and `call_extended_tool` (invocation)
   - Organized into 6 functional clusters (infrastructure, identity, messaging, search, file reservations, macros)
   - Configure via `MCP_TOOLS_MODE` environment variable (core|extended)
+  - **Implementation**: `src/mcp_agent_mail/app.py:2426-2476` (CORE_TOOLS, EXTENDED_TOOLS, EXTENDED_TOOL_METADATA)
 
-- **🎯 Globally Unique Agent Names** - Prevents cross-project name confusion:
-  - **Database-enforced** case-insensitive uniqueness across ALL projects
+### 🌐 Global Architecture (No Boundaries)
+
+- **🌍 Projects as Informational Metadata** - Projects don't create barriers:
+  - Projects are **metadata only** (badges, tags, context) - NOT organizational boundaries
+  - Unified inbox shows ALL messages regardless of project
+  - Backend queries ignore project filters (messages fetched by agent, not project)
+  - Consistent treatment across all layers (UI, database, tools)
+  - **Why**: Agents work seamlessly across multiple repos/projects
+  - **Implementation**: `src/mcp_agent_mail/app.py:2312-2327` (_get_message_by_id_global)
+
+- **🎯 Globally Unique Agent Names** - Database-enforced global uniqueness:
+  - **Case-insensitive** uniqueness across ALL projects (prevents name collisions)
   - **Auto-migration**: Existing duplicates renamed with numeric suffixes (Alice → Alice2, Alice3)
   - **Flexible enforcement**: `strict` (reject duplicates), `coerce` (auto-rename), `always_auto` (generate memorable names)
   - Race condition protection at database level with functional index
   - Configure via `AGENT_NAME_ENFORCEMENT_MODE` environment variable
+  - **Implementation**: `src/mcp_agent_mail/db.py:236-302` (_migrate_agent_name_uniqueness)
 
-- **⚡ Simplified Registration** - Streamlined agent onboarding:
+- **🌍 Global Agent Lookup** - Agents accessible by name alone:
+  - `_get_agent_by_name()` looks up agents globally without needing project context
+  - Enables cross-project agent references and coordination
+  - Simplifies agent discovery and communication
+  - **Implementation**: `src/mcp_agent_mail/app.py:1569-1582`
+
+- **🌍 Global Message Lookup** - Messages accessible across projects:
+  - `_get_message_by_id_global()` retrieves messages by ID regardless of project
+  - Agents can reply to messages they received from any project
+  - Eliminates "Message X not found for project Y" errors
+  - Tools using global lookup: `reply_message`, `mark_message_read`, `acknowledge_message`
+  - **Implementation**: `src/mcp_agent_mail/app.py:2312-2327`
+
+### 🎙️ Automatic Notifications
+
+- **📬 Global Inbox with Mention Scanning** - Never miss important messages:
+  - Automatic **@mention detection** when agents fetch inbox
+  - Scans global inbox for messages mentioning agent name (case-insensitive)
+  - Works in both subject and body text
+  - Messages marked with `"source": "global_inbox_mention"` for traceability
+  - Automatic deduplication (no duplicate messages)
+  - Falls back gracefully if global inbox unavailable
+  - **Implementation**: `src/mcp_agent_mail/app.py:66-68` (get_global_inbox_name), `676-711` (_ensure_global_inbox_agent)
+
+### ⚡ Simplified Workflows
+
+- **✅ Simplified Registration** - One-step agent onboarding:
   - `register_agent` now **auto-creates projects** if they don't exist
-  - Eliminates need for separate `ensure_project()` call in most workflows
+  - Eliminates need for separate `ensure_project()` call
   - Automatic archive initialization and Git repo setup
-  - One-step agent registration: just call `register_agent` and you're ready
+  - Just call `register_agent` and start sending messages
+  - **Implementation**: `src/mcp_agent_mail/app.py:657-673` (_ensure_project auto-called)
 
-- **🔧 Flexible Project Keys** - Any string as project identifier:
+- **🔧 Flexible Project Keys** - Any string works as project identifier:
   - **Repo names** (`myapp-frontend`, `api-backend`)
   - **Custom slugs** (`team-alpha`, `prod-db`)
   - **Filesystem paths** (still supported for backward compatibility)
-  - Not limited to absolute paths - use whatever identifier makes sense
+  - Not limited to absolute paths - use whatever makes sense
   - Backward compatible with existing path-based keys
 
-- **💬 Contact-Free Messaging** - Frictionless agent coordination:
-  - Direct agent-to-agent messaging **without contact request/approval workflow**
-  - Auto-registration of missing local recipients during `send_message`
+- **💬 Contact-Free Messaging** - No approval workflow:
+  - Direct agent-to-agent messaging **without approval**
+  - Removed contact tools: `request_contact`, `respond_contact`, `macro_contact_handshake`
+  - Auto-registration of missing local recipients
   - Streamlines multi-agent coordination across projects
   - Configure via `messaging_auto_register_recipients` (default: True)
 
@@ -137,7 +177,7 @@ When an agent sends a message via `send_message`, here's what happens:
 
 ---
 
-**Summary**: This fork focuses on **developer experience improvements** - reducing token costs, preventing agent name conflicts, simplifying workflows, and providing flexible project identification - while maintaining full Git auditability for all agent communications.
+**Summary**: This fork removes coordination barriers by making everything **global by default** - agents, messages, and projects all work across boundaries. Combined with token-efficient lazy loading, automatic mention scanning, and simplified workflows, it creates a **frictionless multi-agent collaboration platform** while maintaining full Git auditability for all communications.
 
 ---
 
