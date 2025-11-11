@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
-from pathlib import Path
 
 import pytest
 from fastmcp import Client
@@ -119,7 +118,7 @@ async def test_messages_stored_in_mcp_mail_git_archive(mcp_mail_storage):
     )
 
     # Send a message
-    result = await server.call_tool(
+    await server.call_tool(
         "send_message",
         {
             "project_key": "my-project",
@@ -129,8 +128,6 @@ async def test_messages_stored_in_mcp_mail_git_archive(mcp_mail_storage):
             "body": "This should be stored in .mcp_mail/",
         },
     )
-
-    message_id = result["id"]
 
     # Verify message file was created in .mcp_mail/projects/my-project/messages/
     project_messages_dir = storage_dir / "projects" / "my-project" / "messages"
@@ -215,7 +212,7 @@ async def test_parallel_writes_to_mcp_mail_no_race_conditions(mcp_mail_storage):
     # Flatten results
     all_message_ids = [msg_id for agent_results in all_results for msg_id in agent_results]
 
-    # Verify we got all messages (5 agents × 10 messages = 50 total)
+    # Verify we got all messages (5 agents x 10 messages = 50 total)
     assert len(all_message_ids) == 50, "Should have 50 total messages"
 
     # Verify all message IDs are unique (no corruption/race conditions)
@@ -231,7 +228,7 @@ async def test_parallel_writes_to_mcp_mail_no_race_conditions(mcp_mail_storage):
 
     # Verify Git commits were created (check git log)
     git_dir = storage_dir
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: ASYNC221
         ["git", "log", "--oneline", "--all"],
         cwd=git_dir,
         capture_output=True,
