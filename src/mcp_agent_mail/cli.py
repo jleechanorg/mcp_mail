@@ -1233,6 +1233,17 @@ def _copy_bundle_contents(source: Path, destination: Path) -> None:
     destination = destination.resolve()
     destination.mkdir(parents=True, exist_ok=True)
 
+    # Protected directories that should never be deleted
+    PROTECTED_ROOTS = {".git", ".github", ".vscode", ".idea", "node_modules", "__pycache__"}
+
+    def _is_protected(path: Path) -> bool:
+        """Check if a path is within a protected directory."""
+        try:
+            rel = path.relative_to(destination)
+            return any(part in PROTECTED_ROOTS for part in rel.parts)
+        except ValueError:
+            return False
+
     desired_files: set[Path] = set()
     desired_dirs: set[Path] = {destination}
 
@@ -1249,8 +1260,10 @@ def _copy_bundle_contents(source: Path, destination: Path) -> None:
                 desired_dirs.add(parent)
                 parent = parent.parent
 
-    # Remove files that are no longer present in the source bundle.
-    existing_files = {path for path in destination.rglob("*") if path.is_file() or path.is_symlink()}
+    # Remove files that are no longer present in the source bundle (skip protected paths).
+    existing_files = {
+        path for path in destination.rglob("*") if (path.is_file() or path.is_symlink()) and not _is_protected(path)
+    }
     for stale_file in existing_files - desired_files:
         try:
             if stale_file.is_symlink():
