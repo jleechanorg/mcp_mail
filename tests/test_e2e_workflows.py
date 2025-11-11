@@ -11,6 +11,7 @@ import pytest
 from mcp_agent_mail import build_mcp_server
 from mcp_agent_mail.config import get_settings
 from mcp_agent_mail.guard import render_prepush_script
+from mcp_agent_mail.share import build_materialized_views, create_performance_indexes, finalize_snapshot_for_export
 from mcp_agent_mail.storage import ensure_archive, write_file_reservation_record
 
 
@@ -161,9 +162,6 @@ async def test_e2e_materialized_views_with_share_export(isolated_env, tmp_path: 
     """End-to-end test: Create messages, export with materialized views and indexes."""
     import sqlite3
 
-    from mcp_agent_mail.share import (
-        finalize_snapshot_for_export,
-    )
 
     # Create a snapshot database
     snapshot = tmp_path / "export.sqlite3"
@@ -224,9 +222,9 @@ async def test_e2e_materialized_views_with_share_export(isolated_env, tmp_path: 
                     id, project_id, sender_id, thread_id, subject, body_md,
                     importance, ack_required, created_ts, attachments
                 )
-                VALUES (?, 1, 1, ?, ?, ?, 'normal', 0, '2025-01-0?T00:00:00Z', '[]')
+                VALUES (?, 1, 1, ?, ?, ?, 'normal', 0, ?, '[]')
                 """,
-                (msg_id, f"thread-{msg_id}", subject, body),
+                (msg_id, f"thread-{msg_id}", subject, body, f"2025-01-{msg_id:02d}T00:00:00Z"),
             )
 
         conn.commit()
@@ -234,10 +232,9 @@ async def test_e2e_materialized_views_with_share_export(isolated_env, tmp_path: 
         conn.close()
 
     # Run full export finalization
-    storage_root = tmp_path / "storage"
-    storage_root.mkdir()
-
     finalize_snapshot_for_export(snapshot)
+    build_materialized_views(snapshot)
+    create_performance_indexes(snapshot)
 
     # Verify all optimizations were applied
     conn = sqlite3.connect(str(snapshot))
@@ -506,7 +503,6 @@ async def test_e2e_incremental_share_updates(isolated_env, tmp_path: Path):
     """End-to-end test: Multiple share exports with incremental updates."""
     import sqlite3
 
-    from mcp_agent_mail.share import finalize_snapshot_for_export
 
     storage_root = tmp_path / "storage"
     storage_root.mkdir()

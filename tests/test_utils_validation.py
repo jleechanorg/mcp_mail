@@ -22,7 +22,7 @@ def test_validate_agent_name_format_valid_names():
         "PurpleBear",
         "BrownMountain",
         "WhiteHill",
-        "ChartreusSnow",
+        "ChartreuseSnow",
         "LilacCastle",
         "FuchsiaStone",
     ]

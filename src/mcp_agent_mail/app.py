@@ -19,18 +19,12 @@ from difflib import SequenceMatcher
 from functools import wraps
 from pathlib import Path
 from typing import Any, Optional, cast
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, urlparse, urlunparse
 
 from fastmcp import Context, FastMCP
 from git import Repo
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
 
-try:
-    from pathspec import PathSpec  # type: ignore[import-not-found]
-    from pathspec.patterns.gitwildmatch import GitWildMatchPattern  # type: ignore[import-not-found]
-except Exception:  # pragma: no cover - optional dependency fallback
-    PathSpec = None  # type: ignore[assignment]
-    GitWildMatchPattern = None  # type: ignore[assignment]
 from sqlalchemy import asc, delete, desc, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, NoResultFound
 from sqlalchemy.orm import aliased
@@ -61,7 +55,6 @@ from .storage import (
     write_message_bundle,
 )
 from .utils import generate_agent_name, sanitize_agent_name, slugify
-import contextlib
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +71,36 @@ CLUSTER_SEARCH = "search"
 CLUSTER_FILE_RESERVATIONS = "file_reservations"
 CLUSTER_MACROS = "workflow_macros"
 CLUSTER_BUILD_SLOTS = "build_slots"
+
+
+def _mask_db_url(url: str) -> str:
+    """Redact credentials from database URLs exposed via tools/resources."""
+
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return url
+
+    if parsed.scheme.startswith("sqlite"):
+        return url
+
+    host = parsed.hostname or ""
+    port = f":{parsed.port}" if parsed.port else ""
+
+    userinfo = ""
+    if parsed.username:
+        userinfo = parsed.username
+        if parsed.password:
+            userinfo += ":***"
+    elif parsed.password:
+        userinfo = "***"
+
+    netloc = host + port
+    if userinfo:
+        netloc = f"{userinfo}@{netloc}" if netloc else userinfo
+
+    sanitized = parsed._replace(netloc=netloc)
+    return urlunparse(sanitized)
 
 
 # Global inbox configuration
@@ -2772,7 +2795,7 @@ def build_mcp_server() -> FastMCP:
             "environment": settings.environment,
             "http_host": settings.http.host,
             "http_port": settings.http.port,
-            "database_url": settings.database.url,
+            "database_url": _mask_db_url(settings.database.url),
         }
 
     @mcp.tool(name="list_extended_tools")
@@ -5273,7 +5296,8 @@ def build_mcp_server() -> FastMCP:
                         if datetime.fromisoformat(exp) <= now:
                             continue
                     except Exception:
-                        pass
+                        # Treat malformed timestamps as expired to avoid phantom holders.
+                        continue
                 results.append(data)
             except Exception:
                 continue
@@ -5327,7 +5351,7 @@ def build_mcp_server() -> FastMCP:
             "acquired_ts": _iso(now),
             "expires_ts": _iso(now + timedelta(seconds=max(ttl_seconds, 60))),
         }
-        with contextlib.suppress(Exception):
+        with suppress(Exception):
             await asyncio.to_thread(lease_path.write_text, json.dumps(payload, indent=2), "utf-8")
         if conflicts:
             await ctx.info(f"Build slot conflicts for '{slot}': {len(conflicts)}")
@@ -5358,6 +5382,7 @@ def build_mcp_server() -> FastMCP:
         archive = await ensure_archive(settings, project.slug)
         now = datetime.now(timezone.utc)
         slot_path = _slot_dir(archive, slot)
+        await asyncio.to_thread(slot_path.mkdir, parents=True, exist_ok=True)
         branch = _compute_branch(project.human_key)
         holder_id = _safe_component(f"{agent_name}__{branch or 'unknown'}")
         lease_path = slot_path / f"{holder_id}.json"
@@ -5367,7 +5392,7 @@ def build_mcp_server() -> FastMCP:
             current = {}
         new_exp = _iso(now + timedelta(seconds=max(extend_seconds, 60)))
         current.update({"slot": slot, "agent": agent_name, "branch": branch, "expires_ts": new_exp})
-        with contextlib.suppress(Exception):
+        with suppress(Exception):
             await asyncio.to_thread(lease_path.write_text, json.dumps(current, indent=2), "utf-8")
         return {"renewed": True, "expires_ts": new_exp}
 
@@ -5442,7 +5467,7 @@ def build_mcp_server() -> FastMCP:
         """
         return {
             "environment": settings.environment,
-            "database_url": settings.database.url,
+            "database_url": _mask_db_url(settings.database.url),
             "http": {
                 "host": settings.http.host,
                 "port": settings.http.port,

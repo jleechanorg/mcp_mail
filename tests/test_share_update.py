@@ -76,13 +76,10 @@ def test_finalize_snapshot_creates_all_optimizations(tmp_path: Path):
     snapshot = tmp_path / "test.sqlite3"
     _create_snapshot_with_data(snapshot)
 
-    storage_root = tmp_path / "storage"
-    storage_root.mkdir()
-
-    # Finalize snapshot
+    # Finalize snapshot then build optimized views/indexes
+    finalize_snapshot_for_export(snapshot)
     build_materialized_views(snapshot)
     create_performance_indexes(snapshot)
-    finalize_snapshot_for_export(snapshot)
 
     conn = sqlite3.connect(str(snapshot))
     try:
@@ -116,22 +113,19 @@ def test_share_update_incremental_processing(tmp_path: Path):
     snapshot_v1 = tmp_path / "snapshot_v1.sqlite3"
     _create_snapshot_with_data(snapshot_v1, num_messages=3)
 
-    storage_root = tmp_path / "storage"
-    storage_root.mkdir()
-
-    # Finalize v1
+    # Finalize v1 and build auxiliary structures
+    finalize_snapshot_for_export(snapshot_v1)
     build_materialized_views(snapshot_v1)
     create_performance_indexes(snapshot_v1)
-    finalize_snapshot_for_export(snapshot_v1)
 
     # Create updated snapshot with more messages
     snapshot_v2 = tmp_path / "snapshot_v2.sqlite3"
     _create_snapshot_with_data(snapshot_v2, num_messages=5)
 
     # Finalize v2
+    finalize_snapshot_for_export(snapshot_v2)
     build_materialized_views(snapshot_v2)
     create_performance_indexes(snapshot_v2)
-    finalize_snapshot_for_export(snapshot_v2)
 
     # Verify both snapshots have optimizations
     for snapshot in [snapshot_v1, snapshot_v2]:
@@ -211,7 +205,7 @@ def test_bundle_attachments_with_detachment(tmp_path: Path):
             [
                 {
                     "type": "file",
-                    "path": "large_file.bin",
+                    "path": "attachments/raw/large_file.bin",
                     "media_type": "application/octet-stream",
                     "size_bytes": 20000,  # Larger than typical detach threshold
                 }
@@ -242,16 +236,18 @@ def test_bundle_attachments_with_detachment(tmp_path: Path):
     large_file.write_bytes(b"X" * 20000)
 
     # Bundle with small detach threshold
+    bundle_output = tmp_path / "bundle_output"
+    bundle_output.mkdir()
     bundle_attachments(
         snapshot,
-        storage_root,
+        bundle_output,
         storage_root=storage_root,
         inline_threshold=1024,
         detach_threshold=10000,  # File is larger than this
     )
 
     # Verify detached bundle was created
-    bundles = list(storage_root.glob("attachments/bundles/*.bin"))
+    bundles = list(bundle_output.glob("attachments/bundles/*.bin"))
     assert len(bundles) > 0
 
 
@@ -286,13 +282,10 @@ def test_finalize_snapshot_atomic_updates(tmp_path: Path):
     snapshot = tmp_path / "test.sqlite3"
     _create_snapshot_with_data(snapshot)
 
-    storage_root = tmp_path / "storage"
-    storage_root.mkdir()
-
-    # Finalize snapshot
+    # Finalize snapshot and refresh derived structures
+    finalize_snapshot_for_export(snapshot)
     build_materialized_views(snapshot)
     create_performance_indexes(snapshot)
-    finalize_snapshot_for_export(snapshot)
 
     conn = sqlite3.connect(str(snapshot))
     try:

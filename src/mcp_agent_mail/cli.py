@@ -1233,6 +1233,18 @@ def _copy_bundle_contents(source: Path, destination: Path) -> None:
     destination = destination.resolve()
     destination.mkdir(parents=True, exist_ok=True)
 
+    protected_roots = {".git", ".github", ".gitlab", ".hg", ".svn", ".idea", ".vscode"}
+    protected_files = {".gitignore", ".gitattributes"}
+
+    def _is_protected(path: Path) -> bool:
+        try:
+            relative_parts = path.relative_to(destination).parts
+        except ValueError:
+            return False
+        if any(part in protected_roots for part in relative_parts):
+            return True
+        return path.name in protected_files
+
     desired_files: set[Path] = set()
     desired_dirs: set[Path] = {destination}
 
@@ -1251,7 +1263,9 @@ def _copy_bundle_contents(source: Path, destination: Path) -> None:
 
     # Remove files that are no longer present in the source bundle.
     existing_files = {
-        path for path in destination.rglob("*") if path.is_file() or path.is_symlink()
+        path
+        for path in destination.rglob("*")
+        if (path.is_file() or path.is_symlink()) and not _is_protected(path)
     }
     for stale_file in existing_files - desired_files:
         try:
@@ -1267,7 +1281,7 @@ def _copy_bundle_contents(source: Path, destination: Path) -> None:
             console.print(f"[yellow]Warning:[/] Failed to remove stale file {stale_file}: {exc}")
 
     # Remove directories that are no longer needed (deepest first).
-    existing_dirs = {path for path in destination.rglob("*") if path.is_dir()}
+    existing_dirs = {path for path in destination.rglob("*") if path.is_dir() and not _is_protected(path)}
     for stale_dir in sorted(existing_dirs - desired_dirs, key=lambda p: len(p.parts), reverse=True):
         with suppress(OSError):
             stale_dir.rmdir()
@@ -1281,6 +1295,8 @@ def _copy_bundle_contents(source: Path, destination: Path) -> None:
         for filename in files:
             src_file = root_path / filename
             dest_file = dest_root / filename
+            if _is_protected(dest_file):
+                continue
             shutil.copy2(src_file, dest_file)
 
 
@@ -1627,7 +1643,7 @@ def am_run(
 
     def _safe_component(value: str) -> str:
         s = value.strip()
-        for ch in ("/", "\\\\", ":", "*", "?", '"', "<", ">", "|", " "):
+        for ch in ("/", "\\", ":", "*", "?", '"', "<", ">", "|", " "):
             s = s.replace(ch, "_")
         return s or "unknown"
 
@@ -1649,9 +1665,11 @@ def am_run(
                         if datetime.fromisoformat(exp) <= now:
                             continue
                     except Exception:
-                        pass
+                        # Malformed expiration timestamps are treated as expired.
+                        continue
                 results.append(data)
             except Exception:
+                # Ignore corrupt lease records.
                 continue
         return results
 
@@ -1731,11 +1749,13 @@ def am_run(
                 try:
                     data = json.loads(lease_path.read_text(encoding="utf-8"))
                 except Exception:
+                    # Lease file missing or corrupt; create a fresh release record.
                     data = {}
                 data.update({"released_ts": now.isoformat(), "expires_ts": now.isoformat()})
                 with suppress(Exception):
                     lease_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
             except Exception:
+                # Best-effort cleanup; ignore release failures.
                 pass
             finally:
                 renew_stop.set()

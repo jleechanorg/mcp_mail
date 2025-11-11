@@ -176,7 +176,7 @@ async def test_prepush_warn_mode(isolated_env, tmp_path: Path):
 
     # Should pass in warn mode but print warning
     assert proc.returncode == 0
-    assert "WARNING" in proc.stderr or "warning" in proc.stderr.lower()
+    assert "advisory mode" in proc.stderr.lower()
 
 
 @pytest.mark.asyncio

@@ -58,9 +58,9 @@ def _create_test_snapshot(snapshot_path: Path) -> None:
                     id, project_id, sender_id, thread_id, subject, body_md,
                     importance, ack_required, created_ts, attachments
                 )
-                VALUES (?, 1, ?, ?, ?, ?, 'normal', 0, '2025-01-0?T00:00:00Z', '[]')
+                VALUES (?, 1, ?, ?, ?, ?, 'normal', 0, ?, '[]')
                 """,
-                (i, (i % 2) + 1, f"thread-{i}", f"Subject {i}", f"Body {i}"),
+                (i, (i % 2) + 1, f"thread-{i}", f"Subject {i}", f"Body {i}", f"2025-01-{i:02d}T00:00:00Z"),
             )
 
         # Insert message recipients
