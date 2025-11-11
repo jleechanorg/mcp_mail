@@ -4,11 +4,32 @@
 
 set -e
 
+FORCE=0
+
+while (($#)); do
+    case "$1" in
+        --force)
+            FORCE=1
+            shift
+            ;;
+        *)
+            echo "❌ Error: Unknown option '$1'"
+            echo "Usage: $0 [--force]"
+            exit 1
+            ;;
+    esac
+done
+
 echo "🔧 Installing MCP Mail git hooks..."
 
 # Get the root directory of the git repository
 GIT_ROOT=$(git rev-parse --show-toplevel)
 HOOKS_DIR="$GIT_ROOT/.git/hooks"
+
+# Colors for output
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+NC='\033[0m'
 
 # Check if we're in a git repository
 if [ ! -d "$HOOKS_DIR" ]; then
@@ -16,17 +37,39 @@ if [ ! -d "$HOOKS_DIR" ]; then
     exit 1
 fi
 
-# Install pre-commit hook
-echo "📝 Installing pre-commit hook..."
-ln -sf "$GIT_ROOT/scripts/pre-commit-hook.sh" "$HOOKS_DIR/pre-commit"
-chmod +x "$HOOKS_DIR/pre-commit"
-echo "✓ Pre-commit hook installed"
+install_hook() {
+    local name="$1"
+    local target="$2"
+    local destination="$HOOKS_DIR/$name"
 
-# Install pre-push hook
-echo "📝 Installing pre-push hook..."
-ln -sf "$GIT_ROOT/scripts/pre-push-hook.sh" "$HOOKS_DIR/pre-push"
-chmod +x "$HOOKS_DIR/pre-push"
-echo "✓ Pre-push hook installed"
+    echo "📝 Installing $name hook..."
+
+    if [ -e "$destination" ] && [ ! -L "$destination" ]; then
+        if [ "$FORCE" -eq 1 ]; then
+            local backup="$destination.$(date +%Y%m%d%H%M%S).bak"
+            mv "$destination" "$backup"
+            echo "${YELLOW}⚠ Backed up existing $name hook to $backup${NC}"
+        elif [ -t 0 ]; then
+            echo -e "${YELLOW}⚠ Warning: Existing $name hook found (not a symlink).${NC}"
+            printf "Overwrite? (y/N): "
+            read -r response
+            if [[ ! "$response" =~ ^[Yy]$ ]]; then
+                echo "Skipping $name hook installation"
+                return
+            fi
+        else
+            echo -e "${YELLOW}⚠ Warning: Existing $name hook found (not a symlink). Rerun with --force to overwrite.${NC}"
+            return
+        fi
+    fi
+
+    ln -sf "$target" "$destination"
+    chmod +x "$destination"
+    echo "${GREEN}✓ $name hook installed${NC}"
+}
+
+install_hook "pre-commit" "$GIT_ROOT/scripts/pre-commit-hook.sh"
+install_hook "pre-push" "$GIT_ROOT/scripts/pre-push-hook.sh"
 
 echo ""
 echo "✅ Git hooks successfully installed!"
@@ -41,3 +84,5 @@ echo "  git push --no-verify"
 echo ""
 echo "To uninstall hooks:"
 echo "  rm .git/hooks/pre-commit .git/hooks/pre-push"
+echo ""
+echo "Pass --force to overwrite existing hooks without prompting (backups are kept)."

@@ -93,10 +93,12 @@ def read_messages(repo_path: Path) -> list[dict]:
     if not messages_file.exists():
         return []
 
-    messages = []
+    messages: list[dict] = []
     with messages_file.open() as f:
         for line in f:
-            if line.strip():
+            if not line.strip():
+                continue
+            with contextlib.suppress(json.JSONDecodeError):
                 messages.append(json.loads(line))
     return messages
 
@@ -417,7 +419,7 @@ async def test_git_history_preservation(mcp_mail_repo):
         text=True,
         check=True,
     )
-    current_branch = branch_result.stdout.strip() or "master"
+    current_branch = branch_result.stdout.strip() or "main"
 
     second_commit = commits[1]  # Second most recent
 
