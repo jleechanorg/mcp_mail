@@ -44,28 +44,27 @@ With the server running, Claude agents can call `ensure_project`, `register_agen
 
 ## GitHub Authentication
 
-A GitHub token is available for use by agents:
+A GitHub token is available for use by agents via the `GITHUB_TOKEN` environment variable:
 
-- **GitHub CLI (`gh`)**: The token is automatically available as `GH_TOKEN` environment variable for all `gh` CLI operations
-- **GitHub Actions/Workflows**: All repositories have `GH_TOKEN` available as a secret. Access it via `${{ secrets.GH_TOKEN }}`
-- **API calls**: Use the `GH_TOKEN` environment variable for direct GitHub API calls
+- **GitHub CLI (`gh`)**: The token is automatically available as `GITHUB_TOKEN` environment variable for all `gh` CLI operations
+- **GitHub Actions/Workflows**: The `GITHUB_TOKEN` environment variable is available in all workflows
+- **API calls**: Use the `GITHUB_TOKEN` environment variable for direct GitHub API calls
 - **General use**: Use this token for any GitHub-related operations (creating PRs, managing issues, fetching repository data, etc.)
 
 Example usage:
 ```bash
-# GitHub CLI automatically uses GH_TOKEN environment variable
+# GitHub CLI automatically uses GITHUB_TOKEN environment variable
 gh pr create --title "My PR" --body "Description"
 
 # For direct API calls
-curl -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/owner/repo
+curl -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/repos/owner/repo
 ```
 
 Example GitHub Actions workflow:
 ```yaml
 - name: Create PR
   run: gh pr create --title "My PR" --body "Description"
-  env:
-    GH_TOKEN: ${{ secrets.GH_TOKEN }}
+  # GITHUB_TOKEN is automatically available as an environment variable
 ```
 
 **Note**: The token is already configured and ready to use. No additional setup is required.
