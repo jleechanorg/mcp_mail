@@ -173,7 +173,27 @@ When an agent sends a message via `send_message`, here's what happens:
 
 **Configuration:**
 - Storage location: `STORAGE_ROOT` env var (default: `~/.mcp_agent_mail_git_mailbox_repo`)
+  - **Global (default)**: `~/.mcp_agent_mail_git_mailbox_repo` - messages stored in user home directory
+  - **Project-local**: `.mcp_mail` - messages stored in project directory and committed to GitHub
 - Git author: `GIT_AUTHOR_NAME` and `GIT_AUTHOR_EMAIL` env vars
+
+**💡 Project-Local Storage Option:**
+
+Set `STORAGE_ROOT=.mcp_mail` to store messages inside your project directory instead of globally. This allows you to:
+- ✅ **Commit agent conversations to GitHub** alongside code changes
+- ✅ **Share full audit trail** with your team through Git
+- ✅ **Code review agent decisions** as part of PR reviews
+- ✅ **Track agent collaboration** over time in Git history
+- ✅ **Portable context** - clone repo and see all agent communications
+
+Example:
+```bash
+# Start server with project-local storage
+STORAGE_ROOT=.mcp_mail uv run python -m mcp_agent_mail.http
+
+# Messages now stored in ./mcp_mail/projects/<slug>/messages/
+# Commit to share: git add .mcp_mail && git commit -m "Add agent coordination messages"
+```
 
 ---
 
