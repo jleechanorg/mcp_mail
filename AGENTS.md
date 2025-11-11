@@ -8,6 +8,31 @@ RULE NUMBER 1 (NEVER EVER EVER FORGET THIS RULE!!!): YOU ARE NEVER ALLOWED TO DE
 4. **Mandatory explicit plan:** Even after explicit user authorization, restate the command verbatim, list exactly what will be affected, and wait for a confirmation that your understanding is correct. Only then may you execute it—if anything remains ambiguous, refuse and escalate.
 5. **Document the confirmation:** When running any approved destructive command, record (in the session notes / final response) the exact user text that authorized it, the command actually run, and the execution time. If that record is absent, the operation did not happen.
 
+### GitHub Authentication & Token Access
+
+A GitHub token is available for all agents to use. Access it via the `GH_TOKEN` environment variable:
+
+- **GitHub CLI (`gh`)**: The token is automatically available as `GH_TOKEN` and works seamlessly with all `gh` commands
+- **GitHub Actions/Workflows**: Use `GH_TOKEN` as a GitHub secret for workflow automation that requires GitHub API access
+- **Direct API calls**: Include the token in Authorization headers for GitHub API requests
+- **Git operations**: Use for authenticated clone, push, pull operations when needed
+- **General GitHub operations**: Creating PRs, managing issues, checking repository status, fetching data, etc.
+
+Example usage:
+```bash
+# GitHub CLI (token auto-detected from GH_TOKEN)
+gh pr create --title "Feature: Add new capability" --body "Description"
+gh issue create --title "Bug: Fix error" --body "Details"
+
+# Direct GitHub API calls
+curl -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/owner/repo/pulls
+
+# Git with authentication (if needed)
+git clone https://x-access-token:$GH_TOKEN@github.com/owner/repo.git
+```
+
+**Note**: The token is pre-configured and ready to use immediately. No setup or authentication flow required.
+
 We install everything via **uv** (including `uv pip ...`), NEVER raw `pip`. Always work inside a venv. We target **Python 3.11+** (the codebase is tested on 3.11, 3.12, 3.13, and 3.14), and we ONLY use `pyproject.toml` (not `requirements.txt`) for managing the project.
 
 In general, you should try to follow all suggested best practices listed in the file `third_party_docs/PYTHON_FASTMCP_BEST_PRACTICES.md`
