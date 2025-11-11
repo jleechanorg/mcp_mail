@@ -1,0 +1,8 @@
+# SQLite cache (local only)
+*.db
+*.db-shm
+*.db-wal
+
+# Temporary files
+*.tmp
+.lock
