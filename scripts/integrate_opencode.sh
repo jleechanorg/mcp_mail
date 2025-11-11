@@ -223,5 +223,3 @@ _print "The MCP tools will be available to the AI agent alongside built-in tools
 _print ""
 _print "Start the server with: ${RUN_HELPER}"
 _print "Then launch OpenCode in this directory."
-
-

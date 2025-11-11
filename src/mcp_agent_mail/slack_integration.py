@@ -788,4 +788,3 @@ async def post_via_webhook(
     except Exception as e:
         logger.error(f"Failed to post via webhook: {e}")
         return False
-

@@ -9,7 +9,7 @@ MCP Agent Mail exposes 27 tools consuming ~25k tokens by default. This categoriz
 ### Core Tools (8 tools, ~9k tokens)
 Essential for basic coordination:
 - `health_check` - Server readiness check
-- `ensure_project` - Create/verify project  
+- `ensure_project` - Create/verify project
 - `register_agent` - Register agent identity
 - `whois` - Get agent profile info
 - `send_message` - Send markdown messages

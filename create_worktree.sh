@@ -47,34 +47,34 @@ info_message "Attempting to create a new worktree named '$WORKTREE_NAME'..."
 # Check 1: Does a directory with this name already exist as a sibling?
 if [ -d "$WORKTREE_PATH" ]; then
     info_message "Directory '$WORKTREE_PATH' already exists as sibling. Navigating into it instead of creating a new worktree."
-    
+
     if ! cd "$WORKTREE_PATH"; then
         echo "Error: Failed to navigate into existing directory '$WORKTREE_PATH'." >&2
         return 1 2>/dev/null || exit 1
     fi
-    
+
     # Verify it's a Git repository/worktree
     if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         echo "Error: Directory '$WORKTREE_PATH' exists but is not a Git repository/worktree." >&2
         return 1 2>/dev/null || exit 1
     fi
-    
+
     current_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
     if [ "$current_branch" != "$WORKTREE_NAME" ]; then
         info_message "Warning: current branch '$current_branch' does not match expected '$WORKTREE_NAME'."
     fi
-    
+
     echo "=============================================="
     echo "✅ Navigated to existing worktree directory!"
     echo "=============================================="
     info_message "You are now in: $(pwd)"
-    
+
     echo ""
     echo "Useful commands:"
     echo "  git worktree list        # List all worktrees"
     echo "  git worktree remove      # Remove a worktree"
     echo "  git branch -d            # Delete the branch when done"
-    
+
     return 0 2>/dev/null || exit 0  # Works whether sourced or executed
 fi
 

@@ -15,5 +15,3 @@ def test_llm_env_bridge_no_crash(monkeypatch):
     from mcp_agent_mail.llm import _bridge_provider_env
     _bridge_provider_env()
     # No assertion needed; should not raise
-
-

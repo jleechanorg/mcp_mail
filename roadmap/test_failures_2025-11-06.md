@@ -30,16 +30,16 @@
 
 ## Known Root Causes / Patterns
 
-1. **Extended tool access in tests**  
-   - Default config exposes only the 10 core tools. Tests that call `set_contact_policy`, `list_contacts`, etc. expect those extended tools to be callable directly and currently fail with `ToolError: Unknown tool: set_contact_policy`.  
+1. **Extended tool access in tests**
+   - Default config exposes only the 10 core tools. Tests that call `set_contact_policy`, `list_contacts`, etc. expect those extended tools to be callable directly and currently fail with `ToolError: Unknown tool: set_contact_policy`.
    - Reproduced on `origin/main` (`uv run pytest tests/test_contact_policy.py::test_contact_blocked_and_contacts_only`).
    - Mitigation ideas: either set `MCP_TOOLS_MODE=extended` in `tests/conftest.py` or update tests to invoke `call_extended_tool`.
 
-2. **Share/export schemas**  
+2. **Share/export schemas**
    - Integration and unit share tests need `messages.sender_id`/`thread_id`. Several fixtures still create legacy schemas without these columns, causing `sqlite3.OperationalError: no such column: m.thread_id` during export.
    - Some viewer assertions still look for “Static Viewer” text even though the new UI title is “Agent Mail Viewer”.
 
-3. **Large backlog beyond current scope**  
+3. **Large backlog beyond current scope**
    - Macros, guard tools, messaging semantics, summarization, and claims suites show real regressions unrelated to the naming work. Triage requires stepping through each failure with focused pytest invocations.
 
 ## Next Steps

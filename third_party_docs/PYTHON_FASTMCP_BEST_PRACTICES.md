@@ -241,12 +241,12 @@ packages = ["smartedgar"]
 [tool.hatch.build.targets.sdist]
 exclude = [
     "/.venv",
-    "/.vscode", 
+    "/.vscode",
     "/.git",
     "/.github",
     "/__pycache__",
     "/*.pyc",
-    "/*.pyo", 
+    "/*.pyo",
     "/*.pyd",
     "*.db",
     "*.db-journal",
@@ -254,7 +254,7 @@ exclude = [
     "*.db-shm",
     ".env",
     "tests/*",
-    "docs/*", 
+    "docs/*",
     "*.log",
     "sec_filings/*",
     "logs/*",
@@ -424,7 +424,7 @@ def get_analysis() -> ToolResult:
     """Provides a detailed analysis."""
     structured_data = {"metric": 42, "status": "complete"}
     human_summary = "Analysis complete. The key metric is 42."
-    
+
     return ToolResult(
         content=[TextContent(text=human_summary)],
         structured_content=structured_data
@@ -514,11 +514,11 @@ engine = create_async_engine(
 async def bulk_insert_with_copy(df: pd.DataFrame, table_name: str):
     from io import StringIO
     import csv
-    
+
     buffer = StringIO()
     df.to_csv(buffer, index=False, header=False, quoting=csv.QUOTE_MINIMAL)
     buffer.seek(0)
-    
+
     async with engine.raw_connection() as conn:
         async with conn.cursor() as cursor:
             await cursor.copy_expert(f"COPY {table_name} FROM STDIN WITH CSV", buffer)
@@ -555,7 +555,7 @@ from redis import asyncio as redis
 class RedisClient:
     def __init__(self):
         self.pool = redis.ConnectionPool(host="localhost", max_connections=50)
-    
+
     async def get(self, key: str):
         try:
             async with redis.Redis(connection_pool=self.pool) as r:

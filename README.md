@@ -389,7 +389,7 @@ Auth notes:
 
 - `/mail/{project}/attachments` (Messages with attachments)
   - Lists messages that contain any attachments, with subject and created time.
-  
+
 - `/mail/unified-inbox` (Cross-project activity)
   - Shows recent messages across all projects with thread counts and sender/recipients.
 

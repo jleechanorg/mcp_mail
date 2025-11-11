@@ -55,5 +55,3 @@ async def test_summarize_threads_without_llm_path(isolated_env, monkeypatch):
         )
         data = res.data
         assert data.get("threads") and data.get("aggregate") is not None
-
-

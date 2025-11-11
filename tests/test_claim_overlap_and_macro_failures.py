@@ -21,4 +21,3 @@ async def test_file_reservation_overlap_conflict_path(isolated_env):
 
 
 # Test removed: macro_contact_handshake tool has been deleted from the codebase
-

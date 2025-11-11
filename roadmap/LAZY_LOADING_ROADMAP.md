@@ -48,7 +48,7 @@
 async def list_extended_tools(ctx: Context) -> dict[str, Any]:
     """
     List all extended tools with metadata.
-    
+
     Returns
     -------
     dict
@@ -59,22 +59,22 @@ async def list_extended_tools(ctx: Context) -> dict[str, Any]:
         }
     """
     await ctx.info("Listing extended tools")
-    
+
     by_category: dict[str, list[str]] = {}
     tools_list = []
-    
+
     for tool_name in sorted(EXTENDED_TOOLS):
         metadata = EXTENDED_TOOL_METADATA.get(tool_name, {})
         category = metadata.get("category", "uncategorized")
         description = metadata.get("description", "")
-        
+
         by_category.setdefault(category, []).append(tool_name)
         tools_list.append({
             "name": tool_name,
             "category": category,
             "description": description
         })
-    
+
     return {
         "total": len(EXTENDED_TOOLS),
         "by_category": by_category,
@@ -136,19 +136,19 @@ _EXTENDED_TOOL_REGISTRY.update({
 async def call_extended_tool(ctx: Context, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """
     Dynamically invoke an extended tool by name.
-    
+
     Parameters
     ----------
     tool_name : str
         Name of extended tool (e.g., "file_reservation_paths")
     arguments : dict
         Tool-specific arguments
-        
+
     Returns
     -------
     dict
         Result from invoked tool
-        
+
     Raises
     ------
     ValueError
@@ -161,16 +161,16 @@ async def call_extended_tool(ctx: Context, tool_name: str, arguments: dict[str, 
             f"Unknown extended tool: {tool_name}. "
             f"Use list_extended_tools to see available options."
         )
-    
+
     tool_func = _EXTENDED_TOOL_REGISTRY.get(tool_name)
     if not tool_func:
         raise RuntimeError(
             f"Extended tool {tool_name} is not registered. "
             f"This is an internal server error."
         )
-    
+
     await ctx.info(f"Invoking extended tool: {tool_name}")
-    
+
     try:
         result = await tool_func(ctx, **arguments)
         return result
@@ -209,7 +209,7 @@ Use in `build_mcp_server()`:
 def build_mcp_server() -> FastMCP:
     settings: Settings = get_settings()
     tools_mode = settings.tools_mode  # "extended" or "core"
-    
+
     # Will be used in Phase 3 for conditional registration
 ```
 
@@ -308,7 +308,7 @@ Update implementation status:
 def build_mcp_server() -> FastMCP:
     settings = get_settings()
     mcp = FastMCP(...)
-    
+
     # Only register core tools in core mode
     if settings.tools_mode == "core":
         # Register only CORE_TOOLS + meta-tools
@@ -322,10 +322,10 @@ def build_mcp_server() -> FastMCP:
 ```python
 def build_mcp_server() -> FastMCP:
     mcp = FastMCP(...)
-    
+
     # Register all tools normally
     ... all @mcp.tool decorators ...
-    
+
     # If core mode, remove extended tools from MCP's registry
     if settings.tools_mode == "core":
         for tool_name in EXTENDED_TOOLS:
@@ -366,10 +366,10 @@ async def test_tools_mode_registration(tools_mode, monkeypatch):
     """Test correct tools registered based on mode."""
     monkeypatch.setenv("MCP_TOOLS_MODE", tools_mode)
     clear_settings_cache()
-    
+
     mcp = build_mcp_server()
     tools_list = get_tools_list(mcp)  # Helper to call tools/list
-    
+
     if tools_mode == "core":
         assert len(tools_list) == 10
         for tool in tools_list:
@@ -442,20 +442,20 @@ async def test_tools_mode_registration(tools_mode, monkeypatch):
 ### Technical Risks
 - **FastMCP doesn't support conditional registration**
   - Mitigation: Implement post-registration filtering or fork FastMCP
-  
+
 - **Meta-tools add complexity**
   - Mitigation: Comprehensive tests and error handling
-  
+
 - **Token savings less than expected**
   - Mitigation: Measure actual token counts and adjust categorization
 
 ### User Impact Risks
 - **Breaking changes**
   - Mitigation: Default to extended mode, make core mode opt-in
-  
+
 - **Confusion about tool modes**
   - Mitigation: Clear documentation and warning messages
-  
+
 - **Performance degradation**
   - Mitigation: Benchmark both modes before release
 

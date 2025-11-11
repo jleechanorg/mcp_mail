@@ -26,5 +26,3 @@ def test_rate_limits_for_branches(monkeypatch):
     assert mw._rate_limits_for("tools")[0] >= 1
     assert mw._rate_limits_for("resources")[0] >= 1
     assert mw._rate_limits_for("other")[0] >= 1
-
-

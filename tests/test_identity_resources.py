@@ -228,4 +228,3 @@ async def test_register_agent_same_slug_different_human_keys(isolated_env):
 
         assert who1.data.get("name") == "Agent1"
         assert who2.data.get("name") == "Agent2"
-

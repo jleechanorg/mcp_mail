@@ -113,4 +113,3 @@ async def test_renew_file_reservations_extends_expiry(isolated_env):
             },
         )
         assert r.data.get("renewed", 0) >= 1
-

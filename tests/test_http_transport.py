@@ -162,4 +162,3 @@ async def test_http_lock_status_endpoint(isolated_env):
         entry = next(item for item in locks if item.get("path") == str(lock_path))
         assert entry.get("metadata", {}).get("pid") == 999_999
         assert entry.get("stale_suspected") is True
-

@@ -120,5 +120,3 @@ async def test_outbox_and_message_resource(isolated_env):
         # Message resource returns full payload with body
         blocks2 = await client.read_resource(f"resource://message/{mid}?project=Backend")
         assert blocks2 and "OutboxMsg" in (blocks2[0].text or "")
-
-

@@ -266,5 +266,3 @@ def _bridge_provider_env() -> None:
             val = _get_from_any(*aliases)
             if val:
                 os.environ[canonical] = val
-
-
