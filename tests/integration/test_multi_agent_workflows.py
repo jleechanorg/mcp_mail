@@ -13,36 +13,13 @@ These tests validate end-to-end agent coordination scenarios:
 from __future__ import annotations
 
 import asyncio
-import subprocess
 from pathlib import Path
 
 import pytest
-from fastmcp import Client
 
-from mcp_agent_mail.app import build_mcp_server
 from mcp_agent_mail.config import get_settings
 
-
-@pytest.fixture
-async def mcp_server_with_storage(isolated_env, tmp_path):
-    """Create an MCP server instance with isolated storage."""
-    settings = get_settings()
-
-    # Create storage directory structure
-    storage_root = Path(settings.storage.root)
-    storage_root.mkdir(parents=True, exist_ok=True)
-
-    # Build server
-    server = build_mcp_server()
-
-    return server
-
-
-@pytest.fixture
-async def mcp_client(mcp_server_with_storage):
-    """Create an MCP client connected to the test server."""
-    async with Client(mcp_server_with_storage) as client:
-        yield client
+from .conftest import init_git_repo
 
 
 @pytest.mark.asyncio
@@ -52,15 +29,8 @@ async def test_basic_agent_registration_and_messaging(mcp_client, tmp_path):
     project_path = tmp_path / "test_project"
     project_path.mkdir()
 
-    # Initialize git repo for the project
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "init"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "config", "user.email", "test@example.com"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "config", "user.name", "Test Agent"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "config", "commit.gpgsign", "false"], cwd=project_path, check=True, capture_output=True)
+    # Initialize git repo
+    init_git_repo(project_path)
 
     # Create project
     await mcp_client.call_tool("ensure_project", {
@@ -125,14 +95,7 @@ async def test_thread_conversation_workflow(mcp_client, tmp_path):
     project_path.mkdir()
 
     # Initialize git repo
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "init"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "config", "user.email", "test@example.com"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "config", "user.name", "Test Agent"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "config", "commit.gpgsign", "false"], cwd=project_path, check=True, capture_output=True)
+    init_git_repo(project_path)
 
     # Create project
     await mcp_client.call_tool("ensure_project", {"human_key": str(project_path)})
@@ -200,14 +163,7 @@ async def test_acknowledgment_workflow(mcp_client, tmp_path):
     project_path.mkdir()
 
     # Initialize git repo
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "init"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "config", "user.email", "test@example.com"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "config", "user.name", "Test Agent"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "config", "commit.gpgsign", "false"], cwd=project_path, check=True, capture_output=True)
+    init_git_repo(project_path)
 
     # Create project and agents
     await mcp_client.call_tool("ensure_project", {"human_key": str(project_path)})
@@ -266,14 +222,7 @@ async def test_file_reservation_conflict_workflow(mcp_client, tmp_path):
     project_path.mkdir()
 
     # Initialize git repo
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "init"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "config", "user.email", "test@example.com"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "config", "user.name", "Test Agent"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "config", "commit.gpgsign", "false"], cwd=project_path, check=True, capture_output=True)
+    init_git_repo(project_path)
 
     # Create project and agents
     await mcp_client.call_tool("ensure_project", {"human_key": str(project_path)})
@@ -334,7 +283,7 @@ async def test_file_reservation_conflict_workflow(mcp_client, tmp_path):
         "paths": ["src/backend/**/*.py"],
     })
 
-    assert len(release.data["released"]) == 1
+    assert release.data["released"] == 1
 
 
 @pytest.mark.asyncio
@@ -344,14 +293,7 @@ async def test_shared_file_reservations(mcp_client, tmp_path):
     project_path.mkdir()
 
     # Initialize git repo
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "init"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "config", "user.email", "test@example.com"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "config", "user.name", "Test Agent"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "config", "commit.gpgsign", "false"], cwd=project_path, check=True, capture_output=True)
+    init_git_repo(project_path)
 
     # Create project and agents
     await mcp_client.call_tool("ensure_project", {"human_key": str(project_path)})
@@ -402,15 +344,9 @@ async def test_cross_project_messaging(mcp_client, tmp_path):
     project2_path.mkdir()
 
     # Initialize both git repos
+    # Initialize both git repos
     for path in [project1_path, project2_path]:
-        subprocess.run(  # noqa: ASYNC221
-        ["git", "init"], cwd=path, check=True, capture_output=True)
-        subprocess.run(  # noqa: ASYNC221
-        ["git", "config", "user.email", "test@example.com"], cwd=path, check=True, capture_output=True)
-        subprocess.run(  # noqa: ASYNC221
-        ["git", "config", "user.name", "Test Agent"], cwd=path, check=True, capture_output=True)
-        subprocess.run(  # noqa: ASYNC221
-        ["git", "config", "commit.gpgsign", "false"], cwd=path, check=True, capture_output=True)
+        init_git_repo(path)
 
     # Create both projects
     await mcp_client.call_tool("ensure_project", {"human_key": str(project1_path)})
@@ -460,14 +396,7 @@ async def test_message_search(mcp_client, tmp_path):
     project_path.mkdir()
 
     # Initialize git repo
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "init"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "config", "user.email", "test@example.com"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "config", "user.name", "Test Agent"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "config", "commit.gpgsign", "false"], cwd=project_path, check=True, capture_output=True)
+    init_git_repo(project_path)
 
     # Create project and agents
     await mcp_client.call_tool("ensure_project", {"human_key": str(project_path)})
@@ -516,7 +445,8 @@ async def test_message_search(mcp_client, tmp_path):
         "limit": 10,
     })
 
-    results = search_result.structured_content["results"]
+    # search_messages returns a list directly in structured_content
+    results = search_result.structured_content
     # Should find 2 messages mentioning authentication
     assert len(results) >= 2
 
@@ -533,14 +463,7 @@ async def test_concurrent_message_sending(mcp_client, tmp_path):
     project_path.mkdir()
 
     # Initialize git repo
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "init"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "config", "user.email", "test@example.com"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "config", "user.name", "Test Agent"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "config", "commit.gpgsign", "false"], cwd=project_path, check=True, capture_output=True)
+    init_git_repo(project_path)
 
     # Create project and agents
     await mcp_client.call_tool("ensure_project", {"human_key": str(project_path)})
@@ -595,14 +518,7 @@ async def test_whois_command(mcp_client, tmp_path):
     project_path.mkdir()
 
     # Initialize git repo
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "init"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "config", "user.email", "test@example.com"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "config", "user.name", "Test Agent"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(  # noqa: ASYNC221
-        ["git", "config", "commit.gpgsign", "false"], cwd=project_path, check=True, capture_output=True)
+    init_git_repo(project_path)
 
     # Create project
     await mcp_client.call_tool("ensure_project", {"human_key": str(project_path)})
