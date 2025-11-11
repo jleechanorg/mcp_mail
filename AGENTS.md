@@ -10,17 +10,17 @@ RULE NUMBER 1 (NEVER EVER EVER FORGET THIS RULE!!!): YOU ARE NEVER ALLOWED TO DE
 
 ### GitHub Authentication & Token Access
 
-A GitHub token is available for all agents to use. Access it via the `GH_TOKEN` environment variable:
+A GitHub token is available for all agents to use:
 
-- **GitHub CLI (`gh`)**: The token is automatically available as `GH_TOKEN` and works seamlessly with all `gh` commands
-- **GitHub Actions/Workflows**: Use `GH_TOKEN` as a GitHub secret for workflow automation that requires GitHub API access
-- **Direct API calls**: Include the token in Authorization headers for GitHub API requests
+- **GitHub CLI (`gh`)**: The token is automatically available as `GH_TOKEN` environment variable and works seamlessly with all `gh` commands
+- **GitHub Actions/Workflows**: All repositories have `GH_TOKEN` available as a secret. Access it via `${{ secrets.GH_TOKEN }}`
+- **Direct API calls**: Include the `GH_TOKEN` environment variable in Authorization headers for GitHub API requests
 - **Git operations**: Use for authenticated clone, push, pull operations when needed
 - **General GitHub operations**: Creating PRs, managing issues, checking repository status, fetching data, etc.
 
-Example usage:
+Example local/CLI usage:
 ```bash
-# GitHub CLI (token auto-detected from GH_TOKEN)
+# GitHub CLI (token auto-detected from GH_TOKEN environment variable)
 gh pr create --title "Feature: Add new capability" --body "Description"
 gh issue create --title "Bug: Fix error" --body "Details"
 
@@ -29,6 +29,19 @@ curl -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/owner/repo
 
 # Git with authentication (if needed)
 git clone https://x-access-token:$GH_TOKEN@github.com/owner/repo.git
+```
+
+Example GitHub Actions workflow:
+```yaml
+- name: Create PR with GitHub CLI
+  run: gh pr create --title "Automated PR" --body "Description"
+  env:
+    GH_TOKEN: ${{ secrets.GH_TOKEN }}
+
+- name: Call GitHub API
+  run: |
+    curl -H "Authorization: token ${{ secrets.GH_TOKEN }}" \
+         https://api.github.com/repos/owner/repo/pulls
 ```
 
 **Note**: The token is pre-configured and ready to use immediately. No setup or authentication flow required.

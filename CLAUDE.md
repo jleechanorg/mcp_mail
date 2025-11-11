@@ -44,20 +44,28 @@ With the server running, Claude agents can call `ensure_project`, `register_agen
 
 ## GitHub Authentication
 
-A GitHub token is available for use by agents. You can access it via the `GH_TOKEN` environment variable:
+A GitHub token is available for use by agents:
 
-- **GitHub CLI (`gh`)**: The token is automatically available as `GH_TOKEN` and can be used for all `gh` CLI operations
-- **GitHub Actions/Workflows**: Use `GH_TOKEN` as a GitHub secret for any automation that requires GitHub API access
-- **API calls**: The token can be used for direct GitHub API calls when needed
+- **GitHub CLI (`gh`)**: The token is automatically available as `GH_TOKEN` environment variable for all `gh` CLI operations
+- **GitHub Actions/Workflows**: All repositories have `GH_TOKEN` available as a secret. Access it via `${{ secrets.GH_TOKEN }}`
+- **API calls**: Use the `GH_TOKEN` environment variable for direct GitHub API calls
 - **General use**: Use this token for any GitHub-related operations (creating PRs, managing issues, fetching repository data, etc.)
 
 Example usage:
 ```bash
-# GitHub CLI automatically uses GH_TOKEN
+# GitHub CLI automatically uses GH_TOKEN environment variable
 gh pr create --title "My PR" --body "Description"
 
 # For direct API calls
 curl -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/owner/repo
+```
+
+Example GitHub Actions workflow:
+```yaml
+- name: Create PR
+  run: gh pr create --title "My PR" --body "Description"
+  env:
+    GH_TOKEN: ${{ secrets.GH_TOKEN }}
 ```
 
 **Note**: The token is already configured and ready to use. No additional setup is required.
