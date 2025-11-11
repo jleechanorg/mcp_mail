@@ -15,8 +15,8 @@ import json
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -212,7 +212,7 @@ async def test_slack_message_creates_mcp_mail_entry(mcp_mail_repo):
     commit_messages(mcp_mail_repo, "Slack message: deployment help")
 
     # Verify git commit
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: ASYNC221
         ["git", "log", "--oneline", "-1"],
         cwd=mcp_mail_repo,
         capture_output=True,
@@ -265,12 +265,12 @@ async def test_slack_thread_maps_to_mcp_thread_id(mcp_mail_repo):
     assert len(messages) == 3
 
     # Original message has no threadId
-    original_msg = [m for m in messages if m["id"] == msg1_id][0]
+    original_msg = next(m for m in messages if m["id"] == msg1_id)
     assert "threadId" not in original_msg
 
     # Replies have matching threadId
-    reply1_msg = [m for m in messages if m["id"] == msg2_id][0]
-    reply2_msg = [m for m in messages if m["id"] == msg3_id][0]
+    reply1_msg = next(m for m in messages if m["id"] == msg2_id)
+    reply2_msg = next(m for m in messages if m["id"] == msg3_id)
 
     expected_thread_id = "slack_C1234567890_1234567890.111111"
     assert reply1_msg["threadId"] == expected_thread_id
@@ -445,7 +445,7 @@ async def test_slack_bridge_agent_messages_history(mcp_mail_repo):
     commit_messages(mcp_mail_repo, "Slack messages batch 2")
 
     # Verify git history
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: ASYNC221
         ["git", "log", "--oneline"],
         cwd=mcp_mail_repo,
         capture_output=True,
@@ -529,7 +529,7 @@ async def test_update_slack_message_metadata(mcp_mail_repo):
         "ts": "1234567890.123456",
     }
 
-    msg_id = write_slack_message(mcp_mail_repo, event)
+    _msg_id = write_slack_message(mcp_mail_repo, event)
 
     # Simulate adding reaction metadata (in real implementation)
     messages = read_messages(mcp_mail_repo)

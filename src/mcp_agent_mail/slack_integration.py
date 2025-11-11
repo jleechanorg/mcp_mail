@@ -688,10 +688,6 @@ async def handle_slack_message_event(
           "thread_ts": "1503435956.000100"  # If reply in thread
         }
     """
-    # Import here to avoid circular dependency
-    from .db import get_session
-    from .models import Agent, Project
-
     # Ignore bot messages to prevent loops
     if event.get("bot_id") or event.get("subtype") == "bot_message":
         logger.debug("Ignoring bot message to prevent loop")

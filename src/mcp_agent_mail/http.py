@@ -968,7 +968,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         # This runs in background to not block Slack's webhook response
                         async def _create_mcp_message():
                             try:
-                                from .app import build_mcp_server
                                 from .db import get_session
                                 from .models import Agent, Project
 
@@ -1028,7 +1027,9 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                 logger.error(f"Failed to create MCP message from Slack: {e}")
 
                         # Fire and forget - don't block Slack webhook response
-                        asyncio.create_task(_create_mcp_message())
+                        task = asyncio.create_task(_create_mcp_message())
+                        # Prevent task from being garbage collected
+                        task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
 
                 # Handle reaction events for acknowledgments
                 elif event_type == "reaction_added" and settings.slack.sync_reactions:
