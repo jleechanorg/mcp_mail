@@ -25,12 +25,7 @@ from fastmcp import Context, FastMCP
 from git import Repo
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
 
-try:
-    from pathspec import PathSpec  # type: ignore[import-not-found]
-    from pathspec.patterns.gitwildmatch import GitWildMatchPattern  # type: ignore[import-not-found]
-except Exception:  # pragma: no cover - optional dependency fallback
-    PathSpec = None  # type: ignore[assignment]
-    GitWildMatchPattern = None  # type: ignore[assignment]
+# PathSpec and GitWildMatchPattern imports removed - not used in this module
 from sqlalchemy import asc, delete, desc, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, NoResultFound
 from sqlalchemy.orm import aliased
@@ -5273,6 +5268,7 @@ def build_mcp_server() -> FastMCP:
                         if datetime.fromisoformat(exp) <= now:
                             continue
                     except Exception:
+                        # If the expiration timestamp is malformed, skip this file.
                         pass
                 results.append(data)
             except Exception:

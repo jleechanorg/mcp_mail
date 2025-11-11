@@ -1649,6 +1649,7 @@ def am_run(
                         if datetime.fromisoformat(exp) <= now:
                             continue
                     except Exception:
+                        # Ignore errors parsing expiration timestamp; treat as valid/active.
                         pass
                 results.append(data)
             except Exception:
@@ -1736,6 +1737,7 @@ def am_run(
                 with suppress(Exception):
                     lease_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
             except Exception:
+                # Best effort cleanup; ignore errors during lease file release.
                 pass
             finally:
                 renew_stop.set()
