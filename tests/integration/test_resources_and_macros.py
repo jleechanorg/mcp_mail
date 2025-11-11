@@ -136,7 +136,7 @@ async def test_macro_file_reservation_cycle(mcp_client, tmp_path):
     assert "file_reservations" in result.data
     assert "released" in result.data
     assert len(result.data["file_reservations"]["granted"]) == 1
-    # released contains int count when auto_release=True
+    # released is a dict containing {released: int, released_at: timestamp}
     if result.data["released"]:
         assert result.data["released"]["released"] >= 1
 
