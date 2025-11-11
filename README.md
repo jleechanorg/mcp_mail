@@ -1715,7 +1715,7 @@ result = await client.call_tool("list_extended_tools", {})
 | `OTEL_SERVICE_NAME` | `mcp-agent-mail` | Service name for telemetry |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` |  | OTLP exporter endpoint URL |
 | `APP_ENVIRONMENT` | `development` | Environment name (development/production) |
-| `DATABASE_URL` | `sqlite+aiosqlite:///.mcp_mail/storage.sqlite3` | SQLAlchemy async database URL (stored in .mcp_mail/) |
+| `DATABASE_URL` | `sqlite+aiosqlite:///./.mcp_mail/storage.sqlite3` | SQLAlchemy async database URL (stored in .mcp_mail/) |
 | `DATABASE_ECHO` | `false` | Echo SQL statements for debugging |
 | `GIT_AUTHOR_NAME` | `mcp-agent` | Git commit author name |
 | `GIT_AUTHOR_EMAIL` | `mcp-agent@example.com` | Git commit author email |

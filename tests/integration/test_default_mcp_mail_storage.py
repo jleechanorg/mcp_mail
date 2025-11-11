@@ -125,7 +125,7 @@ async def test_messages_stored_in_mcp_mail_git_archive(mcp_mail_storage):
             "sender_name": "Agent1",
             "to": ["Agent2"],
             "subject": "Test Message",
-            "body": "This should be stored in .mcp_mail/",
+            "body_md": "This should be stored in .mcp_mail/",
         },
     )
 
@@ -197,7 +197,7 @@ async def test_parallel_writes_to_mcp_mail_no_race_conditions(mcp_mail_storage):
                     "sender_name": agent_name,
                     "to": ["Receiver"],
                     "subject": f"Parallel message {i} from {agent_name}",
-                    "body": f"Testing concurrent write safety - message {i}",
+                    "body_md": f"Testing concurrent write safety - message {i}",
                 },
             )
             results.append(result["id"])
@@ -279,7 +279,7 @@ async def test_sqlite_and_git_storage_consistency(mcp_mail_storage):
                 "sender_name": "Sender",
                 "to": ["Receiver"],
                 "subject": f"Sync test message {i}",
-                "body": f"Testing SQLite/Git sync - message {i}",
+                "body_md": f"Testing SQLite/Git sync - message {i}",
             },
         )
         message_ids.append(result["id"])

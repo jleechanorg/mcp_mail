@@ -53,8 +53,9 @@ MCP Agent Mail (forked from the original `mcp_agent_mail`) is a production-grade
                ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ Persistent Storage                                           │
-│ - ~/.mcp_agent_mail_git_mailbox_repo/ (Git archive)        │
-│ - ./storage.sqlite3 (metadata + FTS5 search indexes)       │
+│ - .mcp_mail/ (Git archive, project-local by default)       │
+│   Alternative: ~/.mcp_agent_mail_git_mailbox_repo/ (global)│
+│ - .mcp_mail/storage.sqlite3 (metadata + FTS5 indexes)      │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -176,7 +177,7 @@ MCP Agent Mail (forked from the original `mcp_agent_mail`) is a production-grade
 
 **Structure:**
 ```
-~/.mcp_agent_mail_git_mailbox_repo/
+.mcp_mail/  # Project-local by default (global alternative: ~/.mcp_agent_mail_git_mailbox_repo/)
 ├── projects/
 │   └── <slug>/
 │       ├── agents/
@@ -415,7 +416,7 @@ DATABASE_ECHO=false
 
 **Storage (Git Archive):**
 ```
-STORAGE_ROOT=~/.mcp_agent_mail_git_mailbox_repo
+STORAGE_ROOT=.mcp_mail  # Use ~/.mcp_agent_mail_git_mailbox_repo for global storage
 GIT_AUTHOR_NAME=mcp-agent
 GIT_AUTHOR_EMAIL=mcp-agent@example.com
 ```
