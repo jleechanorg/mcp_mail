@@ -56,5 +56,3 @@ async def test_ack_views_resources(isolated_env):
         ]:
             blocks = await client.read_resource(uri)
             assert blocks and isinstance(blocks[0].text, str)
-
-

@@ -46,4 +46,3 @@ into concrete, repeatable actions for the ops and client-integration teams.
    snippets are provided in `docs/observability.md`.
 
 Check off every item before shipping the next release.
-

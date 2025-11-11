@@ -62,4 +62,3 @@ async def test_http_jwt_rbac_and_rate_limit(monkeypatch):
         assert r1.status_code == 200
         r2 = await client.post(settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}}))
         assert r2.status_code == 429
-

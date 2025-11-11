@@ -70,5 +70,3 @@ def test_cli_file_reservations_soon_and_list_acks_and_remind(isolated_env):
         ["acks", "remind", "Backend", payload["agent_b_name"], "--min-age-minutes", "0", "--limit", "5"],
     )
     assert res_remind.exit_code == 0
-
-

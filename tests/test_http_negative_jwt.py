@@ -107,5 +107,3 @@ async def test_http_jwt_malformed_token(isolated_env, monkeypatch):
         headers = {"Authorization": "Bearer not.a.jwt"}
         r = await client.post(settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}}))
         assert r.status_code == 401
-
-

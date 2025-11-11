@@ -63,5 +63,3 @@ async def test_guard_render_and_conflict_message(isolated_env, tmp_path: Path):
     # Uninstall guard path returns True and removes file
     removed = await uninstall_guard(repo_dir)
     assert removed is True
-
-

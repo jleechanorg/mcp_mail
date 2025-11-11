@@ -57,4 +57,3 @@ Suggested panels:
 ## 4. Bonus: recent tool usage resource
 
 When building interactive UIs, poll `resource://tooling/recent?agent=<name>&project=<slug>` to surface the last few successful invocations in the UI. This makes it easy to link “what just worked” with a macro or capability tip.
-

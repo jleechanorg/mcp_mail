@@ -51,5 +51,3 @@ async def test_rate_limit_redis_backend_path(isolated_env, monkeypatch):
         assert r1.status_code in (200, 429)
         r2 = await client.post(settings.http.path, json=_rpc("resources/read", {"uri": "resource://projects"}))
         assert r2.status_code in (200, 429)
-
-

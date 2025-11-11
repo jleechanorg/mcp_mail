@@ -48,5 +48,3 @@ def test_readiness_ok_status(isolated_env):
 
     code = asyncio.run(_readiness_ok())
     assert code in (200, 503)
-
-

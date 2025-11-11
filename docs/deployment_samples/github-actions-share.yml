@@ -23,11 +23,11 @@ jobs:
 
       - name: Generate static bundle
         run: |
-          uv run python -m mcp_agent_mail.cli share export \ 
-            --output ./out/mailbox-share \ 
-            --inline-threshold 65536 \ 
-            --detach-threshold 262144 \ 
-            --scrub-preset standard \ 
+          uv run python -m mcp_agent_mail.cli share export \
+            --output ./out/mailbox-share \
+            --inline-threshold 65536 \
+            --detach-threshold 262144 \
+            --scrub-preset standard \
             --zip
 
       - name: Upload mailbox artifact

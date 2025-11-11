@@ -50,4 +50,3 @@ async def test_rate_limit_redis_fallback(isolated_env, monkeypatch):
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         r = await client.get("/health/liveness")
         assert r.status_code == 200
-

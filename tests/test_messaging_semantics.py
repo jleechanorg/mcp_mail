@@ -125,5 +125,3 @@ async def test_acknowledge_idempotent_multiple_calls(isolated_env):
         )
         # Timestamps should remain the same (idempotent)
         assert second.data.get("acknowledged_at") == first_ack_at
-
-
