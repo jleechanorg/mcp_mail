@@ -13,7 +13,6 @@ These tests validate end-to-end agent coordination scenarios:
 from __future__ import annotations
 
 import asyncio
-import json
 import subprocess
 from pathlib import Path
 
@@ -21,7 +20,7 @@ import pytest
 from fastmcp import Client
 
 from mcp_agent_mail.app import build_mcp_server
-from mcp_agent_mail.config import clear_settings_cache, get_settings
+from mcp_agent_mail.config import get_settings
 
 
 @pytest.fixture
@@ -54,16 +53,19 @@ async def test_basic_agent_registration_and_messaging(mcp_client, tmp_path):
     project_path.mkdir()
 
     # Initialize git repo for the project
-    subprocess.run(["git", "init"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "Test Agent"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "init"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "config", "user.email", "test@example.com"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "config", "user.name", "Test Agent"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "config", "commit.gpgsign", "false"], cwd=project_path, check=True, capture_output=True)
 
     # Create project
-    project_result = await mcp_client.call_tool("ensure_project", {
+    await mcp_client.call_tool("ensure_project", {
         "human_key": str(project_path),
     })
-    project_slug = project_result.data["slug"]
 
     # Register two agents
     agent1_result = await mcp_client.call_tool("register_agent", {
@@ -123,10 +125,14 @@ async def test_thread_conversation_workflow(mcp_client, tmp_path):
     project_path.mkdir()
 
     # Initialize git repo
-    subprocess.run(["git", "init"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "Test Agent"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "init"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "config", "user.email", "test@example.com"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "config", "user.name", "Test Agent"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "config", "commit.gpgsign", "false"], cwd=project_path, check=True, capture_output=True)
 
     # Create project
     await mcp_client.call_tool("ensure_project", {"human_key": str(project_path)})
@@ -194,10 +200,14 @@ async def test_acknowledgment_workflow(mcp_client, tmp_path):
     project_path.mkdir()
 
     # Initialize git repo
-    subprocess.run(["git", "init"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "Test Agent"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "init"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "config", "user.email", "test@example.com"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "config", "user.name", "Test Agent"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "config", "commit.gpgsign", "false"], cwd=project_path, check=True, capture_output=True)
 
     # Create project and agents
     await mcp_client.call_tool("ensure_project", {"human_key": str(project_path)})
@@ -256,10 +266,14 @@ async def test_file_reservation_conflict_workflow(mcp_client, tmp_path):
     project_path.mkdir()
 
     # Initialize git repo
-    subprocess.run(["git", "init"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "Test Agent"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "init"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "config", "user.email", "test@example.com"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "config", "user.name", "Test Agent"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "config", "commit.gpgsign", "false"], cwd=project_path, check=True, capture_output=True)
 
     # Create project and agents
     await mcp_client.call_tool("ensure_project", {"human_key": str(project_path)})
@@ -330,10 +344,14 @@ async def test_shared_file_reservations(mcp_client, tmp_path):
     project_path.mkdir()
 
     # Initialize git repo
-    subprocess.run(["git", "init"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "Test Agent"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "init"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "config", "user.email", "test@example.com"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "config", "user.name", "Test Agent"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "config", "commit.gpgsign", "false"], cwd=project_path, check=True, capture_output=True)
 
     # Create project and agents
     await mcp_client.call_tool("ensure_project", {"human_key": str(project_path)})
@@ -385,16 +403,19 @@ async def test_cross_project_messaging(mcp_client, tmp_path):
 
     # Initialize both git repos
     for path in [project1_path, project2_path]:
-        subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
-        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=path, check=True, capture_output=True)
-        subprocess.run(["git", "config", "user.name", "Test Agent"], cwd=path, check=True, capture_output=True)
-        subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=path, check=True, capture_output=True)
+        subprocess.run(  # noqa: ASYNC221
+        ["git", "init"], cwd=path, check=True, capture_output=True)
+        subprocess.run(  # noqa: ASYNC221
+        ["git", "config", "user.email", "test@example.com"], cwd=path, check=True, capture_output=True)
+        subprocess.run(  # noqa: ASYNC221
+        ["git", "config", "user.name", "Test Agent"], cwd=path, check=True, capture_output=True)
+        subprocess.run(  # noqa: ASYNC221
+        ["git", "config", "commit.gpgsign", "false"], cwd=path, check=True, capture_output=True)
 
     # Create both projects
-    project1 = await mcp_client.call_tool("ensure_project", {"human_key": str(project1_path)})
+    await mcp_client.call_tool("ensure_project", {"human_key": str(project1_path)})
     project2 = await mcp_client.call_tool("ensure_project", {"human_key": str(project2_path)})
 
-    project1_slug = project1.data["slug"]
     project2_slug = project2.data["slug"]
 
     # Register agents in each project
@@ -439,10 +460,14 @@ async def test_message_search(mcp_client, tmp_path):
     project_path.mkdir()
 
     # Initialize git repo
-    subprocess.run(["git", "init"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "Test Agent"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "init"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "config", "user.email", "test@example.com"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "config", "user.name", "Test Agent"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "config", "commit.gpgsign", "false"], cwd=project_path, check=True, capture_output=True)
 
     # Create project and agents
     await mcp_client.call_tool("ensure_project", {"human_key": str(project_path)})
@@ -508,10 +533,14 @@ async def test_concurrent_message_sending(mcp_client, tmp_path):
     project_path.mkdir()
 
     # Initialize git repo
-    subprocess.run(["git", "init"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "Test Agent"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "init"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "config", "user.email", "test@example.com"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "config", "user.name", "Test Agent"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "config", "commit.gpgsign", "false"], cwd=project_path, check=True, capture_output=True)
 
     # Create project and agents
     await mcp_client.call_tool("ensure_project", {"human_key": str(project_path)})
@@ -566,10 +595,14 @@ async def test_whois_command(mcp_client, tmp_path):
     project_path.mkdir()
 
     # Initialize git repo
-    subprocess.run(["git", "init"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "Test Agent"], cwd=project_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "init"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "config", "user.email", "test@example.com"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "config", "user.name", "Test Agent"], cwd=project_path, check=True, capture_output=True)
+    subprocess.run(  # noqa: ASYNC221
+        ["git", "config", "commit.gpgsign", "false"], cwd=project_path, check=True, capture_output=True)
 
     # Create project
     await mcp_client.call_tool("ensure_project", {"human_key": str(project_path)})
