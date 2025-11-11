@@ -30,5 +30,3 @@ def test_db_engine_reset_and_reinit(isolated_env):
     _ = get_engine()
     # Ensure schema executes without error
     asyncio.run(ensure_schema())
-
-

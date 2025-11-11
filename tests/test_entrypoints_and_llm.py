@@ -81,5 +81,3 @@ def test_llm_env_bridge_and_callbacks(monkeypatch):
     out = asyncio.run(llm_mod.complete_system_user("sys", "user"))
     # content may vary by stub path; assert at least model populated
     assert isinstance(out.model, str) and len(out.model) > 0
-
-

@@ -18,9 +18,9 @@ cd mcp_mail
 uv sync --dev
 ```
 
-## Git Hooks
+## Git Hooks (Pre-commit Framework)
 
-We use git hooks to ensure code quality before commits. These hooks run automatically before each commit to check for issues.
+We use the [pre-commit framework](https://pre-commit.com/) to ensure code quality before commits and pushes. This is the Python equivalent of Husky for JavaScript projects.
 
 ### Installing Git Hooks
 
@@ -30,42 +30,69 @@ After cloning the repository, install the git hooks by running:
 ./scripts/setup_git_hooks.sh
 ```
 
-This will install a pre-commit hook that automatically:
-1. Syncs dependencies (if needed)
-2. Runs `ruff check --fix --unsafe-fixes` to lint and auto-fix code issues
-3. Runs `ty check` for type checking (warnings won't block commits)
-4. Runs `bandit` to scan for security vulnerabilities (warnings won't block commits)
-5. Runs `safety` to check dependencies for known vulnerabilities (warnings won't block commits)
+This script will:
+1. Install the `pre-commit` tool (via `uv tool install pre-commit`)
+2. Set up pre-commit and pre-push hooks in your `.git/hooks/` directory
+3. Configure hooks to run automatically on `git commit` and `git push`
 
-### What the Pre-Commit Hook Does
+Alternatively, you can install manually:
 
-The pre-commit hook performs the following checks:
+```bash
+uv tool install pre-commit
+pre-commit install
+pre-commit install --hook-type pre-push
+```
 
+### What the Hooks Do
+
+**Pre-commit hooks** (run on `git commit`):
 - **Ruff Linting**: Automatically fixes code style issues, import ordering, and common Python mistakes
   - If ruff makes any fixes, they will be automatically added to your commit
   - If ruff finds unfixable errors, the commit will be blocked until you fix them
+- **Trailing Whitespace**: Removes trailing whitespace from all files
+- **End-of-File Fixer**: Ensures files end with a newline
+- **YAML/JSON Syntax**: Validates YAML and JSON files
+- **Large File Detection**: Prevents committing files larger than 1MB
+- **Merge Conflict Detection**: Checks for unresolved merge conflict markers
+- **Type Checking (ty)**: Runs type checks to catch potential type errors (non-blocking)
+- **Fast Unit Tests**: Runs quick smoke tests to catch obvious breakage
 
-- **Type Checking (ty)**: Runs type checks to catch potential type errors
-  - Type checking warnings will be reported but won't block the commit
-  - This helps maintain type safety while not being overly strict
+**Pre-push hooks** (run on `git push`):
+- **Integration Tests**: Runs slower integration tests before pushing to remote
 
-- **Security Scanning (Bandit)**: Scans code for common security vulnerabilities
-  - Checks for hardcoded credentials, SQL injection risks, unsafe functions, etc.
-  - Security issues are reported but won't block the commit
-  - Run `uv run bandit -r src/` for detailed security reports
+### Configuration
 
-- **Dependency Vulnerability Check (Safety)**: Scans dependencies for known vulnerabilities
-  - Checks all installed packages against the Safety vulnerability database
-  - Alerts you to known CVEs in your dependencies
-  - Vulnerabilities are reported but won't block the commit
-  - Run `uv run safety check` for detailed vulnerability reports
+Hooks are configured in `.pre-commit-config.yaml`. The configuration includes:
+- Hook versions and repositories
+- Which checks run at which stages (commit vs push)
+- Arguments and options for each check
+
+### Running Hooks Manually
+
+```bash
+# Run all pre-commit hooks on all files
+pre-commit run --all-files
+
+# Run specific hook
+pre-commit run ruff --all-files
+
+# Run on staged files only (what would run on commit)
+pre-commit run
+
+# Update hook versions in config
+pre-commit autoupdate
+```
 
 ### Skipping Hooks
 
-If you need to bypass the pre-commit hook for a specific commit (not recommended), use:
+If you need to bypass hooks for a specific commit (not recommended), use:
 
 ```bash
+# Skip all hooks
 git commit --no-verify
+
+# Skip pre-push hooks
+git push --no-verify
 ```
 
 ## Code Quality Tools
@@ -75,6 +102,9 @@ git commit --no-verify
 You can run the quality checks manually at any time:
 
 ```bash
+# Run all pre-commit hooks
+pre-commit run --all-files
+
 # Run ruff linting with auto-fix
 uvx ruff check --fix --unsafe-fixes
 
@@ -84,17 +114,11 @@ uvx ruff check
 # Run type checking
 uvx ty check
 
-# Run security scan
+# Optional: Run security scan (not in pre-commit hooks)
 uv run bandit -r src/
 
-# Run security scan with verbose output
-uv run bandit -r src/ -ll
-
-# Check dependencies for vulnerabilities
+# Optional: Check dependencies for vulnerabilities (not in pre-commit hooks)
 uv run safety check
-
-# Get detailed JSON report of vulnerabilities
-uv run safety check --json
 ```
 
 ### Running Tests
@@ -113,13 +137,13 @@ uv run pytest --cov=mcp_agent_mail --cov-report=term-missing
 ## CI/CD
 
 All pushes to any branch are automatically checked by GitHub Actions for:
-- **Ruff linting** - Code style and quality
+- **Ruff linting** - Code style and quality (matches pre-commit hooks)
 - **Type checking with ty** - Static type analysis
-- **Security scanning with Bandit** - Common security vulnerabilities
-- **Dependency vulnerability checks with Safety** - Known CVEs in dependencies
 - **Test suite** - Functional correctness
+- **Security scanning with Bandit** - Common security vulnerabilities (optional)
+- **Dependency vulnerability checks with Safety** - Known CVEs in dependencies (optional)
 
-Make sure your code passes all checks before pushing. Security and dependency checks are informational and won't fail builds, but should be reviewed and addressed when possible.
+Make sure your code passes all checks before pushing. The pre-commit hooks will catch most issues locally.
 
 ## Code Style
 

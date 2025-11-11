@@ -38,5 +38,3 @@ async def test_summarize_threads_non_llm_mode_and_limit(isolated_env):
         # Expect summaries for both thread ids
         tids = {t.get("thread_id") for t in data.get("threads")}
         assert {"T1", "T2"}.issubset(tids)
-
-

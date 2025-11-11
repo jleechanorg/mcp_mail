@@ -87,5 +87,3 @@ async def test_http_request_logging_and_cors_headers(isolated_env, monkeypatch):
         assert r0.status_code in (200, 204)
         r = await client.post(settings.http.path, json=_rpc("tools/call", {"name": "health_check", "arguments": {}}))
         assert r.status_code in (200, 401, 403)
-
-

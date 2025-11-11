@@ -81,5 +81,3 @@ def test_cli_list_projects_and_serve_http_overrides(isolated_env, monkeypatch):
     assert res2.exit_code == 0
     assert calls.get("host") == "0.0.0.0"
     assert calls.get("port") == 9999
-
-

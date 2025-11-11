@@ -56,5 +56,3 @@ def test_cli_lint_command(monkeypatch):
     r = runner.invoke(app, ["lint"])  # smoke test
     assert r.exit_code == 0
     assert called["ok"] is True
-
-

@@ -515,5 +515,3 @@ load_or_generate_token() {
 
   export HTTP_BEARER_TOKEN
 }
-
-

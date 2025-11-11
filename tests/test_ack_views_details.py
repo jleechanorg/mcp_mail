@@ -25,4 +25,3 @@ async def test_ack_overdue_and_stale_detail_fields(isolated_env):
         # ack-overdue with ttl_minutes 0 should list messages
         overdue = await client.read_resource("resource://views/ack-overdue/BlueLake?project=Backend&ttl_minutes=0&limit=5")
         assert overdue and "messages" in (overdue[0].text or "")
-

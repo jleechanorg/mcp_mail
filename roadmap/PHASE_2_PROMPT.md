@@ -22,7 +22,7 @@ I'm implementing Phase 2 of the MCP Agent Mail lazy loading feature. Phase 1 (to
 
 **What exists**:
 - ✅ `CORE_TOOLS` constant (8 tools)
-- ✅ `EXTENDED_TOOLS` constant (19 tools)  
+- ✅ `EXTENDED_TOOLS` constant (19 tools)
 - ✅ `EXTENDED_TOOL_METADATA` with categories and descriptions
 - ✅ `_EXTENDED_TOOL_REGISTRY = {}` (empty placeholder)
 
@@ -86,10 +86,10 @@ Please implement Phase 2 of the lazy loading feature according to the roadmap in
    ```bash
    # Run tests
    pytest tests/test_lazy_loading.py -v
-   
+
    # Restart server
    ./scripts/run_server_with_token.sh
-   
+
    # Verify no errors in logs
    tail -50 /tmp/mcp_agent_mail_server.log
    ```

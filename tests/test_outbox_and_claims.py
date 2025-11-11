@@ -78,5 +78,3 @@ async def test_renew_file_reservations_extends_expiry_and_updates_artifact(isola
             return datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(timezone.utc)
 
         assert _parse(data["expires_ts"]) >= _parse(after)
-
-

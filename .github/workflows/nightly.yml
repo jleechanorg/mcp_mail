@@ -34,4 +34,3 @@ jobs:
         run: uv run python -m mcp_agent_mail.cli migrate
       - name: List projects
         run: uv run python -m mcp_agent_mail.cli list-projects --include-agents
-

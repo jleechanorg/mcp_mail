@@ -49,5 +49,3 @@ def test_cli_list_acks_command_smoke(isolated_env):
     runner = CliRunner()
     res = runner.invoke(app, ["list-acks", "--project", "Backend", "--agent", "Blue", "--limit", "5"])
     assert res.exit_code == 0
-
-

@@ -52,5 +52,3 @@ async def test_empty_inbox_and_pagination(isolated_env):
         if last_msg_id is not None:
             blocks = await client.read_resource(f"resource://thread/{last_msg_id}?project=Backend&include_bodies=false")
             assert blocks and "messages" in (blocks[0].text or "")
-
-

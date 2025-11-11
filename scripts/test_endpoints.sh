@@ -36,4 +36,3 @@ echo
 echo "[4/4] Environment resource"
 read_resource 'resource://config/environment'
 echo
-

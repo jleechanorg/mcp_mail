@@ -33,5 +33,3 @@ async def test_attachment_policy_override_inline(isolated_env, tmp_path: Path, m
         )
         data = res.data
         assert any(att.get("type") == "inline" for att in data.get("attachments", []))
-
-
