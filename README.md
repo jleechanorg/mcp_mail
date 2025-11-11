@@ -1,13 +1,38 @@
-# MCP Agent Mail
+<div align="center">
+
+# MCP Mail (Forked from mcp_agent_mail)
+
+[![PyPI version](https://badge.fury.io/py/mcp-mail.svg)](https://pypi.org/project/mcp-mail/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+**A mail-like coordination layer for coding agents**
 
 ![Agent Mail Showcase](screenshots/output/agent_mail_showcase.gif)
 
 > "It's like gmail for your coding agents!"
 
-## Fork Attribution
+### 📦 Installation Options
 
-This repository is forked from [https://github.com/Dicklesworthstone/mcp_agent_mail](https://github.com/Dicklesworthstone/mcp_agent_mail). Full credit goes to the original author for creating this innovative multi-agent coordination system.
+[![PyPI](https://img.shields.io/badge/Install%20from-PyPI-0073b7?style=for-the-badge&logo=pypi&logoColor=white)](https://pypi.org/project/mcp-mail/)
+[![Piwheels](https://img.shields.io/badge/Install%20from-Piwheels-c51a4a?style=for-the-badge&logo=raspberrypi&logoColor=white)](https://www.piwheels.org/project/mcp-mail/)
 
+### 🔗 Repository Links
+
+**This Fork**: [jleechanorg/mcp_mail](https://github.com/jleechanorg/mcp_mail) •
+**Original**: [Dicklesworthstone/mcp_agent_mail](https://github.com/Dicklesworthstone/mcp_agent_mail)
+
+</div>
+
+---
+
+## 🌟 Fork Attribution
+
+### **This repository is forked from [https://github.com/Dicklesworthstone/mcp_agent_mail](https://github.com/Dicklesworthstone/mcp_agent_mail). Full credit goes to the original author for creating this innovative multi-agent coordination system.
+
+Full credit goes to the original author for creating this innovative multi-agent coordination system.
+
+> **Note**: This was copied as a standalone repository rather than kept as a fork because Codex web appears to ignore forks in its repository indexing. Here was my first attempt at a normal fork: [jleechanorg/mcp_agent_mail](https://github.com/jleechanorg/mcp_agent_mail)
 ## Fork Improvements
 
 This fork extends the original MCP Agent Mail with several production-ready enhancements:
@@ -61,7 +86,7 @@ It's designed for: FastMCP clients and CLI tools (Claude Code, Codex, Gemini CLI
 ### One-line installer
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/mcp_agent_mail/main/scripts/install.sh | bash -s -- --yes
+curl -fsSL https://raw.githubusercontent.com/jleechanorg/mcp_mail/main/scripts/install.sh | bash -s -- --yes
 ```
 
 What this does:
@@ -78,7 +103,7 @@ Prefer a specific location or options? Add flags like `--dir <path>`, `--project
 
 ```bash
 # Install with custom port
-curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/mcp_agent_mail/main/scripts/install.sh | bash -s -- --port 9000 --yes
+curl -fsSL https://raw.githubusercontent.com/jleechanorg/mcp_mail/main/scripts/install.sh | bash -s -- --port 9000 --yes
 
 # Or use the CLI command after installation
 uv run python -m mcp_agent_mail.cli config set-port 9000
@@ -94,8 +119,8 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 
 # Clone the repo
-git clone https://github.com/Dicklesworthstone/mcp_agent_mail
-cd mcp_agent_mail
+git clone https://github.com/jleechanorg/mcp_mail
+cd mcp_mail
 
 # Create a Python 3.11 virtual environment and install dependencies
 uv python install 3.11
@@ -1449,7 +1474,7 @@ If port 8765 is already in use (e.g., by Cursor's Python extension), you can cha
 **Option 1: During installation**
 ```bash
 # One-liner with custom port
-curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/mcp_agent_mail/main/scripts/install.sh | bash -s -- --port 9000 --yes
+curl -fsSL https://raw.githubusercontent.com/jleechanorg/mcp_mail/main/scripts/install.sh | bash -s -- --port 9000 --yes
 
 # Or with local script
 ./scripts/install.sh --port 9000 --yes

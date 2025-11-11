@@ -1,138 +1,158 @@
-# Contributing to MCP Agent Mail
+# Contributing to MCP Mail
 
-Thank you for contributing to MCP Agent Mail! This guide will help you set up your development environment and ensure your contributions pass all CI checks.
+Thank you for your interest in contributing to MCP Mail! This document provides guidelines and instructions for developers.
 
 ## Development Setup
 
-### 1. Install Dependencies
+### Prerequisites
 
-We use `uv` for dependency management:
+- Python 3.11 or higher
+- [uv](https://github.com/astral-sh/uv) package manager
+- Git
+
+### Clone and Install
 
 ```bash
-# Install uv if you haven't already
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Install project dependencies
+git clone https://github.com/jleechanorg/mcp_mail.git
+cd mcp_mail
 uv sync --dev
 ```
 
-### 2. Install Pre-commit Hooks
+## Git Hooks
 
-**This is critical!** Pre-commit hooks catch linting and type errors before you commit, preventing CI failures:
+We use git hooks to ensure code quality before commits. These hooks run automatically before each commit to check for issues.
+
+### Installing Git Hooks
+
+After cloning the repository, install the git hooks by running:
 
 ```bash
-# Install pre-commit
-pip install pre-commit
-
-# Install the git hooks
-pre-commit install
+./scripts/setup_git_hooks.sh
 ```
 
-Now, every time you commit, the following checks will run automatically:
-- **Ruff** - Linting and code formatting
-- **Ty** - Type checking
+This will install a pre-commit hook that automatically:
+1. Syncs dependencies (if needed)
+2. Runs `ruff check --fix --unsafe-fixes` to lint and auto-fix code issues
+3. Runs `ty check` for type checking (warnings won't block commits)
+4. Runs `bandit` to scan for security vulnerabilities (warnings won't block commits)
+5. Runs `safety` to check dependencies for known vulnerabilities (warnings won't block commits)
 
-### 3. Running Checks Manually
+### What the Pre-Commit Hook Does
 
-Before submitting a PR, run all checks locally:
+The pre-commit hook performs the following checks:
+
+- **Ruff Linting**: Automatically fixes code style issues, import ordering, and common Python mistakes
+  - If ruff makes any fixes, they will be automatically added to your commit
+  - If ruff finds unfixable errors, the commit will be blocked until you fix them
+
+- **Type Checking (ty)**: Runs type checks to catch potential type errors
+  - Type checking warnings will be reported but won't block the commit
+  - This helps maintain type safety while not being overly strict
+
+- **Security Scanning (Bandit)**: Scans code for common security vulnerabilities
+  - Checks for hardcoded credentials, SQL injection risks, unsafe functions, etc.
+  - Security issues are reported but won't block the commit
+  - Run `uv run bandit -r src/` for detailed security reports
+
+- **Dependency Vulnerability Check (Safety)**: Scans dependencies for known vulnerabilities
+  - Checks all installed packages against the Safety vulnerability database
+  - Alerts you to known CVEs in your dependencies
+  - Vulnerabilities are reported but won't block the commit
+  - Run `uv run safety check` for detailed vulnerability reports
+
+### Skipping Hooks
+
+If you need to bypass the pre-commit hook for a specific commit (not recommended), use:
 
 ```bash
-# Run ruff lint check
-ruff check
+git commit --no-verify
+```
 
-# Run ruff format check
-ruff format --check
+## Code Quality Tools
 
-# Run ty type check
+### Running Checks Manually
+
+You can run the quality checks manually at any time:
+
+```bash
+# Run ruff linting with auto-fix
+uvx ruff check --fix --unsafe-fixes
+
+# Run ruff without auto-fix (just check)
+uvx ruff check
+
+# Run type checking
 uvx ty check
 
-# Run tests (smoke tests)
-pytest -v tests/test_reply_and_threads.py tests/test_identity_resources.py
+# Run security scan
+uv run bandit -r src/
 
+# Run security scan with verbose output
+uv run bandit -r src/ -ll
+
+# Check dependencies for vulnerabilities
+uv run safety check
+
+# Get detailed JSON report of vulnerabilities
+uv run safety check --json
+```
+
+### Running Tests
+
+```bash
 # Run all tests
-pytest
+uv run pytest
+
+# Run specific tests
+uv run pytest tests/test_example.py
+
+# Run with coverage
+uv run pytest --cov=mcp_agent_mail --cov-report=term-missing
 ```
 
-Or use pre-commit to run all hooks:
+## CI/CD
 
-```bash
-# Run all pre-commit hooks
-pre-commit run --all-files
-```
+All pushes to any branch are automatically checked by GitHub Actions for:
+- **Ruff linting** - Code style and quality
+- **Type checking with ty** - Static type analysis
+- **Security scanning with Bandit** - Common security vulnerabilities
+- **Dependency vulnerability checks with Safety** - Known CVEs in dependencies
+- **Test suite** - Functional correctness
 
-## Why Pre-commit Hooks Matter
+Make sure your code passes all checks before pushing. Security and dependency checks are informational and won't fail builds, but should be reviewed and addressed when possible.
 
-Without pre-commit hooks, you might commit code that fails CI checks. This creates extra noise in the PR:
-- ❌ CI fails
-- 🔄 You fix the issue
-- 🔄 Push again
-- ⏰ Wait for CI again
+## Code Style
 
-With pre-commit hooks:
-- ✅ Issues caught immediately
-- ✅ Fix before committing
-- ✅ CI passes on first try
-- ✅ Faster development cycle
+- Follow PEP 8 style guidelines (enforced by ruff)
+- Use type hints for all function signatures
+- Write docstrings for public functions and classes
+- Keep line length to 120 characters or less
 
-## Common Issues
+## Security Best Practices
 
-### Ty Configuration Errors
+When contributing code, keep these security practices in mind:
 
-If you modify `pyproject.toml` and add ty configuration, make sure to use the correct format:
+- **Never commit secrets**: No API keys, passwords, tokens, or credentials in code
+- **Avoid hardcoded credentials**: Use environment variables or secure config files
+- **Validate inputs**: Sanitize and validate all user inputs to prevent injection attacks
+- **Use parameterized queries**: Prevent SQL injection by using parameterized database queries
+- **Keep dependencies updated**: Regularly check for and update vulnerable dependencies
+- **Review Bandit warnings**: Pay attention to security scan results, even if they don't block commits
+- **Use secure random**: Use `secrets` module instead of `random` for security-sensitive operations
 
-```toml
-[tool.ty]
-overrides = [
-    { path = "scripts/**/*.py", rules = { "unresolved-reference" = "off" } }
-]
-```
+The pre-commit hook will flag common security issues, but developer awareness is the best defense.
 
-**Not:**
-```toml
-[tool.ty]
-exclude = ["scripts/"]  # ❌ Wrong - this field doesn't exist
-```
+## Submitting Changes
 
-### Ruff Errors
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Install git hooks (`./scripts/setup_git_hooks.sh`)
+4. Make your changes
+5. Ensure all tests pass and code quality checks succeed
+6. Commit your changes (hooks will run automatically)
+7. Push to your fork
+8. Open a Pull Request
 
-If ruff complains about imports or formatting:
-```bash
-# Auto-fix most issues
-ruff check --fix
+## Questions?
 
-# Format code
-ruff format
-```
-
-## Testing
-
-### Run Specific Tests
-```bash
-pytest tests/test_specific_file.py
-```
-
-### Run Tests with Coverage
-```bash
-pytest --cov=mcp_agent_mail --cov-report=term-missing
-```
-
-### Run Only Fast Tests
-```bash
-pytest -v -m "not slow"
-```
-
-## PR Guidelines
-
-1. **Run pre-commit checks** - Ensure all hooks pass
-2. **Write tests** - Add tests for new features
-3. **Update documentation** - Keep README and docstrings current
-4. **Keep commits clean** - Each commit should be a logical unit
-5. **Follow conventions** - Match existing code style
-
-## Need Help?
-
-- Check the [README](README.md) for project overview
-- Check the [CLAUDE.md](CLAUDE.md) for Claude Code agent guidelines
-- Open an issue if you're stuck
-
-Thank you for contributing! 🎉
+If you have questions or need help, please open an issue on GitHub.
