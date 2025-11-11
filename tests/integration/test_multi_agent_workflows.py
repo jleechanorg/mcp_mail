@@ -18,8 +18,7 @@ from pathlib import Path
 import pytest
 
 from mcp_agent_mail.config import get_settings
-
-from .conftest import init_git_repo
+from tests.integration.conftest import init_git_repo
 
 
 @pytest.mark.asyncio
