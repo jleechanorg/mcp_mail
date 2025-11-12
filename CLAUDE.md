@@ -46,11 +46,72 @@ With the server running, Claude agents can call `ensure_project`, `register_agen
 
 Custom slash commands are available in the git submodule at `claude-commands/.claude/commands/`. Claude Code agents should look for slash command definitions in this directory in addition to the standard `.claude/commands/` location.
 
-To use these commands:
-- Commands are defined as markdown files in `claude-commands/.claude/commands/`
-- Invoke commands with the `/` prefix (e.g., `/command-name`)
-- The git submodule contains shared commands that can be used across multiple projects
-- Ensure the submodule is initialized: `git submodule update --init --recursive`
+### Setup
+
+1. **Initialize the submodule** (first time only):
+   ```bash
+   git submodule update --init --recursive
+   ```
+
+2. **Create symlink for command discovery**:
+   ```bash
+   ln -s ../claude-commands/.claude/commands .claude/commands
+   ```
+
+### Using Commands
+
+**Method 1: Command Runner Script (Recommended)**
+
+When the SlashCommand tool doesn't dynamically discover commands, use the `run-claude-command.sh` wrapper:
+
+```bash
+# List all available commands
+./run-claude-command.sh
+
+# Run a specific command
+./run-claude-command.sh <command-name> [args...]
+
+# Examples
+./run-claude-command.sh list
+./run-claude-command.sh status
+./run-claude-command.sh push
+```
+
+The script automatically:
+- Discovers commands from the submodule
+- Executes Python-based commands directly
+- Shows preview of prompt-based commands
+- Displays command descriptions
+
+**Method 2: Direct Slash Command (If Available)**
+
+If the environment supports dynamic slash command discovery:
+
+```bash
+/command-name [args]
+```
+
+**Method 3: Manual Execution**
+
+Read the command file and follow its instructions:
+
+```bash
+cat claude-commands/.claude/commands/<command-name>.md
+```
+
+### Available Commands
+
+The submodule provides 150+ commands including:
+- `/pr` - End-to-end implementation from idea to working PR
+- `/push` - Smart git push with PR creation/update
+- `/status` - Comprehensive PR status dashboard
+- `/fixpr` - Automated PR issue resolution
+- `/copilot` - PR workflow orchestration
+- `/think` - Sequential thinking for complex analysis
+- `/review` - Automated code review
+- And many more...
+
+Run `./run-claude-command.sh` to see the complete list.
 
 ## GitHub Authentication
 
