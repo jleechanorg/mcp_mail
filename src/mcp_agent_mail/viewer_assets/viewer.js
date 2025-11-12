@@ -1774,8 +1774,8 @@ window.viewerController = function() {
     isAdministrativeMessage(msg) {
       // Check if message is administrative (system notifications, errors, etc.)
       const subject = (msg.subject || '').toLowerCase();
-      const sender = (msg.sender_name || '').toLowerCase();
-      const body = (msg.body_md || '').toLowerCase();
+      const sender = (msg.sender || '').toLowerCase();  // Use msg.sender (aliased in query)
+      const body = (msg.latest_snippet || '').toLowerCase();  // Use msg.latest_snippet (available in query)
 
       // System message patterns
       const adminPatterns = [

@@ -277,9 +277,8 @@ async def install_prepush_guard(settings: Settings, project_slug: str, repo_path
     def _resolve_hooks_dir(repo: Path) -> Path:
         hooks_path = _git(repo, "config", "--get", "core.hooksPath")
         if hooks_path:
-            if hooks_path.startswith("/") or (
-                ((len(hooks_path) > 1) and (hooks_path[1:3] == ":\\")) or (hooks_path[1:3] == ":/")
-            ):
+            # Check if absolute path: Unix (/foo) or Windows (C:\foo or C:/foo)
+            if hooks_path.startswith("/") or (len(hooks_path) > 1 and hooks_path[1] == ":"):
                 resolved = Path(hooks_path)
             else:
                 root = _git(repo, "rev-parse", "--show-toplevel") or str(repo)

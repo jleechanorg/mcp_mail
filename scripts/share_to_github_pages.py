@@ -956,33 +956,19 @@ def main() -> None:
         sys.exit(0)
 
     # Export to temp directory first for preview
-    with tempfile.TemporaryDirectory(prefix="mailbox-preview-") as temp_dir:
-        temp_path = Path(temp_dir)
+    bundle_path = Path(tempfile.mkdtemp(prefix="mailbox-preview-"))
 
-    # Initialize signing_pub to None in case bundle is reused
-    signing_pub = None
+    # Export bundle
+    success, signing_pub = export_bundle(
+        bundle_path,
+        selected_projects,
+        scrub_preset,
+        signing_key if use_signing else None,
+    )
+    if not success:
+        sys.exit(1)
 
-    if not reuse_existing:
-        if bundle_path.exists():
-            shutil.rmtree(bundle_path, ignore_errors=True)
-        bundle_path.mkdir(parents=True, exist_ok=True)
-        success, signing_pub = export_bundle(
-            bundle_path,
-            selected_projects,
-            scrub_preset,
-            signing_key if use_signing else None,
-        )
-        if not success:
-            sys.exit(1)
-        bundle_ready = True
-    else:
-        console.print("[green]Reusing existing bundle workspace for preview.[/]")
-        bundle_ready = True
-
-    # Always refresh viewer assets in the bundle to pick up latest CSP/scripts
-    _refresh_viewer_assets(bundle_path)
-
-    saved_path = signing_key or last_known_signing_path
+    # Save resume state to allow continuing after interruption
     save_resume_state({
         "stage": "preview",
         "selected_projects": selected_projects,
@@ -990,9 +976,8 @@ def main() -> None:
         "deployment": deployment,
         "use_signing": use_signing,
         "generate_new_key": generate_new_key,
-        "signing_key_path": str(saved_path) if saved_path else None,
+        "signing_key_path": str(signing_key) if signing_key else None,
         "signing_pub_path": str(signing_pub) if signing_pub else None,
-        "bundle_ready": bundle_ready,
         "timestamp": time.time(),
     })
 
