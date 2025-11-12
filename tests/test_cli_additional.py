@@ -28,9 +28,7 @@ def _seed_with_ack() -> dict[str, Any]:
             await session.refresh(a)
             await session.refresh(b)
             # Ack-required message from A to B
-            m = Message(
-                project_id=p.id, sender_id=a.id, subject="NeedsAck", body_md="body", ack_required=True
-            )
+            m = Message(project_id=p.id, sender_id=a.id, subject="NeedsAck", body_md="body", ack_required=True)
             session.add(m)
             await session.flush()
             session.add(MessageRecipient(message_id=m.id, agent_id=b.id, kind="to"))
@@ -52,15 +50,18 @@ def test_cli_file_reservations_soon_and_list_acks_and_remind(isolated_env):
     assert res_file_reservations.exit_code == 0
 
     # list-acks should render a table without error
-    res_acks = runner.invoke(app, [
-        "list-acks",
-        "--project",
-        "Backend",
-        "--agent",
-        payload["agent_b_name"],
-        "--limit",
-        "10",
-    ])
+    res_acks = runner.invoke(
+        app,
+        [
+            "list-acks",
+            "--project",
+            "Backend",
+            "--agent",
+            payload["agent_b_name"],
+            "--limit",
+            "10",
+        ],
+    )
     assert res_acks.exit_code == 0
     assert "Pending Acks" in res_acks.stdout
 
@@ -70,5 +71,3 @@ def test_cli_file_reservations_soon_and_list_acks_and_remind(isolated_env):
         ["acks", "remind", "Backend", payload["agent_b_name"], "--min-age-minutes", "0", "--limit", "5"],
     )
     assert res_remind.exit_code == 0
-
-

@@ -38,7 +38,14 @@ async def test_macro_prepare_thread(isolated_env):
         )
         m1 = await client.call_tool(
             "send_message",
-            {"project_key": "Backend", "sender_name": "BlueLake", "to": ["BlueLake"], "subject": "T", "body_md": "b", "thread_id": "TKT-1"},
+            {
+                "project_key": "Backend",
+                "sender_name": "BlueLake",
+                "to": ["BlueLake"],
+                "subject": "T",
+                "body_md": "b",
+                "thread_id": "TKT-1",
+            },
         )
         _ = m1.data
         prep = await client.call_tool(
@@ -75,7 +82,7 @@ async def test_macro_file_reservation_cycle(isolated_env):
                 "paths": ["src/*.py"],
                 "ttl_seconds": 60,
                 "exclusive": True,
-            "auto_release": True,
+                "auto_release": True,
             },
         )
         data = res.data
@@ -113,4 +120,3 @@ async def test_renew_file_reservations_extends_expiry(isolated_env):
             },
         )
         assert r.data.get("renewed", 0) >= 1
-

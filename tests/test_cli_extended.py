@@ -20,6 +20,7 @@ def _seed_backend() -> None:
             await session.refresh(p)
             session.add(Agent(project_id=p.id, name="Blue", program="x", model="y", task_description=""))
             await session.commit()
+
     asyncio.run(_seed())
 
 
@@ -51,6 +52,7 @@ def test_cli_guard_install_uninstall(tmp_path: Path, isolated_env):
     repo_dir = tmp_path / "r"
     repo_dir.mkdir(parents=True, exist_ok=True)
     from subprocess import run
+
     run(["git", "init"], cwd=str(repo_dir), check=True)
     run(["git", "config", "user.email", "test@example.com"], cwd=str(repo_dir), check=True)
     run(["git", "config", "user.name", "Test User"], cwd=str(repo_dir), check=True)
@@ -72,14 +74,14 @@ def test_cli_list_projects_and_serve_http_overrides(isolated_env, monkeypatch):
     assert res.exit_code == 0
     # serve-http should honor host/port/path overrides and not crash (monkeypatch uvicorn)
     calls: dict[str, object] = {}
+
     def fake_uvicorn_run(app, host, port, log_level="info"):
         calls["host"] = host
         calls["port"] = port
         calls["log_level"] = log_level
+
     monkeypatch.setattr("uvicorn.run", fake_uvicorn_run)
     res2 = runner.invoke(app, ["serve-http", "--host", "0.0.0.0", "--port", "9999", "--path", "/m"])
     assert res2.exit_code == 0
     assert calls.get("host") == "0.0.0.0"
     assert calls.get("port") == 9999
-
-

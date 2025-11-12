@@ -34,20 +34,27 @@ async def test_http_jwt_bad_kid_rejected(isolated_env, monkeypatch):
     async def fake_get(self, url: str):  # type: ignore[override]
         class _Resp:
             status_code = 200
+
             def json(self) -> dict[str, Any]:
                 return jwks_payload
+
         return _Resp()
 
-    token = jwt.encode({"alg": "RS256", "kid": "xyz"}, {"sub": "u1", settings.http.jwt_role_claim: "reader"}, private_jwk).decode("utf-8")
+    token = jwt.encode(
+        {"alg": "RS256", "kid": "xyz"}, {"sub": "u1", settings.http.jwt_role_claim: "reader"}, private_jwk
+    ).decode("utf-8")
 
     server = build_mcp_server()
     app = build_http_app(settings, server)
     import httpx  # type: ignore
+
     monkeypatch.setattr(httpx.AsyncClient, "get", fake_get, raising=False)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         headers = {"Authorization": f"Bearer {token}"}
-        r = await client.post(settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}}))
+        r = await client.post(
+            settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}})
+        )
         assert r.status_code == 401
 
 
@@ -61,14 +68,18 @@ async def test_http_jwt_wrong_alg_rejected(isolated_env, monkeypatch):
 
     # Build RS256 token while server expects HS256
     private_jwk = JsonWebKey.generate_key("RSA", 2048, is_private=True).as_dict(is_private=True)
-    token = jwt.encode({"alg": "RS256"}, {"sub": "u1", settings.http.jwt_role_claim: "reader"}, private_jwk).decode("utf-8")
+    token = jwt.encode({"alg": "RS256"}, {"sub": "u1", settings.http.jwt_role_claim: "reader"}, private_jwk).decode(
+        "utf-8"
+    )
 
     server = build_mcp_server()
     app = build_http_app(settings, server)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         headers = {"Authorization": f"Bearer {token}"}
-        r = await client.post(settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}}))
+        r = await client.post(
+            settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}})
+        )
         # Should be 401 due to bad algorithm
         assert r.status_code == 401
 
@@ -84,13 +95,17 @@ async def test_http_jwt_missing_aud_iss_rejected_when_configured(isolated_env, m
         _config.clear_settings_cache()
     settings = _config.get_settings()
     # Build token without aud/iss
-    token = jwt.encode({"alg": "HS256"}, {"sub": "u1", settings.http.jwt_role_claim: "reader"}, settings.http.jwt_secret).decode("utf-8")
+    token = jwt.encode(
+        {"alg": "HS256"}, {"sub": "u1", settings.http.jwt_role_claim: "reader"}, settings.http.jwt_secret
+    ).decode("utf-8")
     server = build_mcp_server()
     app = build_http_app(settings, server)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         headers = {"Authorization": f"Bearer {token}"}
-        r = await client.post(settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}}))
+        r = await client.post(
+            settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}})
+        )
         assert r.status_code == 401
 
 
@@ -105,7 +120,7 @@ async def test_http_jwt_malformed_token(isolated_env, monkeypatch):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         headers = {"Authorization": "Bearer not.a.jwt"}
-        r = await client.post(settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}}))
+        r = await client.post(
+            settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}})
+        )
         assert r.status_code == 401
-
-

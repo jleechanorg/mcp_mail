@@ -231,7 +231,10 @@ async def test_file_reservation_enforcement_blocks_message_on_overlap(isolated_e
             payload = getattr(resp, "data", {})
         # Ensure error type and conflicts present
         assert isinstance(payload, dict)
-        assert payload.get("type") == "FILE_RESERVATION_CONFLICT" or payload.get("error", {}).get("type") == "FILE_RESERVATION_CONFLICT"
+        assert (
+            payload.get("type") == "FILE_RESERVATION_CONFLICT"
+            or payload.get("error", {}).get("type") == "FILE_RESERVATION_CONFLICT"
+        )
         conflicts = payload.get("conflicts") or payload.get("error", {}).get("conflicts")
         assert conflicts and isinstance(conflicts, list)
 
@@ -275,13 +278,13 @@ async def test_force_release_file_reservation_stale(isolated_env, monkeypatch):
             reservation_id = reservation.data["granted"][0]["id"]
 
             async with get_session() as session:
-                project_row = await session.execute(text("SELECT id FROM projects WHERE slug = :slug"), {"slug": "backend"})
+                project_row = await session.execute(
+                    text("SELECT id FROM projects WHERE slug = :slug"), {"slug": "backend"}
+                )
                 project_id = project_row.scalar_one()
                 stale_cutoff = (datetime.now(timezone.utc) - timedelta(seconds=300)).isoformat()
                 await session.execute(
-                    text(
-                        "UPDATE agents SET last_active_ts = :ts WHERE project_id = :pid AND lower(name) = :name"
-                    ),
+                    text("UPDATE agents SET last_active_ts = :ts WHERE project_id = :pid AND lower(name) = :name"),
                     {"ts": stale_cutoff, "pid": project_id, "name": "bluelake"},
                 )
                 await session.commit()
@@ -423,7 +426,9 @@ async def test_file_reservation_integration_logging(isolated_env, monkeypatch):
             _log("Initial Reservations", "Reservation state immediately after grant", payload_initial)
 
             async with get_session() as session:
-                project_row = await session.execute(text("SELECT id FROM projects WHERE slug = :slug"), {"slug": "backend"})
+                project_row = await session.execute(
+                    text("SELECT id FROM projects WHERE slug = :slug"), {"slug": "backend"}
+                )
                 project_id = project_row.scalar_one()
                 stale_cutoff = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
                 await session.execute(
@@ -483,10 +488,12 @@ async def test_search_and_summarize(isolated_env):
             "search_messages",
             {"project_key": "Backend", "query": "FTS", "limit": 5},
         )
+
         def _get_subject(x):
             if isinstance(x, dict):
                 return x.get("subject")
             return getattr(x, "subject", None)
+
         assert sum(1 for _ in search.data) >= 1
 
         summary = await client.call_tool(
@@ -540,6 +547,7 @@ async def test_attachment_conversion(isolated_env):
 async def test_rich_logger_does_not_throw(isolated_env, monkeypatch):
     # Enable rich logging flags
     from mcp_agent_mail import config as _config
+
     monkeypatch.setenv("LOG_RICH_ENABLED", "true")
     monkeypatch.setenv("LOG_INCLUDE_TRACE", "true")
     # Rebuild settings cache
@@ -577,6 +585,7 @@ async def test_server_level_attachment_policy_override(isolated_env, monkeypatch
     # Force server to convert images regardless of agent policy
     monkeypatch.setenv("CONVERT_IMAGES", "true")
     from mcp_agent_mail import config as _config
+
     with contextlib.suppress(Exception):
         _config.clear_settings_cache()
 
@@ -620,6 +629,7 @@ async def test_file_reservation_conflict_ttl_transition_allows_after_expiry(isol
     # Ensure enforcement is enabled
     monkeypatch.setenv("FILE_RESERVATIONS_ENFORCEMENT_ENABLED", "true")
     from mcp_agent_mail import config as _config
+
     with contextlib.suppress(Exception):
         _config.clear_settings_cache()
 
@@ -649,8 +659,8 @@ async def test_file_reservation_conflict_ttl_transition_allows_after_expiry(isol
             "file_reservation_paths",
             {
                 "project_key": "Backend",
-                    "agent_name": "BlueLake",
-                    "paths": ["agents/GreenCastle/inbox/*/*/*.md"],
+                "agent_name": "BlueLake",
+                "paths": ["agents/GreenCastle/inbox/*/*/*.md"],
                 "ttl_seconds": 1,
                 "exclusive": True,
             },
@@ -672,10 +682,14 @@ async def test_file_reservation_conflict_ttl_transition_allows_after_expiry(isol
         if not payload and hasattr(resp, "data"):
             payload = getattr(resp, "data", {})
         assert isinstance(payload, dict)
-        assert payload.get("type") == "FILE_RESERVATION_CONFLICT" or payload.get("error", {}).get("type") == "FILE_RESERVATION_CONFLICT"
+        assert (
+            payload.get("type") == "FILE_RESERVATION_CONFLICT"
+            or payload.get("error", {}).get("type") == "FILE_RESERVATION_CONFLICT"
+        )
 
         # Wait for TTL to expire and retry
         import asyncio as _asyncio
+
         await _asyncio.sleep(1.2)
         resp2 = await client.call_tool(
             "send_message",

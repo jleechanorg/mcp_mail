@@ -30,7 +30,7 @@ def test_iso_and_parse_helpers():
     assert _parse_json_safely(raw) == {"a": 1}
     fenced = """```json\n{\n  \"x\": 2\n}\n```"""
     assert _parse_json_safely(fenced) == {"x": 2}
-    noisy = "xxx {\n \"y\": 3\n} yyy"
+    noisy = 'xxx {\n "y": 3\n} yyy'
     assert _parse_json_safely(noisy) == {"y": 3}
 
 
@@ -60,5 +60,3 @@ async def test_tool_metrics_resource_populates_after_calls(isolated_env):
         assert metrics_blocks and metrics_blocks[0].text
         # the text is JSON; ensure tools list contains health_check
         assert "health_check" in metrics_blocks[0].text
-
-

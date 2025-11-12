@@ -19,6 +19,7 @@ from mcp_agent_mail.share import (
     ShareExportError,
     build_materialized_views,
     bundle_attachments,
+    create_performance_indexes,
     finalize_snapshot_for_export,
     maybe_chunk_database,
     scrub_snapshot,
@@ -76,12 +77,8 @@ def _build_snapshot(tmp_path: Path) -> Path:
             );
             """
         )
-        conn.execute(
-            "INSERT INTO projects (id, slug, human_key) VALUES (1, 'demo', 'demo-human')"
-        )
-        conn.execute(
-            "INSERT INTO agents (id, project_id, name) VALUES (1, 1, 'Alice Agent')"
-        )
+        conn.execute("INSERT INTO projects (id, slug, human_key) VALUES (1, 'demo', 'demo-human')")
+        conn.execute("INSERT INTO agents (id, project_id, name) VALUES (1, 1, 'Alice Agent')")
         attachments = [
             {
                 "type": "file",
@@ -105,12 +102,8 @@ def _build_snapshot(tmp_path: Path) -> Path:
         conn.execute(
             "INSERT INTO message_recipients (message_id, agent_id, kind, read_ts, ack_ts) VALUES (1, 1, 'to', '2025-01-01', '2025-01-02')"
         )
-        conn.execute(
-            "INSERT INTO file_reservations (id, project_id) VALUES (1, 1)"
-        )
-        conn.execute(
-            "INSERT INTO agent_links (id, a_project_id, b_project_id) VALUES (1, 1, 1)"
-        )
+        conn.execute("INSERT INTO file_reservations (id, project_id) VALUES (1, 1)")
+        conn.execute("INSERT INTO agent_links (id, a_project_id, b_project_id) VALUES (1, 1, 1)")
         conn.commit()
     finally:
         conn.close()
@@ -152,9 +145,7 @@ def test_scrub_snapshot_pseudonymizes_and_clears(tmp_path: Path) -> None:
         ack_required = conn.execute("SELECT ack_required FROM messages WHERE id = 1").fetchone()[0]
         assert ack_required == 0
 
-        read_ack = conn.execute(
-            "SELECT read_ts, ack_ts FROM message_recipients WHERE message_id = 1"
-        ).fetchone()
+        read_ack = conn.execute("SELECT read_ts, ack_ts FROM message_recipients WHERE message_id = 1").fetchone()
         assert read_ack == (None, None)
     finally:
         conn.close()
@@ -347,9 +338,7 @@ def test_manifest_snapshot_structure(monkeypatch, tmp_path: Path) -> None:
         assert manifest["scrub"]["attachments_cleared"] == 0
         assert manifest["scrub"]["attachments_sanitized"] == 1
         assert manifest["scrub"]["secrets_replaced"] >= 2
-        assert manifest["project_scope"]["included"] == [
-            {"slug": "demo", "human_key": "demo-human"}
-        ]
+        assert manifest["project_scope"]["included"] == [{"slug": "demo", "human_key": "demo-human"}]
         assert manifest["project_scope"]["removed_count"] == 0
         assert manifest["database"]["chunked"] is False
         assert isinstance(manifest["database"].get("fts_enabled"), bool)
@@ -484,6 +473,12 @@ def test_share_export_chunking_and_viewer_data(monkeypatch, tmp_path: Path) -> N
     chunks_dir = output_dir / "chunks"
     assert any(chunks_dir.iterdir())
 
+    checksum_path = output_dir / "chunks.sha256"
+    assert checksum_path.is_file()
+    checksum_lines = checksum_path.read_text().strip().splitlines()
+    assert len(checksum_lines) == chunk_config["chunk_count"]
+    assert checksum_lines[0].count(" ") >= 1
+
     viewer_data_dir = output_dir / "viewer" / "data"
     messages_json = viewer_data_dir / "messages.json"
     assert messages_json.is_file()
@@ -584,14 +579,7 @@ def test_verify_bundle_with_sri(tmp_path: Path) -> None:
     # Compute SRI hash
     sri_hash = share._compute_sri(js_file)
 
-    manifest_data = {
-        "version": "1.0",
-        "viewer": {
-            "sri": {
-                "viewer/test.js": sri_hash
-            }
-        }
-    }
+    manifest_data = {"version": "1.0", "viewer": {"sri": {"viewer/test.js": sri_hash}}}
 
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(json.dumps(manifest_data), encoding="utf-8")
@@ -610,14 +598,7 @@ def test_verify_bundle_with_sri(tmp_path: Path) -> None:
 
 def test_verify_bundle_missing_sri_asset(tmp_path: Path) -> None:
     """Test verification fails when SRI asset is missing."""
-    manifest_data = {
-        "version": "1.0",
-        "viewer": {
-            "sri": {
-                "viewer/missing.js": "sha256-abc123"
-            }
-        }
-    }
+    manifest_data = {"version": "1.0", "viewer": {"sri": {"viewer/missing.js": "sha256-abc123"}}}
 
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(json.dumps(manifest_data), encoding="utf-8")
@@ -981,6 +962,55 @@ def test_verify_bundle_with_sri_and_signature_both_valid(tmp_path: Path) -> None
     assert result["signature_verified"] is True
 
 
+def test_create_performance_indexes(tmp_path: Path) -> None:
+    snapshot = _build_snapshot(tmp_path)
+
+    # Ensure base schema has no indexes initially
+    conn = sqlite3.connect(snapshot)
+    try:
+        indexes_before = {
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='messages'")
+        }
+    finally:
+        conn.close()
+    assert not indexes_before
+
+    create_performance_indexes(snapshot)
+
+    conn = sqlite3.connect(snapshot)
+    try:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(messages)")}
+        assert "subject_lower" in columns
+        assert "sender_lower" in columns
+
+        index_rows = conn.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='messages'"
+        ).fetchall()
+        index_map = {row[0]: row[1] for row in index_rows}
+
+        sample = conn.execute("SELECT subject_lower, sender_lower FROM messages ORDER BY id LIMIT 1").fetchone()
+    finally:
+        conn.close()
+
+    assert "idx_messages_created_ts" in index_map
+    assert "idx_messages_thread" in index_map
+    assert "idx_messages_sender" in index_map
+    assert "idx_messages_subject_lower" in index_map
+    assert "idx_messages_sender_lower" in index_map
+    for name in (
+        "idx_messages_created_ts",
+        "idx_messages_thread",
+        "idx_messages_sender",
+        "idx_messages_subject_lower",
+        "idx_messages_sender_lower",
+    ):
+        assert index_map[name], f"Expected SQL definition for index {name}"
+
+    assert sample is not None
+    assert isinstance(sample[0], str)
+    assert isinstance(sample[1], str)
+
+
 def test_finalize_snapshot_sql_hygiene(tmp_path: Path) -> None:
     """Test SQL hygiene optimizations from finalize_snapshot_for_export."""
     # Create a test database with some data
@@ -1145,13 +1175,9 @@ def test_build_materialized_views(tmp_path: Path) -> None:
         assert len(attach_rows) == 3, f"Expected 3 flattened attachment rows, got {len(attach_rows)}"
 
         # Verify attachment details
-        attach_row = conn.execute(
-            "SELECT * FROM attachments_by_message_mv WHERE message_id = 1"
-        ).fetchone()
+        attach_row = conn.execute("SELECT * FROM attachments_by_message_mv WHERE message_id = 1").fetchone()
         conn.row_factory = sqlite3.Row
-        attach_row = conn.execute(
-            "SELECT * FROM attachments_by_message_mv WHERE message_id = 1"
-        ).fetchone()
+        attach_row = conn.execute("SELECT * FROM attachments_by_message_mv WHERE message_id = 1").fetchone()
         assert attach_row["attachment_type"] == "file"
         assert attach_row["media_type"] == "text/plain"
         assert attach_row["path"] == "test.txt"

@@ -21,7 +21,13 @@ async def test_outbox_resource_lists_sent_messages(isolated_env):
         )
         await client.call_tool(
             "send_message",
-            {"project_key": "Backend", "sender_name": "BlueLake", "to": ["BlueLake"], "subject": "OutboxTest", "body_md": "b"},
+            {
+                "project_key": "Backend",
+                "sender_name": "BlueLake",
+                "to": ["BlueLake"],
+                "subject": "OutboxTest",
+                "body_md": "b",
+            },
         )
         # Use mailbox resource to verify sent message visibility for the agent
         blocks = await client.read_resource("resource://mailbox/BlueLake?project=Backend&limit=10")
@@ -40,7 +46,13 @@ async def test_renew_file_reservations_extends_expiry_and_updates_artifact(isola
         # Create a short TTL file reservation
         res = await client.call_tool(
             "file_reservation_paths",
-            {"project_key": "Backend", "agent_name": "GreenCastle", "paths": ["docs/*.md"], "ttl_seconds": 2, "exclusive": True},
+            {
+                "project_key": "Backend",
+                "agent_name": "GreenCastle",
+                "paths": ["docs/*.md"],
+                "ttl_seconds": 2,
+                "exclusive": True,
+            },
         )
         reservation = (res.data.get("granted") or [])[0]
         before = reservation.get("expires_ts")
@@ -73,10 +85,9 @@ async def test_renew_file_reservations_extends_expiry_and_updates_artifact(isola
         data = json.loads(artifact.read_text(encoding="utf-8"))
         # Compare datetimes as strings
         assert isinstance(data.get("expires_ts"), str)
+
         # New expiry should be >= renewed["expires_ts"] parsed
         def _parse(ts: str) -> datetime:
             return datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(timezone.utc)
 
         assert _parse(data["expires_ts"]) >= _parse(after)
-
-

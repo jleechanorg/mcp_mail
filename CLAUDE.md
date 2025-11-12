@@ -42,6 +42,33 @@ This script:
 
 With the server running, Claude agents can call `ensure_project`, `register_agent`, `fetch_inbox`, and the other MCP tools without additional setup.
 
+## GitHub Authentication
+
+A GitHub token is available for use by agents via the `GITHUB_TOKEN` environment variable:
+
+- **GitHub CLI (`gh`)**: The token is automatically available as `GITHUB_TOKEN` environment variable for all `gh` CLI operations
+- **GitHub Actions/Workflows**: The `GITHUB_TOKEN` environment variable is available in all workflows
+- **API calls**: Use the `GITHUB_TOKEN` environment variable for direct GitHub API calls
+- **General use**: Use this token for any GitHub-related operations (creating PRs, managing issues, fetching repository data, etc.)
+
+Example usage:
+```bash
+# GitHub CLI automatically uses GITHUB_TOKEN environment variable
+gh pr create --title "My PR" --body "Description"
+
+# For direct API calls
+curl -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/owner/repo
+```
+
+Example GitHub Actions workflow:
+```yaml
+- name: Create PR
+  run: gh pr create --title "My PR" --body "Description"
+  # GITHUB_TOKEN is automatically available as an environment variable
+```
+
+**Note**: The token is already configured and ready to use. No additional setup is required.
+
 ## PR Responsibility Model
 
 When working on pull requests, understand that **PRs own all regressions versus `origin/main`**, regardless of which commit in the PR introduced them.

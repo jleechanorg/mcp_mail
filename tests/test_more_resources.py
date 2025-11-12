@@ -36,5 +36,3 @@ async def test_core_resources(isolated_env):
         # inbox
         ires = await client.read_resource("resource://inbox/BlueLake?project=Backend&limit=5")
         assert ires
-
-

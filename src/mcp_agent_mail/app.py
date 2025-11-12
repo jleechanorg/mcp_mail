@@ -62,6 +62,7 @@ CLUSTER_SEARCH = "search"
 CLUSTER_FILE_RESERVATIONS = "file_reservations"
 CLUSTER_MACROS = "workflow_macros"
 
+
 # Global inbox configuration
 def get_global_inbox_name(project: Project) -> str:
     """Get project-specific global inbox name to ensure per-project isolation."""
@@ -69,7 +70,9 @@ def get_global_inbox_name(project: Project) -> str:
 
 
 class ToolExecutionError(Exception):
-    def __init__(self, error_type: str, message: str, *, recoverable: bool = True, data: Optional[dict[str, Any]] = None):
+    def __init__(
+        self, error_type: str, message: str, *, recoverable: bool = True, data: Optional[dict[str, Any]] = None
+    ):
         super().__init__(message)
         self.error_type = error_type
         self.recoverable = recoverable
@@ -102,7 +105,9 @@ def _register_tool(name: str, metadata: dict[str, Any]) -> None:
     TOOL_METADATA[name] = metadata
 
 
-def _bind_arguments(signature: inspect.Signature, args: tuple[Any, ...], kwargs: dict[str, Any]) -> inspect.BoundArguments:
+def _bind_arguments(
+    signature: inspect.Signature, args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> inspect.BoundArguments:
     try:
         return signature.bind_partial(*args, **kwargs)
     except TypeError:
@@ -547,6 +552,7 @@ def _rich_error_panel(title: str, payload: dict[str, Any]) -> None:
         if not get_settings().tools_log_enabled:
             return
         import importlib as _imp
+
         _rc = _imp.import_module("rich.console")
         _rj = _imp.import_module("rich.json")
         Console = _rc.Console
@@ -585,6 +591,7 @@ def _render_commit_panel(
         return rich_logger.render_tool_call_panel(panel_ctx)
     except Exception:
         return None
+
 
 def _project_to_dict(project: Project) -> dict[str, Any]:
     return {
@@ -653,6 +660,7 @@ def _message_frontmatter(
         "created": _iso(message.created_ts),
         "attachments": attachments,
     }
+
 
 async def _ensure_project(human_key: str) -> Project:
     await ensure_schema()
@@ -758,7 +766,7 @@ def _canonical_project_pair(a_id: int, b_id: int) -> tuple[int, int]:
 
 
 @asynccontextmanager
-async def _archive_write_lock(archive: ProjectArchive, *, timeout_seconds: float = 60.0):
+async def _archive_write_lock(archive: ProjectArchive, *, timeout_seconds: float = 120.0):
     try:
         async with archive_write_lock(archive, timeout_seconds=timeout_seconds):
             yield
@@ -1013,7 +1021,10 @@ async def get_project_sibling_data() -> dict[int, dict[str, list[dict[str, Any]]
                 entry = {**entry_base, "peer": other}
                 if entry["status"] == "confirmed":
                     bucket["confirmed"].append(entry)
-                elif entry["status"] != "dismissed" and float(entry_base["score"]) >= _PROJECT_SIBLING_MIN_SUGGESTION_SCORE:
+                elif (
+                    entry["status"] != "dismissed"
+                    and float(entry_base["score"]) >= _PROJECT_SIBLING_MIN_SUGGESTION_SCORE
+                ):
                     bucket["suggested"].append(entry)
 
         return result_map
@@ -1028,13 +1039,17 @@ async def update_project_sibling_status(project_id: int, other_id: int, status: 
     async with get_session() as session:
         pair = _canonical_project_pair(project_id, other_id)
         suggestion = (
-            await session.execute(
-                select(ProjectSiblingSuggestion).where(
-                    ProjectSiblingSuggestion.project_a_id == pair[0],
-                    ProjectSiblingSuggestion.project_b_id == pair[1],
+            (
+                await session.execute(
+                    select(ProjectSiblingSuggestion).where(
+                        ProjectSiblingSuggestion.project_a_id == pair[0],
+                        ProjectSiblingSuggestion.project_b_id == pair[1],
+                    )
                 )
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
 
         if suggestion is None:
             # Create a baseline suggestion via refresh for this specific pair
@@ -1054,7 +1069,9 @@ async def update_project_sibling_status(project_id: int, other_id: int, status: 
                 agent_map[int(proj_id)].append(name)
             profile_a = await _build_project_profile(project_map[pair[0]], agent_map.get(pair[0], []))
             profile_b = await _build_project_profile(project_map[pair[1]], agent_map.get(pair[1], []))
-            score, rationale = await _score_project_pair(project_map[pair[0]], profile_a, project_map[pair[1]], profile_b)
+            score, rationale = await _score_project_pair(
+                project_map[pair[0]], profile_a, project_map[pair[1]], profile_b
+            )
             suggestion = ProjectSiblingSuggestion(
                 project_a_id=pair[0],
                 project_b_id=pair[1],
@@ -1080,9 +1097,7 @@ async def update_project_sibling_status(project_id: int, other_id: int, status: 
         project_a_obj = await session.get(Project, suggestion.project_a_id)
         project_b_obj = await session.get(Project, suggestion.project_b_id)
         project_lookup = {
-            proj.id: proj
-            for proj in (project_a_obj, project_b_obj)
-            if proj is not None and proj.id is not None
+            proj.id: proj for proj in (project_a_obj, project_b_obj) if proj is not None and proj.id is not None
         }
 
         def _project_payload(proj_id: int) -> dict[str, Any]:
@@ -1425,30 +1440,22 @@ async def _delete_agent(project: Project, name: str, settings: Settings) -> dict
         )
 
         # 1) Delete MessageRecipient records where this agent is the recipient
-        res1 = await session.execute(
-            delete(MessageRecipient).where(MessageRecipient.agent_id == agent_id)
-        )
+        res1 = await session.execute(delete(MessageRecipient).where(MessageRecipient.agent_id == agent_id))
         stats["message_recipients_deleted"] = int(res1.rowcount or 0)
 
         # 2) Delete MessageRecipient records for messages authored by this agent
         #    (Must be done BEFORE deleting the messages to avoid FK violations)
         res2 = await session.execute(
-            delete(MessageRecipient).where(
-                cast(Any, MessageRecipient.message_id).in_(msg_ids_subq)
-            )
+            delete(MessageRecipient).where(cast(Any, MessageRecipient.message_id).in_(msg_ids_subq))
         )
         stats["message_recipients_deleted"] += int(res2.rowcount or 0)
 
         # 3) Now safe to delete messages sent by the agent
-        res3 = await session.execute(
-            delete(Message).where(Message.sender_id == agent_id)
-        )
+        res3 = await session.execute(delete(Message).where(Message.sender_id == agent_id))
         stats["messages_deleted"] = int(res3.rowcount or 0)
 
         # 4) Delete file reservations
-        res4 = await session.execute(
-            delete(FileReservation).where(FileReservation.agent_id == agent_id)
-        )
+        res4 = await session.execute(delete(FileReservation).where(FileReservation.agent_id == agent_id))
         stats["file_reservations_deleted"] = int(res4.rowcount or 0)
 
         # 5) Finally, delete the agent itself
@@ -1460,7 +1467,6 @@ async def _delete_agent(project: Project, name: str, settings: Settings) -> dict
         await write_agent_deletion_marker(archive, agent_name, stats)
 
     return stats
-
 
 
 async def _lookup_agents_any_project(name: str, include_inactive: bool = False) -> list[tuple[Project, Agent]]:
@@ -1582,10 +1588,7 @@ async def _get_agent_by_name(name: str) -> Agent:
         )
         agent = result.scalars().first()
         if not agent:
-            raise NoResultFound(
-                f"Agent '{name}' not found. "
-                f"Tip: Use register_agent to create a new agent."
-            )
+            raise NoResultFound(f"Agent '{name}' not found. Tip: Use register_agent to create a new agent.")
         return agent
 
 
@@ -1751,17 +1754,13 @@ async def _collect_file_reservation_statuses(
                 fs_activity = _latest_filesystem_activity(matches)
                 git_activity = _latest_git_activity(repo, matches)
 
-        agent_inactive = (
-            agent_last_active is None or (moment - agent_last_active).total_seconds() > inactivity_seconds
-        )
+        agent_inactive = agent_last_active is None or (moment - agent_last_active).total_seconds() > inactivity_seconds
         recent_mail = last_mail is not None and (moment - last_mail).total_seconds() <= activity_grace
         recent_fs = fs_activity is not None and (moment - fs_activity).total_seconds() <= activity_grace
         recent_git = git_activity is not None and (moment - git_activity).total_seconds() <= activity_grace
 
         stale = bool(
-            reservation.released_ts is None
-            and agent_inactive
-            and not (recent_mail or recent_fs or recent_git)
+            reservation.released_ts is None and agent_inactive and not (recent_mail or recent_fs or recent_git)
         )
         reasons: list[str] = []
         if agent_inactive:
@@ -1845,7 +1844,9 @@ async def _expire_stale_file_reservations(project_id: int) -> list[FileReservati
     return stale_statuses
 
 
-def _file_reservations_conflict(existing: FileReservation, candidate_path: str, candidate_exclusive: bool, candidate_agent: Agent) -> bool:
+def _file_reservations_conflict(
+    existing: FileReservation, candidate_path: str, candidate_exclusive: bool, candidate_agent: Agent
+) -> bool:
     if existing.released_ts is not None:
         return False
     if existing.agent_id == candidate_agent.id:
@@ -1853,19 +1854,17 @@ def _file_reservations_conflict(existing: FileReservation, candidate_path: str, 
     if not existing.exclusive and not candidate_exclusive:
         return False
     normalized_existing = existing.path_pattern
+
     # Treat simple directory patterns like "src/*" as inclusive of files under that directory
     # when comparing against concrete file paths like "src/app.py".
     def _expand_dir_star(p: str) -> str:
         if p.endswith("/*"):
             return p[:-1] + "*"  # "src/*" -> "src/**"-like breadth for fnmatchcase approximation
         return p
+
     a = _expand_dir_star(candidate_path)
     b = _expand_dir_star(normalized_existing)
-    return (
-        fnmatch.fnmatchcase(a, b)
-        or fnmatch.fnmatchcase(b, a)
-        or a == b
-    )
+    return fnmatch.fnmatchcase(a, b) or fnmatch.fnmatchcase(b, a) or a == b
 
 
 def _patterns_overlap(a: str, b: str) -> bool:
@@ -1874,13 +1873,10 @@ def _patterns_overlap(a: str, b: str) -> bool:
         while s.startswith("./"):
             s = s[2:]
         return s
+
     a1 = _norm(a)
     b1 = _norm(b)
-    return (
-        fnmatch.fnmatchcase(a1, b1)
-        or fnmatch.fnmatchcase(b1, a1)
-        or a1 == b1
-    )
+    return fnmatch.fnmatchcase(a1, b1) or fnmatch.fnmatchcase(b1, a1) or a1 == b1
 
 
 def _file_reservations_patterns_overlap(paths_a: Sequence[str], paths_b: Sequence[str]) -> bool:
@@ -1889,6 +1885,7 @@ def _file_reservations_patterns_overlap(paths_a: Sequence[str], paths_b: Sequenc
             if _patterns_overlap(pa, pb):
                 return True
     return False
+
 
 async def _list_inbox(
     project: Project,
@@ -1911,38 +1908,19 @@ async def _list_inbox(
     messages = await _list_inbox_basic(agent, limit, urgent_only, include_bodies, since_ts)
     message_ids_in_inbox = {msg["id"] for msg in messages}
 
-    # Scan global inbox for messages mentioning this agent
+    # Scan global inbox for messages mentioning this agent using FTS5 (much faster than regex)
     try:
         global_inbox_agent = await _get_agent_by_name(global_inbox_name)
-        global_inbox_messages = await _list_inbox_basic(
-            global_inbox_agent,
-            limit=100,  # Scan more messages to find mentions
-            urgent_only=False,
-            include_bodies=True,  # Need bodies to check for mentions
-            since_ts=since_ts
+        # Use FTS5-based mention search - only fetches messages that actually mention the agent
+        # This is significantly faster than the old approach which loaded 100 messages with bodies
+        mentioned_messages = await _find_mentions_in_global_inbox(
+            agent_name=agent.name,
+            global_inbox_agent=global_inbox_agent,
+            exclude_message_ids=message_ids_in_inbox,
+            include_bodies=include_bodies,
+            since_ts=since_ts,
+            limit=30,  # Reduced from 100 - FTS5 query is precise, doesn't need to over-fetch
         )
-
-        # Filter for messages that mention the agent (word-boundary aware, case-insensitive)
-        import re
-        # Use word boundaries to avoid false positives (e.g., "Al" matching "Alice")
-        agent_name_pattern = re.compile(r'\b' + re.escape(agent.name) + r'\b', re.IGNORECASE)
-        mentioned_messages = []
-        for msg in global_inbox_messages:
-            # Skip if already in regular inbox
-            if msg["id"] in message_ids_in_inbox:
-                continue
-
-            # Check if agent name appears as a complete word in subject or body
-            subject = msg.get("subject", "")
-            body = msg.get("body_md", "")
-
-            if agent_name_pattern.search(subject) or agent_name_pattern.search(body):
-                # Mark as from global inbox mention scan
-                msg["source"] = "global_inbox_mention"
-                # Don't include body unless requested
-                if not include_bodies:
-                    msg.pop("body_md", None)
-                mentioned_messages.append(msg)
 
         # Merge with regular inbox, respecting the limit
         messages.extend(mentioned_messages)
@@ -1951,6 +1929,70 @@ async def _list_inbox(
     except Exception:
         # If global inbox doesn't exist or there's an error, just return regular inbox
         pass
+
+    return messages
+
+
+async def _find_mentions_in_global_inbox(
+    agent_name: str,
+    global_inbox_agent: Agent,
+    exclude_message_ids: set[str],
+    include_bodies: bool,
+    since_ts: Optional[str],
+    limit: int = 30,
+) -> list[dict[str, Any]]:
+    """Use FTS5 to efficiently find messages mentioning the agent in global inbox.
+
+    This is much faster than loading all messages and doing regex in Python.
+    """
+    if global_inbox_agent.id is None:
+        return []
+
+    await ensure_schema()
+    sender_alias = aliased(Agent)
+
+    async with get_session() as session:
+        # Use FTS5 MATCH query for fast full-text search
+        # FTS5 query: agent_name will match complete tokens (words) due to tokenization
+        # This is similar to word boundary matching but faster
+        stmt = (
+            select(Message, MessageRecipient.kind, sender_alias.name)
+            .join(MessageRecipient, MessageRecipient.message_id == Message.id)
+            .join(sender_alias, Message.sender_id == sender_alias.id)
+            .join(
+                # Join with FTS5 virtual table
+                text("fts_messages ON messages.id = fts_messages.rowid")
+            )
+            .where(
+                MessageRecipient.agent_id == global_inbox_agent.id,
+                # FTS5 MATCH query - searches subject and body for the agent name
+                text("fts_messages MATCH :agent_name"),
+            )
+            .order_by(desc(Message.created_ts))
+            .limit(limit)
+        )
+
+        if since_ts:
+            since_dt = _parse_iso(since_ts)
+            if since_dt:
+                stmt = stmt.where(Message.created_ts > since_dt)
+
+        # Execute with agent name as parameter (escaped for FTS5)
+        # FTS5 tokenizes on word boundaries, so this effectively does word matching
+        result = await session.execute(stmt, {"agent_name": f'"{agent_name}"'})
+        rows = result.all()
+
+    messages: list[dict[str, Any]] = []
+    for message, recipient_kind, sender_name in rows:
+        # Skip if already in regular inbox
+        if message.id in exclude_message_ids:
+            continue
+
+        payload = _message_to_dict(message, include_body=include_bodies)
+        payload["from"] = sender_name
+        payload["kind"] = recipient_kind
+        payload["source"] = "global_inbox_mention"
+        messages.append(payload)
 
     return messages
 
@@ -2008,12 +2050,7 @@ async def _list_outbox(
     await ensure_schema()
     messages: list[dict[str, Any]] = []
     async with get_session() as session:
-        stmt = (
-            select(Message)
-            .where(Message.sender_id == agent.id)
-            .order_by(desc(Message.created_ts))
-            .limit(limit)
-        )
+        stmt = select(Message).where(Message.sender_id == agent.id).order_by(desc(Message.created_ts)).limit(limit)
         if since_ts:
             since_dt = _parse_iso(since_ts)
             if since_dt:
@@ -2021,28 +2058,31 @@ async def _list_outbox(
         result = await session.execute(stmt)
         message_rows = result.scalars().all()
 
-        # For each message, collect recipients grouped by kind
-        for msg in message_rows:
-            recs = await session.execute(
-                select(MessageRecipient.kind, Agent.name)
+        # Batch load all recipients for all messages in a single query (avoids N+1)
+        message_ids = [msg.id for msg in message_rows]
+        if message_ids:
+            recipients_result = await session.execute(
+                select(MessageRecipient.message_id, MessageRecipient.kind, Agent.name)
                 .join(Agent, MessageRecipient.agent_id == Agent.id)
-                .where(MessageRecipient.message_id == msg.id)
+                .where(MessageRecipient.message_id.in_(message_ids))
             )
-            to_list: list[str] = []
-            cc_list: list[str] = []
-            bcc_list: list[str] = []
-            for kind, name in recs.all():
-                if kind == "to":
-                    to_list.append(name)
-                elif kind == "cc":
-                    cc_list.append(name)
-                elif kind == "bcc":
-                    bcc_list.append(name)
+            # Group recipients by message_id
+            recipients_by_message: dict[str, dict[str, list[str]]] = {}
+            for msg_id, kind, name in recipients_result.all():
+                if msg_id not in recipients_by_message:
+                    recipients_by_message[msg_id] = {"to": [], "cc": [], "bcc": []}
+                recipients_by_message[msg_id][kind].append(name)
+        else:
+            recipients_by_message = {}
+
+        # Build message payloads with pre-loaded recipients
+        for msg in message_rows:
+            recipients = recipients_by_message.get(msg.id, {"to": [], "cc": [], "bcc": []})
             payload = _message_to_dict(msg, include_body=include_bodies)
             payload["from"] = agent.name
-            payload["to"] = to_list
-            payload["cc"] = cc_list
-            payload["bcc"] = bcc_list
+            payload["to"] = recipients["to"]
+            payload["cc"] = recipients["cc"]
+            payload["bcc"] = recipients["bcc"]
             messages.append(payload)
     return messages
 
@@ -2168,7 +2208,9 @@ def _summarize_messages(messages: Sequence[tuple[Message, str]]) -> dict[str, An
             if j == -1:
                 break
             snippet = text[i + 1 : j].strip()
-            if ("/" in snippet or ".py" in snippet or ".ts" in snippet or ".md" in snippet) and (1 <= len(snippet) <= 120):
+            if ("/" in snippet or ".py" in snippet or ".ts" in snippet or ".md" in snippet) and (
+                1 <= len(snippet) <= 120
+            ):
                 code_references.add(snippet)
             start = j + 1
 
@@ -2181,18 +2223,18 @@ def _summarize_messages(messages: Sequence[tuple[Message, str]]) -> dict[str, An
             _record_mentions(stripped)
             _maybe_code_ref(stripped)
             # bullet points and ordered lists → key points
-            if stripped.startswith(('-', '*', '+')) or stripped[:2] in {"1.", "2.", "3.", "4.", "5."}:
+            if stripped.startswith(("-", "*", "+")) or stripped[:2] in {"1.", "2.", "3.", "4.", "5."}:
                 # normalize checkbox bullets to plain text for key points
                 normalized = stripped
-                if normalized.startswith(('- [ ]', '- [x]', '- [X]')):
-                    normalized = normalized.split(']', 1)[-1].strip()
+                if normalized.startswith(("- [ ]", "- [x]", "- [X]")):
+                    normalized = normalized.split("]", 1)[-1].strip()
                 key_points.append(normalized.lstrip("-+* "))
             # checkbox TODOs
-            if stripped.startswith(('- [ ]', '* [ ]', '+ [ ]')):
+            if stripped.startswith(("- [ ]", "* [ ]", "+ [ ]")):
                 open_actions += 1
                 action_items.append(stripped)
                 continue
-            if stripped.startswith(('- [x]', '- [X]', '* [x]', '* [X]', '+ [x]', '+ [X]')):
+            if stripped.startswith(("- [x]", "- [X]", "* [x]", "* [X]", "+ [x]", "+ [X]")):
                 done_actions += 1
                 action_items.append(stripped)
                 continue
@@ -2318,9 +2360,7 @@ async def _get_message_by_id_global(message_id: int) -> Message:
     """
     await ensure_schema()
     async with get_session() as session:
-        result = await session.execute(
-            select(Message).where(Message.id == message_id)
-        )
+        result = await session.execute(select(Message).where(Message.id == message_id))
         message = result.scalars().first()
         if not message:
             raise NoResultFound(f"Message id '{message_id}' not found.")
@@ -2455,21 +2495,51 @@ EXTENDED_TOOLS = {
 
 # Tool metadata for discovery
 EXTENDED_TOOL_METADATA = {
-    "acknowledge_message": {"category": "messaging", "description": "Acknowledge a message (sets both read_ts and ack_ts)"},
+    "acknowledge_message": {
+        "category": "messaging",
+        "description": "Acknowledge a message (sets both read_ts and ack_ts)",
+    },
     "search_messages": {"category": "search", "description": "Full-text search over subject and body"},
     "create_agent_identity": {"category": "identity", "description": "Create a new unique agent identity"},
-    "delete_agent": {"category": "identity", "description": "Permanently delete an agent and related records (destructive, irreversible)"},
-    "file_reservation_paths": {"category": "file_reservations", "description": "Reserve file paths/globs for exclusive or shared access"},
+    "delete_agent": {
+        "category": "identity",
+        "description": "Permanently delete an agent and related records (destructive, irreversible)",
+    },
+    "file_reservation_paths": {
+        "category": "file_reservations",
+        "description": "Reserve file paths/globs for exclusive or shared access",
+    },
     "release_file_reservations": {"category": "file_reservations", "description": "Release active file reservations"},
-    "force_release_file_reservation": {"category": "file_reservations", "description": "Force-release stale reservation from another agent"},
-    "renew_file_reservations": {"category": "file_reservations", "description": "Extend expiry for active reservations"},
-    "summarize_thread": {"category": "search", "description": "Extract participants, key points, and action items for a thread"},
+    "force_release_file_reservation": {
+        "category": "file_reservations",
+        "description": "Force-release stale reservation from another agent",
+    },
+    "renew_file_reservations": {
+        "category": "file_reservations",
+        "description": "Extend expiry for active reservations",
+    },
+    "summarize_thread": {
+        "category": "search",
+        "description": "Extract participants, key points, and action items for a thread",
+    },
     "summarize_threads": {"category": "search", "description": "Produce digest across multiple threads"},
-    "macro_start_session": {"category": "workflow_macros", "description": "Boot project session with registration and inbox fetch"},
+    "macro_start_session": {
+        "category": "workflow_macros",
+        "description": "Boot project session with registration and inbox fetch",
+    },
     "macro_prepare_thread": {"category": "workflow_macros", "description": "Align agent with existing thread context"},
-    "macro_file_reservation_cycle": {"category": "workflow_macros", "description": "Reserve and optionally release file paths in one operation"},
-    "install_precommit_guard": {"category": "infrastructure", "description": "Install pre-commit guard for a code repository"},
-    "uninstall_precommit_guard": {"category": "infrastructure", "description": "Remove pre-commit guard from repository"},
+    "macro_file_reservation_cycle": {
+        "category": "workflow_macros",
+        "description": "Reserve and optionally release file paths in one operation",
+    },
+    "install_precommit_guard": {
+        "category": "infrastructure",
+        "description": "Install pre-commit guard for a code repository",
+    },
+    "uninstall_precommit_guard": {
+        "category": "infrastructure",
+        "description": "Remove pre-commit guard from repository",
+    },
 }
 
 # Registry for extended tool functions (for future dynamic invocation)
@@ -2530,9 +2600,7 @@ def build_mcp_server() -> FastMCP:
         global_inbox_agent = await _get_agent_by_name_optional(global_inbox_name)
         # Only add to cc if sender is not the global inbox itself
         should_cc_global_inbox = (
-            global_inbox_agent is not None
-            and sender.name != global_inbox_name
-            and global_inbox_name not in cc_names
+            global_inbox_agent is not None and sender.name != global_inbox_name and global_inbox_name not in cc_names
         )
 
         if to_names or cc_names or bcc_names:
@@ -2595,13 +2663,15 @@ def build_mcp_server() -> FastMCP:
                 for surface in candidate_surfaces:
                     for file_reservation_record, holder_name in active_file_reservations:
                         if _file_reservations_conflict(file_reservation_record, surface, True, sender):
-                            conflicts.append({
-                                "surface": surface,
-                                "holder": holder_name,
-                                "path_pattern": file_reservation_record.path_pattern,
-                                "exclusive": file_reservation_record.exclusive,
-                                "expires_ts": _iso(file_reservation_record.expires_ts),
-                            })
+                            conflicts.append(
+                                {
+                                    "surface": surface,
+                                    "holder": holder_name,
+                                    "path_pattern": file_reservation_record.path_pattern,
+                                    "exclusive": file_reservation_record.exclusive,
+                                    "expires_ts": _iso(file_reservation_record.expires_ts),
+                                }
+                            )
                 if conflicts:
                     # Return a structured error payload that clients can surface directly
                     return {
@@ -2681,9 +2751,7 @@ def build_mcp_server() -> FastMCP:
                 attachment_files,
                 commit_panel_text,
             )
-        await ctx.info(
-            f"Message {message.id} created by {sender.name} (to {', '.join(recipients_for_archive)})"
-        )
+        await ctx.info(f"Message {message.id} created by {sender.name} (to {', '.join(recipients_for_archive)})")
         if payload is None:
             raise RuntimeError("Message payload was not generated.")
         return payload
@@ -2763,17 +2831,9 @@ def build_mcp_server() -> FastMCP:
             description = metadata.get("description", "")
 
             by_category.setdefault(category, []).append(tool_name)
-            tools_list.append({
-                "name": tool_name,
-                "category": category,
-                "description": description
-            })
+            tools_list.append({"name": tool_name, "category": category, "description": description})
 
-        return {
-            "total": len(EXTENDED_TOOLS),
-            "by_category": by_category,
-            "tools": tools_list
-        }
+        return {"total": len(EXTENDED_TOOLS), "by_category": by_category, "tools": tools_list}
 
     @mcp.tool(name="call_extended_tool")
     @_instrument_tool("call_extended_tool", cluster=CLUSTER_SETUP, capabilities={"proxy"}, complexity="medium")
@@ -2801,17 +2861,11 @@ def build_mcp_server() -> FastMCP:
             If tool not registered (internal error)
         """
         if tool_name not in EXTENDED_TOOLS:
-            raise ValueError(
-                f"Unknown extended tool: {tool_name}. "
-                f"Use list_extended_tools to see available options."
-            )
+            raise ValueError(f"Unknown extended tool: {tool_name}. Use list_extended_tools to see available options.")
 
         tool_func = _EXTENDED_TOOL_REGISTRY.get(tool_name)
         if not tool_func:
-            raise RuntimeError(
-                f"Extended tool {tool_name} is not registered. "
-                f"This is an internal server error."
-            )
+            raise RuntimeError(f"Extended tool {tool_name} is not registered. This is an internal server error.")
 
         await ctx.info(f"Invoking extended tool: {tool_name}")
 
@@ -2822,12 +2876,16 @@ def build_mcp_server() -> FastMCP:
             return result
         except TypeError as e:
             # Invalid arguments
-            raise ValueError(
-                f"Invalid arguments for {tool_name}: {e!s}"
-            ) from e
+            raise ValueError(f"Invalid arguments for {tool_name}: {e!s}") from e
 
     @mcp.tool(name="ensure_project")
-    @_instrument_tool("ensure_project", cluster=CLUSTER_SETUP, capabilities={"infrastructure", "storage"}, complexity="low", project_arg="human_key")
+    @_instrument_tool(
+        "ensure_project",
+        cluster=CLUSTER_SETUP,
+        capabilities={"infrastructure", "storage"},
+        complexity="low",
+        project_arg="human_key",
+    )
     async def ensure_project(ctx: Context, human_key: str) -> dict[str, Any]:
         """
         Idempotently create or ensure a project exists for the given human key.
@@ -2907,7 +2965,13 @@ def build_mcp_server() -> FastMCP:
         return _project_to_dict(project)
 
     @mcp.tool(name="register_agent")
-    @_instrument_tool("register_agent", cluster=CLUSTER_IDENTITY, capabilities={"identity"}, agent_arg="name", project_arg="project_key")
+    @_instrument_tool(
+        "register_agent",
+        cluster=CLUSTER_IDENTITY,
+        capabilities={"identity"},
+        agent_arg="name",
+        project_arg="project_key",
+    )
     async def register_agent(
         ctx: Context,
         project_key: str,
@@ -2999,12 +3063,19 @@ def build_mcp_server() -> FastMCP:
         if settings.tools_log_enabled:
             try:
                 import importlib as _imp
+
                 _rc = _imp.import_module("rich.console")
                 _rp = _imp.import_module("rich.panel")
                 Console = _rc.Console
                 Panel = _rp.Panel
                 c = Console()
-                c.print(Panel(f"project=[bold]{project.human_key}[/]\nname=[bold]{name or '(generated)'}[/]\nprogram={program}\nmodel={model}", title="tool: register_agent", border_style="green"))
+                c.print(
+                    Panel(
+                        f"project=[bold]{project.human_key}[/]\nname=[bold]{name or '(generated)'}[/]\nprogram={program}\nmodel={model}",
+                        title="tool: register_agent",
+                        border_style="green",
+                    )
+                )
             except Exception:
                 # Logging with rich is best-effort; skip errors to avoid impacting tool execution.
                 pass
@@ -3012,7 +3083,9 @@ def build_mcp_server() -> FastMCP:
         ap = (attachments_policy or "auto").lower()
         if ap not in {"auto", "inline", "file"}:
             ap = "auto"
-        agent = await _get_or_create_agent(project, name, program, model, task_description, settings, force_reclaim=force_reclaim)
+        agent = await _get_or_create_agent(
+            project, name, program, model, task_description, settings, force_reclaim=force_reclaim
+        )
         # Persist attachment policy if changed
         if getattr(agent, "attachments_policy", None) != ap:
             async with get_session() as session:
@@ -3027,7 +3100,9 @@ def build_mcp_server() -> FastMCP:
         return _agent_to_dict(agent)
 
     @mcp.tool(name="delete_agent")
-    @_instrument_tool("delete_agent", cluster=CLUSTER_IDENTITY, capabilities={"identity"}, agent_arg="name", project_arg="project_key")
+    @_instrument_tool(
+        "delete_agent", cluster=CLUSTER_IDENTITY, capabilities={"identity"}, agent_arg="name", project_arg="project_key"
+    )
     async def delete_agent(
         ctx: Context,
         project_key: str,
@@ -3094,7 +3169,13 @@ def build_mcp_server() -> FastMCP:
         return stats
 
     @mcp.tool(name="whois")
-    @_instrument_tool("whois", cluster=CLUSTER_IDENTITY, capabilities={"identity", "audit"}, project_arg="project_key", agent_arg="agent_name")
+    @_instrument_tool(
+        "whois",
+        cluster=CLUSTER_IDENTITY,
+        capabilities={"identity", "audit"},
+        project_arg="project_key",
+        agent_arg="agent_name",
+    )
     async def whois(
         ctx: Context,
         project_key: str,
@@ -3151,7 +3232,13 @@ def build_mcp_server() -> FastMCP:
         return profile
 
     @mcp.tool(name="create_agent_identity")
-    @_instrument_tool("create_agent_identity", cluster=CLUSTER_IDENTITY, capabilities={"identity"}, agent_arg="name_hint", project_arg="project_key")
+    @_instrument_tool(
+        "create_agent_identity",
+        cluster=CLUSTER_IDENTITY,
+        capabilities={"identity"},
+        agent_arg="name_hint",
+        project_arg="project_key",
+    )
     async def create_agent_identity(
         ctx: Context,
         project_key: str,
@@ -3396,6 +3483,7 @@ def build_mcp_server() -> FastMCP:
         if get_settings().tools_log_enabled:
             try:
                 import importlib as _imp
+
                 _rc = _imp.import_module("rich.console")
                 _rp = _imp.import_module("rich.panel")
                 _rt = _imp.import_module("rich.text")
@@ -3405,9 +3493,14 @@ def build_mcp_server() -> FastMCP:
                 c = Console()
                 title = f"tool: send_message — to={len(to)} cc={len(cc or [])} bcc={len(bcc or [])}"
                 body = Text.assemble(
-                    ("project: ", "cyan"), (project.human_key, "white"), "\n",
-                    ("sender: ", "cyan"), (sender_name, "white"), "\n",
-                    ("subject: ", "cyan"), (subject[:120], "white"),
+                    ("project: ", "cyan"),
+                    (project.human_key, "white"),
+                    "\n",
+                    ("sender: ", "cyan"),
+                    (sender_name, "white"),
+                    "\n",
+                    ("subject: ", "cyan"),
+                    (subject[:120], "white"),
                 )
                 c.print(Panel(body, title=title, border_style="green"))
             except Exception:
@@ -3847,11 +3940,18 @@ def build_mcp_server() -> FastMCP:
         if get_settings().tools_log_enabled:
             try:
                 import importlib as _imp
+
                 _rc = _imp.import_module("rich.console")
                 _rp = _imp.import_module("rich.panel")
                 Console = _rc.Console
                 Panel = _rp.Panel
-                Console().print(Panel.fit(f"project={project_key}\nagent={agent_name}\nlimit={limit}\nurgent_only={urgent_only}", title="tool: fetch_inbox", border_style="green"))
+                Console().print(
+                    Panel.fit(
+                        f"project={project_key}\nagent={agent_name}\nlimit={limit}\nurgent_only={urgent_only}",
+                        title="tool: fetch_inbox",
+                        border_style="green",
+                    )
+                )
             except Exception:
                 pass
         try:
@@ -3919,11 +4019,18 @@ def build_mcp_server() -> FastMCP:
         if get_settings().tools_log_enabled:
             try:
                 import importlib as _imp
+
                 _rc = _imp.import_module("rich.console")
                 _rp = _imp.import_module("rich.panel")
                 Console = _rc.Console
                 Panel = _rp.Panel
-                Console().print(Panel.fit(f"project={project_key}\nagent={agent_name}\nmessage_id={message_id}", title="tool: mark_message_read", border_style="green"))
+                Console().print(
+                    Panel.fit(
+                        f"project={project_key}\nagent={agent_name}\nmessage_id={message_id}",
+                        title="tool: mark_message_read",
+                        border_style="green",
+                    )
+                )
             except Exception:
                 pass
         try:
@@ -4001,11 +4108,18 @@ def build_mcp_server() -> FastMCP:
         if get_settings().tools_log_enabled:
             try:
                 import importlib as _imp
+
                 _rc = _imp.import_module("rich.console")
                 _rp = _imp.import_module("rich.panel")
                 Console = _rc.Console
                 Panel = _rp.Panel
-                Console().print(Panel.fit(f"project={project_key}\nagent={agent_name}\nmessage_id={message_id}", title="tool: acknowledge_message", border_style="green"))
+                Console().print(
+                    Panel.fit(
+                        f"project={project_key}\nagent={agent_name}\nmessage_id={message_id}",
+                        title="tool: acknowledge_message",
+                        border_style="green",
+                    )
+                )
             except Exception:
                 pass
         try:
@@ -4025,6 +4139,7 @@ def build_mcp_server() -> FastMCP:
             if get_settings().tools_log_enabled:
                 try:
                     import importlib as _imp
+
                     _rc = _imp.import_module("rich.console")
                     _rj = _imp.import_module("rich.json")
                     Console = _rc.Console
@@ -4297,15 +4412,18 @@ def build_mcp_server() -> FastMCP:
         if file_reservation_paths:
             # Use MCP tool registry to avoid param shadowing (file_reservation_paths param shadows file_reservation_paths function)
             from fastmcp.tools.tool import FunctionTool
+
             _file_reservation_tool = cast(FunctionTool, await mcp.get_tool("file_reservation_paths"))
-            _file_reservation_run = await _file_reservation_tool.run({
-                "project_key": project.human_key,
-                "agent_name": agent.name,
-                "paths": file_reservation_paths,
-                "ttl_seconds": file_reservation_ttl_seconds,
-                "exclusive": True,
-                "reason": file_reservation_reason,
-            })
+            _file_reservation_run = await _file_reservation_tool.run(
+                {
+                    "project_key": project.human_key,
+                    "agent_name": agent.name,
+                    "paths": file_reservation_paths,
+                    "ttl_seconds": file_reservation_ttl_seconds,
+                    "exclusive": True,
+                    "reason": file_reservation_reason,
+                }
+            )
             file_reservations_result = cast(dict[str, Any], _file_reservation_run.structured_content or {})
 
         inbox_items = await _list_inbox(
@@ -4385,7 +4503,12 @@ def build_mcp_server() -> FastMCP:
         return {
             "project": _project_to_dict(project),
             "agent": _agent_to_dict(agent),
-            "thread": {"thread_id": thread_id, "summary": summary, "examples": examples, "total_messages": total_messages},
+            "thread": {
+                "thread_id": thread_id,
+                "summary": summary,
+                "examples": examples,
+                "total_messages": total_messages,
+            },
             "inbox": inbox_items,
         }
 
@@ -4411,30 +4534,35 @@ def build_mcp_server() -> FastMCP:
 
         # Call underlying FunctionTool directly so we don't treat the wrapper as a plain coroutine
         from fastmcp.tools.tool import FunctionTool
+
         file_reservations_tool = cast(FunctionTool, cast(Any, file_reservation_paths))
-        file_reservations_tool_result = await file_reservations_tool.run({
-            "project_key": project_key,
-            "agent_name": agent_name,
-            "paths": paths,
-            "ttl_seconds": ttl_seconds,
-            "exclusive": exclusive,
-            "reason": reason,
-        })
+        file_reservations_tool_result = await file_reservations_tool.run(
+            {
+                "project_key": project_key,
+                "agent_name": agent_name,
+                "paths": paths,
+                "ttl_seconds": ttl_seconds,
+                "exclusive": exclusive,
+                "reason": reason,
+            }
+        )
         file_reservations_result = cast(dict[str, Any], file_reservations_tool_result.structured_content or {})
 
         release_result = None
         if auto_release:
             release_tool = cast(FunctionTool, cast(Any, release_file_reservations_tool))
-            release_tool_result = await release_tool.run({
-                "project_key": project_key,
-                "agent_name": agent_name,
-                "paths": paths,
-            })
+            release_tool_result = await release_tool.run(
+                {
+                    "project_key": project_key,
+                    "agent_name": agent_name,
+                    "paths": paths,
+                }
+            )
             release_result = cast(dict[str, Any], release_tool_result.structured_content or {})
 
         await ctx.info(
-            f"macro_file_reservation_cycle issued {len(file_reservations_result['granted'])} file_reservation(s) for '{agent_name}' on '{project_key}'" +
-            (" and released them immediately." if auto_release else ".")
+            f"macro_file_reservation_cycle issued {len(file_reservations_result['granted'])} file_reservation(s) for '{agent_name}' on '{project_key}'"
+            + (" and released them immediately." if auto_release else ".")
         )
         return {
             "file_reservations": file_reservations_result,
@@ -4491,6 +4619,7 @@ def build_mcp_server() -> FastMCP:
         if get_settings().tools_log_enabled:
             try:
                 import importlib as _imp
+
                 _rc = _imp.import_module("rich.console")
                 _rp = _imp.import_module("rich.panel")
                 _rt = _imp.import_module("rich.text")
@@ -4499,9 +4628,14 @@ def build_mcp_server() -> FastMCP:
                 Text = _rt.Text
                 cons = Console()
                 body = Text.assemble(
-                    ("project: ", "cyan"), (project.human_key, "white"), "\n",
-                    ("query: ", "cyan"), (query[:200], "white"), "\n",
-                    ("limit: ", "cyan"), (str(limit), "white"),
+                    ("project: ", "cyan"),
+                    (project.human_key, "white"),
+                    "\n",
+                    ("query: ", "cyan"),
+                    (query[:200], "white"),
+                    "\n",
+                    ("limit: ", "cyan"),
+                    (str(limit), "white"),
                 )
                 cons.print(Panel(body, title="tool: search_messages", border_style="green"))
             except Exception:
@@ -4530,11 +4664,14 @@ def build_mcp_server() -> FastMCP:
         if get_settings().tools_log_enabled:
             try:
                 import importlib as _imp
+
                 _rc = _imp.import_module("rich.console")
                 _rp = _imp.import_module("rich.panel")
                 Console = _rc.Console
                 Panel = _rp.Panel
-                Console().print(Panel(f"results={len(rows)}", title="tool: search_messages — done", border_style="green"))
+                Console().print(
+                    Panel(f"results={len(rows)}", title="tool: search_messages — done", border_style="green")
+                )
             except Exception:
                 pass
         items = [
@@ -4551,12 +4688,15 @@ def build_mcp_server() -> FastMCP:
         ]
         try:
             from fastmcp.tools.tool import ToolResult  # type: ignore
+
             return ToolResult(structured_content={"result": items})
         except Exception:
             return items
 
     @mcp.tool(name="summarize_thread")
-    @_instrument_tool("summarize_thread", cluster=CLUSTER_SEARCH, capabilities={"summarization", "search"}, project_arg="project_key")
+    @_instrument_tool(
+        "summarize_thread", cluster=CLUSTER_SEARCH, capabilities={"summarization", "search"}, project_arg="project_key"
+    )
     async def summarize_thread(
         ctx: Context,
         project_key: str,
@@ -4599,14 +4739,16 @@ def build_mcp_server() -> FastMCP:
             include_examples,
             llm_mode,
             llm_model,
-                )
+        )
         await ctx.info(
             f"Summarized thread '{thread_id}' for project '{project.human_key}' with {total_messages} messages"
         )
         return {"thread_id": thread_id, "summary": summary, "examples": examples}
 
     @mcp.tool(name="summarize_threads")
-    @_instrument_tool("summarize_threads", cluster=CLUSTER_SEARCH, capabilities={"summarization", "search"}, project_arg="project_key")
+    @_instrument_tool(
+        "summarize_threads", cluster=CLUSTER_SEARCH, capabilities={"summarization", "search"}, project_arg="project_key"
+    )
     async def summarize_threads(
         ctx: Context,
         project_key: str,
@@ -4743,7 +4885,12 @@ def build_mcp_server() -> FastMCP:
         return {"threads": thread_summaries, "aggregate": aggregate}
 
     @mcp.tool(name="install_precommit_guard")
-    @_instrument_tool("install_precommit_guard", cluster=CLUSTER_SETUP, capabilities={"infrastructure", "repository"}, project_arg="project_key")
+    @_instrument_tool(
+        "install_precommit_guard",
+        cluster=CLUSTER_SETUP,
+        capabilities={"infrastructure", "repository"},
+        project_arg="project_key",
+    )
     async def install_precommit_guard(
         ctx: Context,
         project_key: str,
@@ -4752,11 +4899,18 @@ def build_mcp_server() -> FastMCP:
         if get_settings().tools_log_enabled:
             try:
                 import importlib as _imp
+
                 _rc = _imp.import_module("rich.console")
                 _rp = _imp.import_module("rich.panel")
                 Console = _rc.Console
                 Panel = _rp.Panel
-                Console().print(Panel.fit(f"project={project_key}\nrepo={code_repo_path}", title="tool: install_precommit_guard", border_style="green"))
+                Console().print(
+                    Panel.fit(
+                        f"project={project_key}\nrepo={code_repo_path}",
+                        title="tool: install_precommit_guard",
+                        border_style="green",
+                    )
+                )
             except Exception:
                 pass
         project = await _get_project_by_identifier(project_key)
@@ -4774,11 +4928,14 @@ def build_mcp_server() -> FastMCP:
         if get_settings().tools_log_enabled:
             try:
                 import importlib as _imp
+
                 _rc = _imp.import_module("rich.console")
                 _rp = _imp.import_module("rich.panel")
                 Console = _rc.Console
                 Panel = _rp.Panel
-                Console().print(Panel.fit(f"repo={code_repo_path}", title="tool: uninstall_precommit_guard", border_style="green"))
+                Console().print(
+                    Panel.fit(f"repo={code_repo_path}", title="tool: uninstall_precommit_guard", border_style="green")
+                )
             except Exception:
                 pass
         repo_path = Path(code_repo_path).expanduser().resolve()
@@ -4790,7 +4947,13 @@ def build_mcp_server() -> FastMCP:
         return {"removed": removed}
 
     @mcp.tool(name="file_reservation_paths")
-    @_instrument_tool("file_reservation_paths", cluster=CLUSTER_FILE_RESERVATIONS, capabilities={"file_reservations", "repository"}, project_arg="project_key", agent_arg="agent_name")
+    @_instrument_tool(
+        "file_reservation_paths",
+        cluster=CLUSTER_FILE_RESERVATIONS,
+        capabilities={"file_reservations", "repository"},
+        project_arg="project_key",
+        agent_arg="agent_name",
+    )
     async def file_reservation_paths(
         ctx: Context,
         project_key: str,
@@ -4854,12 +5017,19 @@ def build_mcp_server() -> FastMCP:
         if get_settings().tools_log_enabled:
             try:
                 import importlib as _imp
+
                 _rc = _imp.import_module("rich.console")
                 _rp = _imp.import_module("rich.panel")
                 Console = _rc.Console
                 Panel = _rp.Panel
                 c = Console()
-                c.print(Panel("\n".join(paths), title=f"tool: file_reservation_paths — agent={agent_name} ttl={ttl_seconds}s", border_style="green"))
+                c.print(
+                    Panel(
+                        "\n".join(paths),
+                        title=f"tool: file_reservation_paths — agent={agent_name} ttl={ttl_seconds}s",
+                        border_style="green",
+                    )
+                )
             except Exception:
                 pass
         agent = await _get_agent(project, agent_name)
@@ -4868,8 +5038,7 @@ def build_mcp_server() -> FastMCP:
         stale_auto_releases = await _expire_stale_file_reservations(project.id)
         if stale_auto_releases:
             summary = ", ".join(
-                f"{status.agent.name}:{status.reservation.path_pattern}"
-                for status in stale_auto_releases[:5]
+                f"{status.agent.name}:{status.reservation.path_pattern}" for status in stale_auto_releases[:5]
             )
             extra = f" ({summary})" if summary else ""
             await ctx.info(f"Auto-released {len(stale_auto_releases)} stale file_reservation(s){extra}.")
@@ -4931,7 +5100,13 @@ def build_mcp_server() -> FastMCP:
         return {"granted": granted, "conflicts": conflicts}
 
     @mcp.tool(name="release_file_reservations")
-    @_instrument_tool("release_file_reservations", cluster=CLUSTER_FILE_RESERVATIONS, capabilities={"file_reservations"}, project_arg="project_key", agent_arg="agent_name")
+    @_instrument_tool(
+        "release_file_reservations",
+        cluster=CLUSTER_FILE_RESERVATIONS,
+        capabilities={"file_reservations"},
+        project_arg="project_key",
+        agent_arg="agent_name",
+    )
     async def release_file_reservations_tool(
         ctx: Context,
         project_key: str,
@@ -4984,7 +5159,9 @@ def build_mcp_server() -> FastMCP:
                     f"paths={len(paths or [])}",
                     f"ids={len(file_reservation_ids or [])}",
                 ]
-                Console().print(Panel.fit("\n".join(details), title="tool: release_file_reservations", border_style="green"))
+                Console().print(
+                    Panel.fit("\n".join(details), title="tool: release_file_reservations", border_style="green")
+                )
             except Exception:
                 pass
         try:
@@ -5017,6 +5194,7 @@ def build_mcp_server() -> FastMCP:
             if get_settings().tools_log_enabled:
                 try:
                     import importlib as _imp
+
                     _rc = _imp.import_module("rich.console")
                     _rj = _imp.import_module("rich.json")
                     Console = _rc.Console
@@ -5129,9 +5307,15 @@ def build_mcp_server() -> FastMCP:
             "expires_ts": _iso(reservation.expires_ts),
             "released_ts": _iso(reservation.released_ts),
             "stale_reasons": target_status.stale_reasons,
-            "last_agent_activity_ts": _iso(target_status.last_agent_activity) if target_status.last_agent_activity else None,
-            "last_mail_activity_ts": _iso(target_status.last_mail_activity) if target_status.last_mail_activity else None,
-            "last_filesystem_activity_ts": _iso(target_status.last_fs_activity) if target_status.last_fs_activity else None,
+            "last_agent_activity_ts": _iso(target_status.last_agent_activity)
+            if target_status.last_agent_activity
+            else None,
+            "last_mail_activity_ts": _iso(target_status.last_mail_activity)
+            if target_status.last_mail_activity
+            else None,
+            "last_filesystem_activity_ts": _iso(target_status.last_fs_activity)
+            if target_status.last_fs_activity
+            else None,
             "last_git_activity_ts": _iso(target_status.last_git_activity) if target_status.last_git_activity else None,
         }
 
@@ -5194,8 +5378,15 @@ def build_mcp_server() -> FastMCP:
 
         summary["notified"] = notified
         return {"released": 1, "released_at": _iso(now), "reservation": summary}
+
     @mcp.tool(name="renew_file_reservations")
-    @_instrument_tool("renew_file_reservations", cluster=CLUSTER_FILE_RESERVATIONS, capabilities={"file_reservations"}, project_arg="project_key", agent_arg="agent_name")
+    @_instrument_tool(
+        "renew_file_reservations",
+        cluster=CLUSTER_FILE_RESERVATIONS,
+        capabilities={"file_reservations"},
+        project_arg="project_key",
+        agent_arg="agent_name",
+    )
     async def renew_file_reservations(
         ctx: Context,
         project_key: str,
@@ -5275,6 +5466,7 @@ def build_mcp_server() -> FastMCP:
                 old_exp = file_reservation.expires_ts
                 if getattr(old_exp, "tzinfo", None) is None:
                     from datetime import timezone as _tz
+
                     old_exp = old_exp.replace(tzinfo=_tz.utc)
                 base = old_exp if old_exp > now else now
                 file_reservation.expires_ts = base + timedelta(seconds=bump)
@@ -5377,7 +5569,9 @@ def build_mcp_server() -> FastMCP:
                         "related": ["register_agent", "file_reservation_paths"],
                         "expected_frequency": "Whenever a new repo/path is encountered.",
                         "required_capabilities": ["infrastructure", "storage"],
-                        "usage_examples": [{"hint": "First action", "sample": "ensure_project(human_key='/abs/path/backend')"}],
+                        "usage_examples": [
+                            {"hint": "First action", "sample": "ensure_project(human_key='/abs/path/backend')"}
+                        ],
                     },
                     {
                         "name": "install_precommit_guard",
@@ -5386,7 +5580,12 @@ def build_mcp_server() -> FastMCP:
                         "related": ["file_reservation_paths", "uninstall_precommit_guard"],
                         "expected_frequency": "Infrequent—per repository setup.",
                         "required_capabilities": ["repository", "filesystem"],
-                        "usage_examples": [{"hint": "Onboard", "sample": "install_precommit_guard(project_key='backend', code_repo_path='~/repo')"}],
+                        "usage_examples": [
+                            {
+                                "hint": "Onboard",
+                                "sample": "install_precommit_guard(project_key='backend', code_repo_path='~/repo')",
+                            }
+                        ],
                     },
                     {
                         "name": "uninstall_precommit_guard",
@@ -5395,7 +5594,9 @@ def build_mcp_server() -> FastMCP:
                         "related": ["install_precommit_guard"],
                         "expected_frequency": "Rare; only when disabling guard enforcement.",
                         "required_capabilities": ["repository"],
-                        "usage_examples": [{"hint": "Cleanup", "sample": "uninstall_precommit_guard(code_repo_path='~/repo')"}],
+                        "usage_examples": [
+                            {"hint": "Cleanup", "sample": "uninstall_precommit_guard(code_repo_path='~/repo')"}
+                        ],
                     },
                 ],
             },
@@ -5410,7 +5611,12 @@ def build_mcp_server() -> FastMCP:
                         "related": ["create_agent_identity", "whois"],
                         "expected_frequency": "At the start of each automated work session.",
                         "required_capabilities": ["identity"],
-                        "usage_examples": [{"hint": "Resume persona", "sample": "register_agent(project_key='/abs/path/backend', program='codex', model='gpt5')"}],
+                        "usage_examples": [
+                            {
+                                "hint": "Resume persona",
+                                "sample": "register_agent(project_key='/abs/path/backend', program='codex', model='gpt5')",
+                            }
+                        ],
                     },
                     {
                         "name": "create_agent_identity",
@@ -5419,7 +5625,12 @@ def build_mcp_server() -> FastMCP:
                         "related": ["register_agent"],
                         "expected_frequency": "When minting fresh, short-lived identities.",
                         "required_capabilities": ["identity"],
-                        "usage_examples": [{"hint": "New helper", "sample": "create_agent_identity(project_key='backend', name_hint='GreenCastle', program='codex', model='gpt5')"}],
+                        "usage_examples": [
+                            {
+                                "hint": "New helper",
+                                "sample": "create_agent_identity(project_key='backend', name_hint='GreenCastle', program='codex', model='gpt5')",
+                            }
+                        ],
                     },
                     {
                         "name": "whois",
@@ -5428,7 +5639,12 @@ def build_mcp_server() -> FastMCP:
                         "related": ["register_agent"],
                         "expected_frequency": "Ad hoc when context about an agent is required.",
                         "required_capabilities": ["identity", "audit"],
-                        "usage_examples": [{"hint": "Directory lookup", "sample": "whois(project_key='backend', agent_name='BlueLake')"}],
+                        "usage_examples": [
+                            {
+                                "hint": "Directory lookup",
+                                "sample": "whois(project_key='backend', agent_name='BlueLake')",
+                            }
+                        ],
                     },
                 ],
             },
@@ -5443,7 +5659,12 @@ def build_mcp_server() -> FastMCP:
                         "related": ["reply_message"],
                         "expected_frequency": "Frequent—core write operation.",
                         "required_capabilities": ["messaging"],
-                        "usage_examples": [{"hint": "New plan", "sample": "send_message(project_key='backend', sender_name='GreenCastle', to=['BlueLake'], subject='Plan', body_md='...')"}],
+                        "usage_examples": [
+                            {
+                                "hint": "New plan",
+                                "sample": "send_message(project_key='backend', sender_name='GreenCastle', to=['BlueLake'], subject='Plan', body_md='...')",
+                            }
+                        ],
                     },
                     {
                         "name": "reply_message",
@@ -5452,7 +5673,12 @@ def build_mcp_server() -> FastMCP:
                         "related": ["send_message"],
                         "expected_frequency": "Frequent when collaborating inside a thread.",
                         "required_capabilities": ["messaging"],
-                        "usage_examples": [{"hint": "Thread reply", "sample": "reply_message(project_key='backend', message_id=42, sender_name='BlueLake', body_md='Got it!')"}],
+                        "usage_examples": [
+                            {
+                                "hint": "Thread reply",
+                                "sample": "reply_message(project_key='backend', message_id=42, sender_name='BlueLake', body_md='Got it!')",
+                            }
+                        ],
                     },
                     {
                         "name": "fetch_inbox",
@@ -5461,7 +5687,12 @@ def build_mcp_server() -> FastMCP:
                         "related": ["mark_message_read", "acknowledge_message"],
                         "expected_frequency": "Frequent polling in agent loops.",
                         "required_capabilities": ["messaging", "read"],
-                        "usage_examples": [{"hint": "Poll", "sample": "fetch_inbox(project_key='backend', agent_name='BlueLake', since_ts='2025-10-24T00:00:00Z')"}],
+                        "usage_examples": [
+                            {
+                                "hint": "Poll",
+                                "sample": "fetch_inbox(project_key='backend', agent_name='BlueLake', since_ts='2025-10-24T00:00:00Z')",
+                            }
+                        ],
                     },
                     {
                         "name": "mark_message_read",
@@ -5470,7 +5701,12 @@ def build_mcp_server() -> FastMCP:
                         "related": ["acknowledge_message"],
                         "expected_frequency": "Whenever FYI mail is processed.",
                         "required_capabilities": ["messaging", "read"],
-                        "usage_examples": [{"hint": "Read receipt", "sample": "mark_message_read(project_key='backend', agent_name='BlueLake', message_id=42)"}],
+                        "usage_examples": [
+                            {
+                                "hint": "Read receipt",
+                                "sample": "mark_message_read(project_key='backend', agent_name='BlueLake', message_id=42)",
+                            }
+                        ],
                     },
                     {
                         "name": "acknowledge_message",
@@ -5479,7 +5715,12 @@ def build_mcp_server() -> FastMCP:
                         "related": ["mark_message_read"],
                         "expected_frequency": "Each time a message requests acknowledgement.",
                         "required_capabilities": ["messaging", "ack"],
-                        "usage_examples": [{"hint": "Ack", "sample": "acknowledge_message(project_key='backend', agent_name='BlueLake', message_id=42)"}],
+                        "usage_examples": [
+                            {
+                                "hint": "Ack",
+                                "sample": "acknowledge_message(project_key='backend', agent_name='BlueLake', message_id=42)",
+                            }
+                        ],
                     },
                 ],
             },
@@ -5494,7 +5735,12 @@ def build_mcp_server() -> FastMCP:
                         "related": ["fetch_inbox", "summarize_thread"],
                         "expected_frequency": "Regular during investigation phases.",
                         "required_capabilities": ["search"],
-                        "usage_examples": [{"hint": "FTS", "sample": "search_messages(project_key='backend', query='\"build plan\" AND users', limit=20)"}],
+                        "usage_examples": [
+                            {
+                                "hint": "FTS",
+                                "sample": "search_messages(project_key='backend', query='\"build plan\" AND users', limit=20)",
+                            }
+                        ],
                     },
                     {
                         "name": "summarize_thread",
@@ -5503,7 +5749,12 @@ def build_mcp_server() -> FastMCP:
                         "related": ["summarize_threads"],
                         "expected_frequency": "When threads exceed quick skim length.",
                         "required_capabilities": ["search", "summarization"],
-                        "usage_examples": [{"hint": "Thread brief", "sample": "summarize_thread(project_key='backend', thread_id='TKT-123', include_examples=True)"}],
+                        "usage_examples": [
+                            {
+                                "hint": "Thread brief",
+                                "sample": "summarize_thread(project_key='backend', thread_id='TKT-123', include_examples=True)",
+                            }
+                        ],
                     },
                     {
                         "name": "summarize_threads",
@@ -5512,7 +5763,12 @@ def build_mcp_server() -> FastMCP:
                         "related": ["summarize_thread"],
                         "expected_frequency": "At cadence checkpoints (daily/weekly).",
                         "required_capabilities": ["search", "summarization"],
-                        "usage_examples": [{"hint": "Digest", "sample": "summarize_threads(project_key='backend', thread_ids=['TKT-123','UX-42'])"}],
+                        "usage_examples": [
+                            {
+                                "hint": "Digest",
+                                "sample": "summarize_threads(project_key='backend', thread_ids=['TKT-123','UX-42'])",
+                            }
+                        ],
                     },
                 ],
             },
@@ -5527,7 +5783,12 @@ def build_mcp_server() -> FastMCP:
                         "related": ["release_file_reservations", "renew_file_reservations"],
                         "expected_frequency": "Whenever starting work on contested surfaces.",
                         "required_capabilities": ["file_reservations", "repository"],
-                        "usage_examples": [{"hint": "Lock file", "sample": "file_reservation_paths(project_key='backend', agent_name='BlueLake', paths=['src/app.py'], ttl_seconds=7200)"}],
+                        "usage_examples": [
+                            {
+                                "hint": "Lock file",
+                                "sample": "file_reservation_paths(project_key='backend', agent_name='BlueLake', paths=['src/app.py'], ttl_seconds=7200)",
+                            }
+                        ],
                     },
                     {
                         "name": "release_file_reservations",
@@ -5536,7 +5797,12 @@ def build_mcp_server() -> FastMCP:
                         "related": ["file_reservation_paths", "renew_file_reservations"],
                         "expected_frequency": "Each time work on a surface completes.",
                         "required_capabilities": ["file_reservations"],
-                        "usage_examples": [{"hint": "Unlock", "sample": "release_file_reservations(project_key='backend', agent_name='BlueLake', paths=['src/app.py'])"}],
+                        "usage_examples": [
+                            {
+                                "hint": "Unlock",
+                                "sample": "release_file_reservations(project_key='backend', agent_name='BlueLake', paths=['src/app.py'])",
+                            }
+                        ],
                     },
                     {
                         "name": "renew_file_reservations",
@@ -5545,7 +5811,12 @@ def build_mcp_server() -> FastMCP:
                         "related": ["file_reservation_paths", "release_file_reservations"],
                         "expected_frequency": "Periodically during multi-hour work items.",
                         "required_capabilities": ["file_reservations"],
-                        "usage_examples": [{"hint": "Extend", "sample": "renew_file_reservations(project_key='backend', agent_name='BlueLake', extend_seconds=1800)"}],
+                        "usage_examples": [
+                            {
+                                "hint": "Extend",
+                                "sample": "renew_file_reservations(project_key='backend', agent_name='BlueLake', extend_seconds=1800)",
+                            }
+                        ],
                     },
                 ],
             },
@@ -5560,7 +5831,12 @@ def build_mcp_server() -> FastMCP:
                         "related": ["ensure_project", "register_agent", "file_reservation_paths", "fetch_inbox"],
                         "expected_frequency": "At the beginning of each autonomous session.",
                         "required_capabilities": ["workflow", "messaging", "file_reservations", "identity"],
-                        "usage_examples": [{"hint": "Bootstrap", "sample": "macro_start_session(human_key='/abs/path/backend', program='codex', model='gpt5', file_reservation_paths=['src/api/*.py'])"}],
+                        "usage_examples": [
+                            {
+                                "hint": "Bootstrap",
+                                "sample": "macro_start_session(human_key='/abs/path/backend', program='codex', model='gpt5', file_reservation_paths=['src/api/*.py'])",
+                            }
+                        ],
                     },
                     {
                         "name": "macro_prepare_thread",
@@ -5569,7 +5845,12 @@ def build_mcp_server() -> FastMCP:
                         "related": ["register_agent", "summarize_thread", "fetch_inbox"],
                         "expected_frequency": "Whenever onboarding a new contributor to an active thread.",
                         "required_capabilities": ["workflow", "messaging", "summarization"],
-                        "usage_examples": [{"hint": "Join thread", "sample": "macro_prepare_thread(project_key='backend', thread_id='TKT-123', program='codex', model='gpt5', agent_name='ThreadHelper')"}],
+                        "usage_examples": [
+                            {
+                                "hint": "Join thread",
+                                "sample": "macro_prepare_thread(project_key='backend', thread_id='TKT-123', program='codex', model='gpt5', agent_name='ThreadHelper')",
+                            }
+                        ],
                     },
                     {
                         "name": "macro_file_reservation_cycle",
@@ -5578,7 +5859,12 @@ def build_mcp_server() -> FastMCP:
                         "related": ["file_reservation_paths", "release_file_reservations", "renew_file_reservations"],
                         "expected_frequency": "Per guarded work block.",
                         "required_capabilities": ["workflow", "file_reservations", "repository"],
-                        "usage_examples": [{"hint": "FileReservation & release", "sample": "macro_file_reservation_cycle(project_key='backend', agent_name='BlueLake', paths=['src/app.py'], auto_release=true)"}],
+                        "usage_examples": [
+                            {
+                                "hint": "FileReservation & release",
+                                "sample": "macro_file_reservation_cycle(project_key='backend', agent_name='BlueLake', paths=['src/app.py'], auto_release=true)",
+                            }
+                        ],
                     },
                 ],
             },
@@ -5606,7 +5892,13 @@ def build_mcp_server() -> FastMCP:
             },
             {
                 "workflow": "Start focused refactor",
-                "sequence": ["ensure_project", "file_reservation_paths", "send_message", "fetch_inbox", "acknowledge_message"],
+                "sequence": [
+                    "ensure_project",
+                    "file_reservation_paths",
+                    "send_message",
+                    "fetch_inbox",
+                    "acknowledge_message",
+                ],
             },
             {
                 "workflow": "Join existing discussion",
@@ -5633,7 +5925,16 @@ def build_mcp_server() -> FastMCP:
             "tools": {
                 "send_message": {
                     "required": ["project_key", "sender_name", "to", "subject", "body_md"],
-                    "optional": ["cc", "bcc", "attachment_paths", "convert_images", "importance", "ack_required", "thread_id", "auto_contact_if_blocked"],
+                    "optional": [
+                        "cc",
+                        "bcc",
+                        "attachment_paths",
+                        "convert_images",
+                        "importance",
+                        "ack_required",
+                        "thread_id",
+                        "auto_contact_if_blocked",
+                    ],
                     "shapes": {
                         "to": "list[str]",
                         "cc": "list[str] | str",
@@ -5668,6 +5969,7 @@ def build_mcp_server() -> FastMCP:
             agent = name_part
             try:
                 from urllib.parse import parse_qs
+
                 parsed = parse_qs(qs, keep_blank_values=False)
                 if project is None and parsed.get("project"):
                     project = parsed["project"][0]
@@ -5693,6 +5995,7 @@ def build_mcp_server() -> FastMCP:
             window_seconds = seg
             try:
                 from urllib.parse import parse_qs
+
                 parsed = parse_qs(qs, keep_blank_values=False)
                 agent = agent or (parsed.get("agent") or [None])[0]
                 project = project or (parsed.get("project") or [None])[0]
@@ -5752,12 +6055,15 @@ def build_mcp_server() -> FastMCP:
         await ensure_schema(settings)
         # Build ignore matcher for test/demo projects
         import fnmatch as _fnmatch
+
         ignore_patterns = set(getattr(settings, "retention_ignore_project_patterns", []) or [])
         async with get_session() as session:
             result = await session.execute(select(Project).order_by(asc(Project.created_at)))
             projects = result.scalars().all()
+
             def _is_ignored(name: str) -> bool:
                 return any(_fnmatch.fnmatch(name, pat) for pat in ignore_patterns)
+
             filtered = [p for p in projects if not (_is_ignored(p.slug) or _is_ignored(p.human_key))]
             return [_project_to_dict(project) for project in filtered]
 
@@ -5869,13 +6175,10 @@ def build_mcp_server() -> FastMCP:
 
             # Get unread message counts for all agents in one query
             unread_counts_stmt = (
-                select(
-                    MessageRecipient.agent_id,
-                    func.count(MessageRecipient.message_id).label("unread_count")
-                )
+                select(MessageRecipient.agent_id, func.count(MessageRecipient.message_id).label("unread_count"))
                 .where(
                     cast(Any, MessageRecipient.read_ts).is_(None),
-                    cast(Any, MessageRecipient.agent_id).in_([agent.id for agent in agents])
+                    cast(Any, MessageRecipient.agent_id).in_([agent.id for agent in agents]),
                 )
                 .group_by(MessageRecipient.agent_id)
             )
@@ -6005,6 +6308,7 @@ def build_mcp_server() -> FastMCP:
             message_id = id_part
             try:
                 from urllib.parse import parse_qs
+
                 parsed = parse_qs(qs, keep_blank_values=False)
                 if project is None and parsed.get("project"):
                     project = parsed["project"][0]
@@ -6013,7 +6317,12 @@ def build_mcp_server() -> FastMCP:
         if project is None:
             # Try to infer project by message id when unique
             async with get_session() as s_auto:
-                rows = await s_auto.execute(select(Project, Message).join(Message, Message.project_id == Project.id).where(cast(Any, Message.id) == int(message_id)).limit(2))
+                rows = await s_auto.execute(
+                    select(Project, Message)
+                    .join(Message, Message.project_id == Project.id)
+                    .where(cast(Any, Message.id) == int(message_id))
+                    .limit(2)
+                )
                 data = rows.all()
             if len(data) == 1:
                 project_obj = data[0][0]
@@ -6074,6 +6383,7 @@ def build_mcp_server() -> FastMCP:
             thread_id = id_part
             try:
                 from urllib.parse import parse_qs
+
                 parsed = parse_qs(qs, keep_blank_values=False)
                 if project is None and "project" in parsed and parsed["project"]:
                     project = parsed["project"][0]
@@ -6194,6 +6504,7 @@ def build_mcp_server() -> FastMCP:
             agent = name_part
             try:
                 from urllib.parse import parse_qs
+
                 parsed = parse_qs(qs, keep_blank_values=False)
                 if project is None and "project" in parsed and parsed["project"]:
                     project = parsed["project"][0]
@@ -6267,6 +6578,7 @@ def build_mcp_server() -> FastMCP:
             agent = name_part
             try:
                 from urllib.parse import parse_qs
+
                 parsed = parse_qs(qs, keep_blank_values=False)
                 if project is None and parsed.get("project"):
                     project = parsed["project"][0]
@@ -6307,7 +6619,12 @@ def build_mcp_server() -> FastMCP:
                 read_ts = result.scalar_one_or_none()
                 if read_ts is None:
                     unread.append(item)
-        return {"project": project_obj.human_key, "agent": agent_obj.name, "count": len(unread), "messages": unread[:limit]}
+        return {
+            "project": project_obj.human_key,
+            "agent": agent_obj.name,
+            "count": len(unread),
+            "messages": unread[:limit],
+        }
 
     @mcp.resource("resource://views/ack-required/{agent}", mime_type="application/json")
     async def ack_required_view(agent: str, project: Optional[str] = None, limit: int = 20) -> dict[str, Any]:
@@ -6329,6 +6646,7 @@ def build_mcp_server() -> FastMCP:
             agent = name_part
             try:
                 from urllib.parse import parse_qs
+
                 parsed = parse_qs(qs, keep_blank_values=False)
                 if project is None and parsed.get("project"):
                     project = parsed["project"][0]
@@ -6404,6 +6722,7 @@ def build_mcp_server() -> FastMCP:
             agent = name_part
             try:
                 from urllib.parse import parse_qs
+
                 parsed = parse_qs(qs, keep_blank_values=False)
                 if project is None and parsed.get("project"):
                     project = parsed["project"][0]
@@ -6487,6 +6806,7 @@ def build_mcp_server() -> FastMCP:
             agent = name_part
             try:
                 from urllib.parse import parse_qs
+
                 parsed = parse_qs(qs, keep_blank_values=False)
                 if project is None and parsed.get("project"):
                     project = parsed["project"][0]
@@ -6561,6 +6881,7 @@ def build_mcp_server() -> FastMCP:
             agent = name_part
             try:
                 from urllib.parse import parse_qs
+
                 parsed = parse_qs(qs, keep_blank_values=False)
                 if project is None and parsed.get("project"):
                     project = parsed["project"][0]
@@ -6620,7 +6941,9 @@ def build_mcp_server() -> FastMCP:
         "resource://mailbox-with-commits/{agent}",
         mime_type="application/json",
     )
-    async def mailbox_with_commits_resource(agent: str, project: Optional[str] = None, limit: int = 20) -> dict[str, Any]:
+    async def mailbox_with_commits_resource(
+        agent: str, project: Optional[str] = None, limit: int = 20
+    ) -> dict[str, Any]:
         """List recent messages in an agent's mailbox with commit metadata including diff summaries."""
         # Parse query embedded in agent path if present
         if "?" in agent:
@@ -6628,6 +6951,7 @@ def build_mcp_server() -> FastMCP:
             agent = name_part
             try:
                 from urllib.parse import parse_qs
+
                 parsed = parse_qs(qs, keep_blank_values=False)
                 if project is None and parsed.get("project"):
                     project = parsed["project"][0]
@@ -6681,15 +7005,17 @@ def build_mcp_server() -> FastMCP:
             agent = name_part
             try:
                 from urllib.parse import parse_qs
+
                 parsed = parse_qs(qs, keep_blank_values=False)
                 if project is None and parsed.get("project"):
                     project = parsed["project"][0]
                 if parsed.get("limit"):
                     from contextlib import suppress
+
                     with suppress(Exception):
                         limit = int(parsed["limit"][0])
                 if parsed.get("include_bodies"):
-                    include_bodies = parsed["include_bodies"][0].lower() in {"1","true","t","yes","y"}
+                    include_bodies = parsed["include_bodies"][0].lower() in {"1", "true", "t", "yes", "y"}
                 if parsed.get("since_ts"):
                     since_ts = parsed["since_ts"][0]
             except Exception:
@@ -6715,24 +7041,25 @@ def build_mcp_server() -> FastMCP:
     # No explicit output-schema transform; the tool returns ToolResult with {"result": ...}
 
     # Populate extended tool registry for dynamic invocation via call_extended_tool
-    _EXTENDED_TOOL_REGISTRY.update({
-        "acknowledge_message": acknowledge_message,
-        "create_agent_identity": create_agent_identity,
-        "delete_agent": delete_agent,
-        "search_messages": search_messages,
-        "file_reservation_paths": file_reservation_paths,
-        "release_file_reservations": release_file_reservations_tool,
-        "force_release_file_reservation": force_release_file_reservation,
-        "renew_file_reservations": renew_file_reservations,
-        "summarize_thread": summarize_thread,
-        "summarize_threads": summarize_threads,
-        "macro_start_session": macro_start_session,
-        "macro_prepare_thread": macro_prepare_thread,
-        "macro_file_reservation_cycle": macro_file_reservation_cycle,
-        "install_precommit_guard": install_precommit_guard,
-        "uninstall_precommit_guard": uninstall_precommit_guard,
-    })
-
+    _EXTENDED_TOOL_REGISTRY.update(
+        {
+            "acknowledge_message": acknowledge_message,
+            "create_agent_identity": create_agent_identity,
+            "delete_agent": delete_agent,
+            "search_messages": search_messages,
+            "file_reservation_paths": file_reservation_paths,
+            "release_file_reservations": release_file_reservations_tool,
+            "force_release_file_reservation": force_release_file_reservation,
+            "renew_file_reservations": renew_file_reservations,
+            "summarize_thread": summarize_thread,
+            "summarize_threads": summarize_threads,
+            "macro_start_session": macro_start_session,
+            "macro_prepare_thread": macro_prepare_thread,
+            "macro_file_reservation_cycle": macro_file_reservation_cycle,
+            "install_precommit_guard": install_precommit_guard,
+            "uninstall_precommit_guard": uninstall_precommit_guard,
+        }
+    )
 
     # Conditional tool exposure based on tools_mode setting
     if settings.tools_mode == "core":

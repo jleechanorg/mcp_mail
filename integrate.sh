@@ -52,12 +52,12 @@ NC='\033[0m' # No Color
 detect_squash_merged_commits() {
     local commit_count=$1
     local squash_merged_count=0
-    
+
     echo "   🔍 Checking if commits were squash-merged..."
-    
+
     # Get list of commits not in origin/main
     local commits_list=$(git rev-list origin/main..HEAD 2>/dev/null)
-    
+
     for commit_hash in $commits_list; do
         # Get commit subject (first line of commit message)
         local commit_subject=$(git log --format="%s" -n 1 "$commit_hash" 2>/dev/null)
@@ -65,23 +65,23 @@ detect_squash_merged_commits() {
             # Remove PR number suffix to match squash-merged commits (e.g., "Fix bug (#123)" -> "Fix bug")
             # Use POSIX-compatible regex that matches single and multi-digit PR numbers
             local base_subject=$(echo "$commit_subject" | sed 's/ (#[0-9]\+)$//')
-            
+
             # Skip if base_subject is empty (prevents matching all commits)
             if [ -z "$base_subject" ]; then
                 echo -e "   ${YELLOW}?${NC} $commit_hash → empty subject after stripping PR number"
                 continue
             fi
-            
+
             # Search for similar commit message in recent origin/main commits (configurable depth)
             local search_depth="${DETECT_SQUASH_SEARCH_DEPTH:-200}"
             local similar_commit
             similar_commit=$(git log origin/main --oneline "-${search_depth}" --fixed-strings --grep="$base_subject" 2>/dev/null | head -1)
-            
+
             if [ -n "$similar_commit" ]; then
                 local main_commit_hash=$(echo "$similar_commit" | cut -d' ' -f1)
                 local local_files=$(git diff-tree --no-commit-id --name-only -r "$commit_hash" | sort)
                 local main_files=$(git diff-tree --no-commit-id --name-only -r "$main_commit_hash" | sort)
-                
+
                 # If same files changed, likely squash-merged
                 if [ "$local_files" = "$main_files" ] && [ -n "$local_files" ]; then
                     squash_merged_count=$((squash_merged_count + 1))
@@ -94,7 +94,7 @@ detect_squash_merged_commits() {
             fi
         fi
     done
-    
+
     # Return success if all commits appear squash-merged
     if [ $commit_count -eq $squash_merged_count ] && [ $squash_merged_count -gt 0 ]; then
         echo -e "   ${GREEN}🎉 All $commit_count commit(s) were squash-merged into origin/main${NC}"
@@ -116,15 +116,15 @@ export PATH="$HOME/.local/bin:$PATH"
 # Check for required tools and provide helpful messages
 check_dependencies() {
     local missing_tools=()
-    
+
     if ! command -v gh >/dev/null 2>&1; then
         missing_tools+=("gh (GitHub CLI)")
     fi
-    
+
     if ! command -v jq >/dev/null 2>&1; then
         missing_tools+=("jq")
     fi
-    
+
     if [ ${#missing_tools[@]} -gt 0 ]; then
         echo -e "${YELLOW}⚠️  Some optional tools are missing:${NC}"
         for tool in "${missing_tools[@]}"; do
@@ -348,7 +348,7 @@ if [ "$current_branch" != "main" ] && [ "$NEW_BRANCH_MODE" = false ]; then
             echo "   📊 FILES CHANGED:"
             git diff --name-only origin/main..HEAD | head -10 | sed 's/^/     /'
             echo ""
-            
+
             # Check if commits were squash-merged before requiring --force
             if detect_squash_merged_commits $commit_count; then
                 echo -e "${GREEN}✅ Proceeding automatically - all commits were squash-merged into origin/main${NC}"

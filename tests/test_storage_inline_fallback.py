@@ -32,5 +32,3 @@ async def test_inline_data_uri_attachments_reflected_when_no_conversion(isolated
         )
         attachments = (res.data.get("deliveries") or [{}])[0].get("payload", {}).get("attachments", [])
         assert any(att.get("type") == "inline" for att in attachments)
-
-

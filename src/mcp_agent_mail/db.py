@@ -50,8 +50,7 @@ def retry_on_db_lock(max_retries: int = 5, base_delay: float = 0.1, max_delay: f
                     # Check if it's a lock-related error
                     error_msg = str(e).lower()
                     is_lock_error = any(
-                        phrase in error_msg
-                        for phrase in ["database is locked", "database is busy", "locked"]
+                        phrase in error_msg for phrase in ["database is locked", "database is busy", "locked"]
                     )
 
                     if not is_lock_error or attempt >= max_retries:
@@ -113,7 +112,7 @@ def _build_engine(settings: DatabaseSettings) -> AsyncEngine:
             try:
                 # Handle both bytes and str (SQLite can return either)
                 if isinstance(val, bytes):
-                    val = val.decode('utf-8')
+                    val = val.decode("utf-8")
                 return dt_module.datetime.fromisoformat(val)
             except (ValueError, AttributeError, TypeError, UnicodeDecodeError, OverflowError):
                 # Return None for any conversion failure:
@@ -129,7 +128,7 @@ def _build_engine(settings: DatabaseSettings) -> AsyncEngine:
         sqlite3.register_converter("timestamp", convert_datetime)
 
         connect_args = {
-            "timeout": 30.0,  # Wait up to 30 seconds for lock (default is 5)
+            "timeout": 60.0,  # Increased from 30 to 60 seconds for lock wait (default is 5)
             "check_same_thread": False,  # Required for async SQLite
         }
 
@@ -154,8 +153,8 @@ def _build_engine(settings: DatabaseSettings) -> AsyncEngine:
             cursor.execute("PRAGMA journal_mode=WAL")
             # Use NORMAL synchronous mode (safer than OFF, faster than FULL)
             cursor.execute("PRAGMA synchronous=NORMAL")
-            # Set busy timeout (wait up to 30 seconds for locks)
-            cursor.execute("PRAGMA busy_timeout=30000")
+            # Set busy timeout (wait up to 60 seconds for locks, increased from 30)
+            cursor.execute("PRAGMA busy_timeout=60000")
             cursor.close()
 
     return engine
@@ -239,6 +238,7 @@ def _check_and_fix_duplicate_agent_names(connection) -> None:
     (global uniqueness). Any duplicate names are automatically renamed by appending a number.
     """
     import logging
+
     logger = logging.getLogger(__name__)
 
     # Find all duplicate names (case-insensitive)
@@ -255,7 +255,9 @@ def _check_and_fix_duplicate_agent_names(connection) -> None:
     if not duplicates:
         return  # No duplicates, safe to proceed
 
-    logger.warning(f"Found {len(duplicates)} agent name(s) used in multiple projects. Auto-renaming for global uniqueness...")
+    logger.warning(
+        f"Found {len(duplicates)} agent name(s) used in multiple projects. Auto-renaming for global uniqueness..."
+    )
 
     for name_lower, _count in duplicates:
         # Get all agents with this name
@@ -337,20 +339,22 @@ def _setup_fts(connection) -> None:
         """
     )
     # Additional performance indexes for common access patterns
-    connection.exec_driver_sql(
-        "CREATE INDEX IF NOT EXISTS idx_messages_created_ts ON messages(created_ts)"
-    )
-    connection.exec_driver_sql(
-        "CREATE INDEX IF NOT EXISTS idx_messages_thread_id ON messages(thread_id)"
-    )
-    connection.exec_driver_sql(
-        "CREATE INDEX IF NOT EXISTS idx_messages_importance ON messages(importance)"
-    )
+    connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_messages_created_ts ON messages(created_ts)")
+    connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_messages_thread_id ON messages(thread_id)")
+    connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_messages_importance ON messages(importance)")
     connection.exec_driver_sql(
         "CREATE INDEX IF NOT EXISTS idx_file_reservations_expires_ts ON file_reservations(expires_ts)"
     )
     connection.exec_driver_sql(
         "CREATE INDEX IF NOT EXISTS idx_message_recipients_agent ON message_recipients(agent_id)"
+    )
+    # Composite index for optimized inbox queries (agent_id + message_id for joins)
+    connection.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS idx_message_recipients_agent_msg ON message_recipients(agent_id, message_id)"
+    )
+    # Composite index for timestamp-ordered queries (created_ts DESC, id for tie-breaking)
+    connection.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS idx_messages_created_ts_desc_id ON messages(created_ts DESC, id)"
     )
 
     # MIGRATION: Check for duplicate agent names before enforcing global uniqueness
@@ -365,17 +369,12 @@ def _setup_fts(connection) -> None:
 
 
 def _ensure_agent_active_columns(connection) -> None:
-    columns = {
-        row[1]
-        for row in connection.exec_driver_sql("PRAGMA table_info('agents')").fetchall()
-    }
+    columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info('agents')").fetchall()}
     if "is_active" not in columns:
         connection.exec_driver_sql("ALTER TABLE agents ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
     if "deleted_ts" not in columns:
         connection.exec_driver_sql("ALTER TABLE agents ADD COLUMN deleted_ts TEXT")
     if "contact_policy" not in columns:
-        connection.exec_driver_sql(
-            "ALTER TABLE agents ADD COLUMN contact_policy TEXT NOT NULL DEFAULT 'auto'"
-        )
+        connection.exec_driver_sql("ALTER TABLE agents ADD COLUMN contact_policy TEXT NOT NULL DEFAULT 'auto'")
     connection.exec_driver_sql("UPDATE agents SET is_active = 1 WHERE is_active IS NULL")
     connection.exec_driver_sql("UPDATE agents SET contact_policy = 'auto' WHERE contact_policy IS NULL")

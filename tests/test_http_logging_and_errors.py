@@ -68,4 +68,3 @@ async def test_rbac_denies_when_tool_name_missing(isolated_env, monkeypatch):
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         r = await client.post(settings.http.path, json=_rpc("tools/call", {"arguments": {}}))
         assert r.status_code == 401
-

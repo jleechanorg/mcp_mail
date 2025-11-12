@@ -36,10 +36,13 @@ async def test_http_bearer_and_cors_preflight(isolated_env, monkeypatch):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         # Preflight OPTIONS
-        r0 = await client.options(settings.http.path, headers={
-            "Origin": "http://example.com",
-            "Access-Control-Request-Method": "POST",
-        })
+        r0 = await client.options(
+            settings.http.path,
+            headers={
+                "Origin": "http://example.com",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
         assert r0.status_code in (200, 204)
         # No bearer -> 401
         r1 = await client.post(settings.http.path, json=_rpc("tools/call", {"name": "health_check", "arguments": {}}))
@@ -81,36 +84,43 @@ async def test_http_jwks_validation_and_resource_rate_limit(isolated_env, monkey
     async def fake_get(self, url: str):  # type: ignore[override]
         class _Resp:
             status_code = 200
+
             def json(self) -> dict[str, Any]:
                 return jwks_payload
+
         return _Resp()
 
     # Build token with RS256
-    token = (
-        jwt.encode(
-            {"alg": "RS256", "kid": "abc"},
-            {"sub": "u1", settings.http.jwt_role_claim: "reader"},
-            private_jwk,
-        ).decode("utf-8")
-    )
+    token = jwt.encode(
+        {"alg": "RS256", "kid": "abc"},
+        {"sub": "u1", settings.http.jwt_role_claim: "reader"},
+        private_jwk,
+    ).decode("utf-8")
 
     server = build_mcp_server()
     app = build_http_app(settings, server)
 
     # Patch httpx.AsyncClient.get used in JWKS fetch path
     import httpx  # type: ignore
+
     monkeypatch.setattr(httpx.AsyncClient, "get", fake_get, raising=False)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         headers = {"Authorization": f"Bearer {token}"}
         # Reader can call read-only tool
-        r = await client.post(settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}}))
+        r = await client.post(
+            settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}})
+        )
         assert r.status_code == 200
         # Resource rate limit 1 rpm -> second call 429
-        r1 = await client.post(settings.http.path, headers=headers, json=_rpc("resources/read", {"uri": "resource://projects"}))
+        r1 = await client.post(
+            settings.http.path, headers=headers, json=_rpc("resources/read", {"uri": "resource://projects"})
+        )
         assert r1.status_code in (200, 429)
-        r2 = await client.post(settings.http.path, headers=headers, json=_rpc("resources/read", {"uri": "resource://projects"}))
+        r2 = await client.post(
+            settings.http.path, headers=headers, json=_rpc("resources/read", {"uri": "resource://projects"})
+        )
         assert r2.status_code == 429
 
 
@@ -162,4 +172,3 @@ async def test_http_lock_status_endpoint(isolated_env):
         entry = next(item for item in locks if item.get("path") == str(lock_path))
         assert entry.get("metadata", {}).get("pid") == 999_999
         assert entry.get("stale_suspected") is True
-

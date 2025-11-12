@@ -55,12 +55,15 @@ async def test_call_extended_tool_valid(isolated_env):
     async with Client(mcp) as client:
         # First setup: create a project and agent for the test
         await client.call_tool("ensure_project", arguments={"human_key": "/tmp/test_project"})
-        await client.call_tool("register_agent", arguments={
-            "project_key": "/tmp/test_project",
-            "program": "test_program",
-            "model": "test_model",
-            "name": "test_agent"
-        })
+        await client.call_tool(
+            "register_agent",
+            arguments={
+                "project_key": "/tmp/test_project",
+                "program": "test_program",
+                "model": "test_model",
+                "name": "test_agent",
+            },
+        )
 
         # Test calling an extended tool via the meta-tool
         # Use search_messages as it's a simple read-only tool
@@ -68,11 +71,8 @@ async def test_call_extended_tool_valid(isolated_env):
             "call_extended_tool",
             arguments={
                 "tool_name": "search_messages",
-                "arguments": {
-                    "project_key": "/tmp/test_project",
-                    "query": "test"
-                }
-            }
+                "arguments": {"project_key": "/tmp/test_project", "query": "test"},
+            },
         )
 
         # Should succeed and return a list
@@ -87,11 +87,7 @@ async def test_call_extended_tool_invalid(isolated_env):
         # Try to call a non-existent tool
         with pytest.raises(Exception) as exc_info:
             await client.call_tool(
-                "call_extended_tool",
-                arguments={
-                    "tool_name": "fake_tool_does_not_exist",
-                    "arguments": {}
-                }
+                "call_extended_tool", arguments={"tool_name": "fake_tool_does_not_exist", "arguments": {}}
             )
 
         # Should raise ValueError with helpful message
@@ -106,13 +102,7 @@ async def test_call_extended_tool_invalid_arguments(isolated_env):
         # Try to call a valid tool but with wrong arguments
         with pytest.raises(Exception) as exc_info:
             await client.call_tool(
-                "call_extended_tool",
-                arguments={
-                    "tool_name": "search_messages",
-                    "arguments": {
-                        "wrong_arg": "value"
-                    }
-                }
+                "call_extended_tool", arguments={"tool_name": "search_messages", "arguments": {"wrong_arg": "value"}}
             )
 
         # Should raise error about invalid arguments

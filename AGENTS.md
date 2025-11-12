@@ -8,6 +8,45 @@ RULE NUMBER 1 (NEVER EVER EVER FORGET THIS RULE!!!): YOU ARE NEVER ALLOWED TO DE
 4. **Mandatory explicit plan:** Even after explicit user authorization, restate the command verbatim, list exactly what will be affected, and wait for a confirmation that your understanding is correct. Only then may you execute it—if anything remains ambiguous, refuse and escalate.
 5. **Document the confirmation:** When running any approved destructive command, record (in the session notes / final response) the exact user text that authorized it, the command actually run, and the execution time. If that record is absent, the operation did not happen.
 
+### GitHub Authentication & Token Access
+
+A GitHub token is available for all agents via the `GITHUB_TOKEN` environment variable:
+
+- **GitHub CLI (`gh`)**: The token is automatically available as `GITHUB_TOKEN` environment variable and works seamlessly with all `gh` commands
+- **GitHub Actions/Workflows**: The `GITHUB_TOKEN` environment variable is available in all workflows
+- **Direct API calls**: Include the `GITHUB_TOKEN` environment variable in Authorization headers for GitHub API requests
+- **Git operations**: Use for authenticated clone, push, pull operations when needed
+- **General GitHub operations**: Creating PRs, managing issues, checking repository status, fetching data, etc.
+
+Example local/CLI usage:
+```bash
+# GitHub CLI (token auto-detected from GITHUB_TOKEN environment variable)
+gh pr create --title "Feature: Add new capability" --body "Description"
+gh issue create --title "Bug: Fix error" --body "Details"
+
+# Direct GitHub API calls
+curl -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/owner/repo/pulls
+
+# Git operations (use GitHub CLI for automatic authentication)
+gh repo clone owner/repo
+# Or for other git operations, gh CLI handles authentication automatically
+gh repo sync
+```
+
+Example GitHub Actions workflow:
+```yaml
+- name: Create PR with GitHub CLI
+  run: gh pr create --title "Automated PR" --body "Description"
+  # GITHUB_TOKEN is automatically available as an environment variable
+
+- name: Call GitHub API
+  run: |
+    curl -H "Authorization: Bearer $GITHUB_TOKEN" \
+         https://api.github.com/repos/owner/repo/pulls
+```
+
+**Note**: The token is pre-configured and ready to use immediately. No setup or authentication flow required.
+
 We install everything via **uv** (including `uv pip ...`), NEVER raw `pip`. Always work inside a venv. We target **Python 3.11+** (the codebase is tested on 3.11, 3.12, 3.13, and 3.14), and we ONLY use `pyproject.toml` (not `requirements.txt`) for managing the project.
 
 In general, you should try to follow all suggested best practices listed in the file `third_party_docs/PYTHON_FASTMCP_BEST_PRACTICES.md`
@@ -110,6 +149,45 @@ Macros vs granular tools
 - Prefer macros when you want speed or are on a smaller model: `macro_start_session`, `macro_prepare_thread`, `macro_file_reservation_cycle`.
 - Use granular tools when you need control: `register_agent`, `file_reservation_paths`, `send_message`, `fetch_inbox`, `acknowledge_message`.
 
+### Worktree recipes (opt-in, non-disruptive)
+
+- Enable gated features:
+  - Set `WORKTREES_ENABLED=1` in `.env` (do not commit secrets; config is loaded via `python-decouple`).
+  - For trial posture, set `AGENT_MAIL_GUARD_MODE=warn` to surface conflicts without blocking.
+- Inspect identity for a worktree:
+  - CLI: `mcp-agent-mail mail status .`
+  - Resource: `resource://identity/{/abs/path}`
+- Install guards (chain-runner friendly; honors `core.hooksPath` and Husky):
+  - `mcp-agent-mail guard status .`
+  - `mcp-agent-mail guard install <project_key> . --prepush`
+  - Guards exit early when `WORKTREES_ENABLED=0` or `AGENT_MAIL_BYPASS=1`.
+- Reserve before you edit:
+  - `file_reservation_paths(project_key, agent_name, ["src/**"], ttl_seconds=3600, exclusive=true)`
+  - Patterns use Git pathspec semantics and respect repository `core.ignorecase`.
+
+### Guard usage quickstart
+
+- Set your identity for local commits:
+  - Export `AGENT_NAME="YourAgentName"` in the shell that performs commits.
+- Pre-commit:
+  - Scans staged changes (`git diff --cached --name-status -M -z`) and blocks conflicts with others’ active exclusive reservations.
+- Pre-push:
+  - Enumerates to-be-pushed commits (`git rev-list`) and diffs trees (`git diff-tree --no-ext-diff -z`) to catch conflicts not staged locally.
+- Advisory mode:
+  - With `AGENT_MAIL_GUARD_MODE=warn`, conflicts are printed with rich context and push/commit proceeds.
+
+### Build slots for long-running tasks
+
+- Acquire a slot (advisory):
+  - `acquire_build_slot(project_key, agent_name, "frontend-build", ttl_seconds=3600, exclusive=true)`
+- Keep it fresh during the run:
+  - `renew_build_slot(project_key, agent_name, "frontend-build", extend_seconds=1800)`
+- Release when done (non-destructive; marks released):
+  - `release_build_slot(project_key, agent_name, "frontend-build")`
+- Tips:
+  - Combine with `mcp-agent-mail amctl env --path . --agent $AGENT_NAME` to get `CACHE_KEY` and `ARTIFACT_DIR`.
+  - Use `mcp-agent-mail am-run <slot> -- <cmd...>` to run with prepped env; future versions will auto-acquire/renew/release.
+
 Common pitfalls
 - "from_agent not registered": always `register_agent` in the correct `project_key` first.
 - "FILE_RESERVATION_CONFLICT": adjust patterns, wait for expiry, or use a non-exclusive reservation when appropriate.
@@ -152,3 +230,54 @@ Event mirroring (optional automation)
 Pitfalls to avoid
 - Don’t create or manage tasks in Mail; treat Beads as the single task queue.
 - Always include `bd-###` in message `thread_id` to avoid ID drift across tools.
+
+### ast-grep vs ripgrep (quick guidance)
+
+**Use `ast-grep` when structure matters.** It parses code and matches AST nodes, so results ignore comments/strings, understand syntax, and can **safely rewrite** code.
+
+* Refactors/codemods: rename APIs, change import forms, rewrite call sites or variable kinds.
+* Policy checks: enforce patterns across a repo (`scan` with rules + `test`).
+* Editor/automation: LSP mode; `--json` output for tooling.
+
+**Use `ripgrep` when text is enough.** It’s the fastest way to grep literals/regex across files.
+
+* Recon: find strings, TODOs, log lines, config values, or non‑code assets.
+* Pre-filter: narrow candidate files before a precise pass.
+
+**Rule of thumb**
+
+* Need correctness over speed, or you’ll **apply changes** → start with `ast-grep`.
+* Need raw speed or you’re just **hunting text** → start with `rg`.
+* Often combine: `rg` to shortlist files, then `ast-grep` to match/modify with precision.
+
+**Snippets**
+
+Find structured code (ignores comments/strings):
+
+```bash
+ast-grep run -l TypeScript -p 'import $X from "$P"'
+```
+
+Codemod (only real `var` declarations become `let`):
+
+```bash
+ast-grep run -l JavaScript -p 'var $A = $B' -r 'let $A = $B' -U
+```
+
+Quick textual hunt:
+
+```bash
+rg -n 'console\.log\(' -t js
+```
+
+Combine speed + precision:
+
+```bash
+rg -l -t ts 'useQuery\(' | xargs ast-grep run -l TypeScript -p 'useQuery($A)' -r 'useSuspenseQuery($A)' -U
+```
+
+**Mental model**
+
+* Unit of match: `ast-grep` = node; `rg` = line.
+* False positives: `ast-grep` low; `rg` depends on your regex.
+* Rewrites: `ast-grep` first-class; `rg` requires ad‑hoc sed/awk and risks collateral edits.

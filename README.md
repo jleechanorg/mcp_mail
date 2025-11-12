@@ -35,15 +35,174 @@ Full credit goes to the original author for creating this innovative multi-agent
 > **Note**: This was copied as a standalone repository rather than kept as a fork because Codex web appears to ignore forks in its repository indexing. Here was my first attempt at a normal fork: [jleechanorg/mcp_agent_mail](https://github.com/jleechanorg/mcp_agent_mail)
 ## Fork Improvements
 
-This fork extends the original MCP Agent Mail with several production-ready enhancements:
+This fork extends the original MCP Agent Mail with **9 core enhancements** focused on removing coordination barriers and improving efficiency:
 
-- **🚀 Lazy Loading System (Phase 2)** - Reduces token usage by ~65% with core mode (10 essential tools vs. 27), plus meta-tools (`list_extended_tools`, `call_extended_tool`) for dynamic tool discovery and invocation
-- **🎯 Globally Unique Agent Names** - Prevents agent name confusion across projects with database-enforced uniqueness, flexible coerce/strict enforcement modes, and automatic migration for existing deployments
-- **⚡ Simplified Registration** - `register_agent` now auto-creates projects, eliminating the need for separate `ensure_project` calls in most workflows
-- **🔧 Flexible Project Keys** - Supports any string identifier (repo names, custom IDs) as project keys, not just absolute paths
-- **💬 Contact-Free Messaging** - Direct agent-to-agent messaging without contact request approval, streamlining multi-agent coordination
+### 🚀 Token Efficiency
 
-These improvements make the system more efficient, flexible, and easier to use in production multi-agent workflows.
+- **🎯 Lazy Loading System (Phase 2 Complete)** - Reduces token usage by ~65%:
+  - **Core mode** (default): 8 essential tools + 2 meta-tools = 10 tools loaded
+  - **Extended mode**: 15 additional tools loaded on-demand via `call_extended_tool`
+  - Meta-tools: `list_extended_tools` (discovery) and `call_extended_tool` (invocation)
+  - Organized into 6 functional clusters (infrastructure, identity, messaging, search, file reservations, macros)
+  - Configure via `MCP_TOOLS_MODE` environment variable (core|extended)
+  - **Implementation**: `src/mcp_agent_mail/app.py:2426-2476` (CORE_TOOLS, EXTENDED_TOOLS, EXTENDED_TOOL_METADATA)
+
+### 🌐 Global Architecture (No Boundaries)
+
+- **🌍 Projects as Informational Metadata** - Projects don't create barriers:
+  - Projects are **metadata only** (badges, tags, context) - NOT organizational boundaries
+  - Unified inbox shows ALL messages regardless of project
+  - Backend queries ignore project filters (messages fetched by agent, not project)
+  - Consistent treatment across all layers (UI, database, tools)
+  - **Why**: Agents work seamlessly across multiple repos/projects
+  - **Implementation**: `src/mcp_agent_mail/app.py:2312-2327` (_get_message_by_id_global)
+
+- **🎯 Globally Unique Agent Names** - Database-enforced global uniqueness:
+  - **Case-insensitive** uniqueness across ALL projects (prevents name collisions)
+  - **Auto-migration**: Existing duplicates renamed with numeric suffixes (Alice → Alice2, Alice3)
+  - **Flexible enforcement**: `strict` (reject duplicates), `coerce` (auto-rename), `always_auto` (generate memorable names)
+  - Race condition protection at database level with functional index
+  - Configure via `AGENT_NAME_ENFORCEMENT_MODE` environment variable
+  - **Implementation**: `src/mcp_agent_mail/db.py:236-302` (_migrate_agent_name_uniqueness)
+
+- **🌍 Global Agent Lookup** - Agents accessible by name alone:
+  - `_get_agent_by_name()` looks up agents globally without needing project context
+  - Enables cross-project agent references and coordination
+  - Simplifies agent discovery and communication
+  - **Implementation**: `src/mcp_agent_mail/app.py:1569-1582`
+
+- **🌍 Global Message Lookup** - Messages accessible across projects:
+  - `_get_message_by_id_global()` retrieves messages by ID regardless of project
+  - Agents can reply to messages they received from any project
+  - Eliminates "Message X not found for project Y" errors
+  - Tools using global lookup: `reply_message`, `mark_message_read`, `acknowledge_message`
+  - **Implementation**: `src/mcp_agent_mail/app.py:2312-2327`
+
+### 🎙️ Automatic Notifications
+
+- **📬 Global Inbox with Mention Scanning** - Never miss important messages:
+  - Automatic **@mention detection** when agents fetch inbox
+  - Scans global inbox for messages mentioning agent name (case-insensitive)
+  - Works in both subject and body text
+  - Messages marked with `"source": "global_inbox_mention"` for traceability
+  - Automatic deduplication (no duplicate messages)
+  - Falls back gracefully if global inbox unavailable
+  - **Implementation**: `src/mcp_agent_mail/app.py:66-68` (get_global_inbox_name), `676-711` (_ensure_global_inbox_agent)
+
+### ⚡ Simplified Workflows
+
+- **✅ Simplified Registration** - One-step agent onboarding:
+  - `register_agent` now **auto-creates projects** if they don't exist
+  - Eliminates need for separate `ensure_project()` call
+  - Automatic archive initialization and Git repo setup
+  - Just call `register_agent` and start sending messages
+  - **Implementation**: `src/mcp_agent_mail/app.py:657-673` (_ensure_project auto-called)
+
+- **🔧 Flexible Project Keys** - Any string works as project identifier:
+  - **Repo names** (`myapp-frontend`, `api-backend`)
+  - **Custom slugs** (`team-alpha`, `prod-db`)
+  - **Filesystem paths** (still supported for backward compatibility)
+  - Not limited to absolute paths - use whatever makes sense
+  - Backward compatible with existing path-based keys
+
+- **💬 Contact-Free Messaging** - No approval workflow:
+  - Direct agent-to-agent messaging **without approval**
+  - Removed contact tools: `request_contact`, `respond_contact`, `macro_contact_handshake`
+  - Auto-registration of missing local recipients
+  - Streamlines multi-agent coordination across projects
+  - Configure via `messaging_auto_register_recipients` (default: True)
+
+### 📝 How Messages Are Stored
+
+Every message sent through MCP Agent Mail is stored in **two places** for redundancy and auditability:
+
+**1. Git Repository Archive** (`.mcp_mail/` by default - committed to your project)
+```
+.mcp_mail/                                  # ← Inside your project directory
+└── projects/
+    └── <project-slug>/
+        ├── messages/
+        │   └── YYYY/
+        │       └── MM/
+        │           └── <message-id>.md     # Canonical message with frontmatter
+        ├── agents/
+        │   └── mailboxes/
+        │       ├── <agent-name>/
+        │       │   ├── inbox/<msg-id>.md   # Symlink to canonical message
+        │       │   └── outbox/<msg-id>.md  # Symlink to canonical message
+        ├── attachments/
+        │   └── <hash-prefix>/
+        │       └── <sha1>.webp             # Images converted to WebP
+        └── file_reservations/
+            └── <sha1>.json                 # File lock metadata
+```
+
+**✅ Benefits of project-local storage (default):**
+- **Transparent collaboration**: All agent conversations committed alongside code
+- **Code review**: Review agent decisions as part of PR reviews
+- **Audit trail**: Full Git history of agent coordination
+- **Portable context**: Clone repo and see all agent communications
+- **Team sharing**: Everyone sees the same agent conversation history
+
+**2. SQLite Database** (`.mcp_mail/storage.sqlite3` - local only, not committed)
+- Full-text search indexes (FTS5)
+- Message metadata (sender, recipients, timestamps)
+- Agent directory and profiles
+- File reservation tracking
+- Fast queries without scanning Git history
+- **Note**: SQLite database is gitignored (`.mcp_mail/*.db*`) - only messages are committed
+
+### 🔄 Git Commit Flow
+
+When an agent sends a message via `send_message`, here's what happens:
+
+1. **Message written** to `messages/YYYY/MM/<id>.md` with YAML frontmatter
+2. **Inbox/outbox copies** created as symlinks in each agent's mailbox
+3. **Git add** all new files (canonical message + symlinks)
+4. **Git commit** with structured message:
+   ```
+   mail: SenderAgent -> RecipientAgent | Subject Line
+
+   TOOL: send_message
+   Agent: SenderAgent
+   Project: myproject
+   Started: 2025-11-11T10:30:00Z
+   Status: SUCCESS
+   Thread: thread-id-123
+   ```
+5. **Commit trailers** automatically appended (Agent, Thread) for traceability
+
+**Key benefits:**
+- **Human-auditable**: `git log` shows all agent communication
+- **Diffable**: `git diff` to see message changes over time
+- **Blameable**: `git blame` traces who sent what and when
+- **Reversible**: `git revert` to undo problematic messages
+- **Portable**: Clone the repo to backup or share message history
+
+**Configuration:**
+- Storage location: `STORAGE_ROOT` env var (default: `.mcp_mail`)
+  - **Project-local (default)**: `.mcp_mail` - messages stored in project directory and committed to Git
+  - **Global alternative**: `~/.mcp_agent_mail_git_mailbox_repo` - messages stored in user home directory
+- Git author: `GIT_AUTHOR_NAME` and `GIT_AUTHOR_EMAIL` env vars
+
+**Messages are automatically committed to Git:**
+```bash
+# Just run the server - messages go to .mcp_mail/ by default
+uv run python -m mcp_agent_mail.http
+
+# Messages stored in ./mcp_mail/projects/<slug>/messages/
+# Commit to share: git add .mcp_mail && git commit -m "Add agent coordination messages"
+```
+
+**🔒 Want private messages?** Use global storage instead:
+```bash
+# Set STORAGE_ROOT to use global directory (not committed to Git)
+STORAGE_ROOT=~/.mcp_agent_mail_git_mailbox_repo uv run python -m mcp_agent_mail.http
+```
+
+---
+
+**Summary**: This fork removes coordination barriers by making everything **global by default** - agents, messages, and projects all work across boundaries. Combined with token-efficient lazy loading, automatic mention scanning, and simplified workflows, it creates a **frictionless multi-agent collaboration platform** while maintaining full Git auditability for all communications.
 
 ---
 
@@ -341,7 +500,7 @@ Auth notes:
 
 - `/mail/{project}/attachments` (Messages with attachments)
   - Lists messages that contain any attachments, with subject and created time.
-  
+
 - `/mail/unified-inbox` (Cross-project activity)
   - Shows recent messages across all projects with thread counts and sender/recipients.
 
@@ -577,7 +736,7 @@ Once messages exist, visit `/mail`, click your project, then open an agent inbox
 
 ## Static Mailbox Export (Share & Distribute Archives)
 
-The `share` command group provides a complete pipeline for exporting mailbox archives into self-contained static HTML bundles. These bundles can be distributed to stakeholders, auditors, or team members who need read-only access to message history without running the full MCP Agent Mail server.
+The `share` command group exports a project’s mailbox into a portable, read‑only bundle that anyone can review in a browser. It’s designed for auditors, stakeholders, or teammates who need to browse threads, search history, or prove delivery timelines without spinning up the full MCP Agent Mail stack.
 
 ### Why export to static bundles?
 
@@ -595,13 +754,12 @@ The `share` command group provides a complete pipeline for exporting mailbox arc
 
 Each bundle contains:
 
-- **Static HTML viewer**: A single-page application with three-pane interface (projects, threads, messages) that runs entirely in the browser. No server required after the initial file serving.
-- **SQLite database snapshot**: A read-only copy of the messages, agents, and metadata, loaded via SQL.js (WebAssembly).
-- **Full-text search**: FTS5 search index embedded in the database allows fast subject/body searches entirely client-side.
-- **Attachments**: Images and files, either bundled directly (for small files) or marked as external references (for large files).
-- **Integrity metadata**: SHA-256 hashes for all assets (vendor libraries, database, attachments) stored in `manifest.json` for verification.
-- **Optional signature**: Ed25519 cryptographic signature over the manifest to prove authenticity and detect tampering.
-- **Security hardening**: Content Security Policy headers, DOMPurify sanitization, and Trusted Types enforcement protect against XSS attacks in message bodies.
+- **Self-contained**: Everything ships in a single directory (HTML, CSS/JS, SQLite snapshot, attachments). Drop it on a static host or open it locally.
+- **Rich reader UI**: Gmail-style inbox with project filters, search, and full-thread rendering—each message is shown with its metadata and Markdown body, just like in the live web UI.
+- **Fast search & filters**: FTS-backed search and precomputed per-message summaries keep scrolling and filtering responsive even with large archives.
+- **Verifiable integrity**: SHA-256 hashes for every asset plus optional Ed25519 signing make authenticity and tampering checks straightforward.
+- **Chunk-friendly archives**: Large databases can be chunked for httpvfs streaming; a companion `chunks.sha256` file lists digests for each chunk so clients can trust streamed blobs without recomputing hashes.
+- **One-click hosting**: The interactive wizard can publish straight to GitHub Pages or Cloudflare Pages, or you can serve the bundle locally with the CLI preview command.
 
 ### Quick Start: Interactive Deployment Wizard
 
@@ -815,7 +973,30 @@ The export process:
 4. Generates `manifest.json` with SHA-256 hashes for all assets
 5. Optionally signs the manifest with Ed25519 (produces `manifest.sig.json`)
 6. Packages everything into a ZIP archive (optional, enabled by default)
-7. Optionally encrypts the ZIP with age (produces `bundle.zip.age`)
+7. If chunking is enabled, writes the segmented database plus a `chunks.sha256` manifest so streamed pages can be verified cheaply
+8. Optionally encrypts the ZIP with age (produces `bundle.zip.age`)
+
+### Refresh an existing bundle
+
+Once you have published a bundle you can refresh it in place without re-running the full wizard. Every export records the settings that were used (projects, scrub preset, attachment thresholds, chunking config) inside `manifest.json`. The new `share update` command reads those defaults, regenerates the SQLite snapshot and viewer assets in a temporary directory, and then replaces the bundle atomically—removing obsolete chunked files or attachments along the way.
+
+```bash
+# Refresh bundle using the originally recorded settings
+uv run python -m mcp_agent_mail.cli share update ./my-bundle
+
+# Override one or more export options while updating
+uv run python -m mcp_agent_mail.cli share update ./my-bundle \
+  --project backend-abc123 \
+  --inline-threshold 16384 \
+  --chunk-threshold 104857600
+
+# Re-sign and package the refreshed bundle
+uv run python -m mcp_agent_mail.cli share update ./my-bundle \
+  --zip \
+  --signing-key ./keys/signing.key
+```
+
+When chunking was enabled previously but the refreshed snapshot no longer needs it, `share update` cleans up the `chunks/` directory, `chunks.sha256`, and `mailbox.sqlite3.config.json` automatically, ensuring the bundle tree matches the new manifest. You can still tweak any setting at update time; overrides are written back into the `export_config` section of `manifest.json` for the next refresh.
 
 **2. Preview locally**
 
@@ -1383,6 +1564,41 @@ sequenceDiagram
 <!-- View URIs consolidated in API Quick Reference → Resources -->
 
 ## File Reservations and the optional pre-commit guard
+- Guard status and pre-push
+  - Print guard status:
+    - `mcp-agent-mail guard status /path/to/repo`
+  - Install both guards (pre-commit + pre-push):
+    - `mcp-agent-mail guard install <project_key> <repo_path> --prepush`
+  - Pre-commit honors `WORKTREES_ENABLED` and `AGENT_MAIL_GUARD_MODE` (`warn` advisory).
+  - Pre-push enumerates to-be-pushed commits (`rev-list`) and uses `diff-tree` with `--no-ext-diff`.
+
+## Identity and worktree mode (opt-in)
+
+- Gate: `WORKTREES_ENABLED=1` enables worktree-friendly features. Default off.
+- Identity modes (default `dir`): `dir`, `git-remote`, `git-toplevel`, `git-common-dir`.
+- Inspect identity for a path:
+  - Resource (MCP): `resource://identity/{/abs/path}`
+  - CLI (diagnostics): `mcp-agent-mail mail status /abs/path`
+
+## Build slots and helpers (opt-in)
+
+- `amctl env` prints helpful environment keys:
+  - `SLUG`, `PROJECT_UID`, `BRANCH`, `AGENT`, `CACHE_KEY`, `ARTIFACT_DIR`
+  - Example: `mcp-agent-mail amctl env --path . --agent AliceDev`
+- `am-run` wraps a command with those keys set:
+  - Example: `mcp-agent-mail am-run frontend-build -- npm run dev`
+
+- Build slots (advisory, per-project coarse locking):
+  - Acquire:
+    - Tool: `acquire_build_slot(project_key, agent_name, slot, ttl_seconds=3600, exclusive=true)`
+  - Renew:
+    - Tool: `renew_build_slot(project_key, agent_name, slot, extend_seconds=1800)`
+  - Release (non-destructive; marks released):
+    - Tool: `release_build_slot(project_key, agent_name, slot)`
+  - Notes:
+    - Slots are recorded under the project archive `build_slots/<slot>/<agent>__<branch>.json`
+    - `exclusive=true` reports conflicts if another active exclusive holder exists
+    - Intended for long-running tasks (dev servers, watchers); pair with `am-run` and `amctl env`
 
 Exclusive file reservations are advisory but visible and auditable:
 
@@ -1455,7 +1671,7 @@ from decouple import Config as DecoupleConfig, RepositoryEnv
 
 decouple_config = DecoupleConfig(RepositoryEnv(".env"))
 
-STORAGE_ROOT = decouple_config("STORAGE_ROOT", default="~/.mcp_agent_mail_git_mailbox_repo")
+STORAGE_ROOT = decouple_config("STORAGE_ROOT", default=".mcp_mail")
 HTTP_HOST = decouple_config("HTTP_HOST", default="127.0.0.1")
 HTTP_PORT = int(decouple_config("HTTP_PORT", default=8765))
 HTTP_PATH = decouple_config("HTTP_PATH", default="/mcp/")
@@ -1515,7 +1731,7 @@ result = await client.call_tool("list_extended_tools", {})
 
 | Name | Default | Description |
 | :-- | :-- | :-- |
-| `STORAGE_ROOT` | `~/.mcp_agent_mail_git_mailbox_repo` | Root for per-project repos and SQLite DB |
+| `STORAGE_ROOT` | `.mcp_mail` | Root for per-project repos and SQLite DB (project-local by default) |
 | `HTTP_HOST` | `127.0.0.1` | Bind host for HTTP transport |
 | `HTTP_PORT` | `8765` | Bind port for HTTP transport |
 | `HTTP_PATH` | `/mcp/` | HTTP path where MCP endpoint is mounted |
@@ -1556,7 +1772,7 @@ result = await client.call_tool("list_extended_tools", {})
 | `OTEL_SERVICE_NAME` | `mcp-agent-mail` | Service name for telemetry |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` |  | OTLP exporter endpoint URL |
 | `APP_ENVIRONMENT` | `development` | Environment name (development/production) |
-| `DATABASE_URL` | `sqlite+aiosqlite:///./storage.sqlite3` | SQLAlchemy async database URL |
+| `DATABASE_URL` | `sqlite+aiosqlite:///./.mcp_mail/storage.sqlite3` | SQLAlchemy async database URL (stored in .mcp_mail/) |
 | `DATABASE_ECHO` | `false` | Echo SQL statements for debugging |
 | `GIT_AUTHOR_NAME` | `mcp-agent` | Git commit author name |
 | `GIT_AUTHOR_EMAIL` | `mcp-agent@example.com` | Git commit author email |
@@ -1918,6 +2134,7 @@ The project exposes a developer CLI for common operations:
 - `guard uninstall <code_repo_path>`: remove the guard from a repo
 - `share wizard`: launch interactive deployment wizard (auto-installs CLIs, authenticates, exports, deploys to GitHub Pages or Cloudflare Pages)
 - `share export --output <path> [options]`: export mailbox to a static HTML bundle (see Static Mailbox Export section for full options)
+- `share update <bundle_path> [options]`: refresh an existing bundle using recorded (or overridden) export settings
 - `share preview <bundle_path> [--port N] [--open-browser]`: serve a static bundle locally for inspection
 - `share verify <bundle_path> [--public-key <key>]`: verify bundle integrity (SRI hashes and Ed25519 signature)
 - `share decrypt <encrypted_path> [--identity <file> | --passphrase]`: decrypt an age-encrypted bundle
@@ -1949,6 +2166,9 @@ uv run python -m mcp_agent_mail.cli share preview ./bundle --port 9000 --open-br
 
 # Verify bundle integrity
 uv run python -m mcp_agent_mail.cli share verify ./bundle
+
+# Refresh an existing bundle in place with recorded settings
+uv run python -m mcp_agent_mail.cli share update ./bundle
 
 # Change server port
 uv run python -m mcp_agent_mail.cli config set-port 9000

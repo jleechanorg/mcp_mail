@@ -23,15 +23,25 @@ async def test_attachment_policy_override_inline(isolated_env, tmp_path: Path, m
         # Register agent with explicit inline policy
         await client.call_tool(
             "register_agent",
-            {"project_key": "Backend", "program": "codex", "model": "gpt-5", "name": "BlueLake", "attachments_policy": "inline"},
+            {
+                "project_key": "Backend",
+                "program": "codex",
+                "model": "gpt-5",
+                "name": "BlueLake",
+                "attachments_policy": "inline",
+            },
         )
         # Create a tiny inline image as data URI in body
         body = "Here is an image ![pic](data:image/webp;base64,AAECAwQ=)"
         res = await client.call_tool(
             "send_message",
-            {"project_key": "Backend", "sender_name": "BlueLake", "to": ["BlueLake"], "subject": "Inline", "body_md": body},
+            {
+                "project_key": "Backend",
+                "sender_name": "BlueLake",
+                "to": ["BlueLake"],
+                "subject": "Inline",
+                "body_md": body,
+            },
         )
         data = res.data
         assert any(att.get("type") == "inline" for att in data.get("attachments", []))
-
-

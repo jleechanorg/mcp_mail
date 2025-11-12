@@ -355,9 +355,7 @@ async def test_message_filtering(mcp_mail_repo):
     assert len(thread_messages) == 1
 
     # Filter by metadata
-    urgent_messages = [
-        m for m in messages if m.get("metadata", {}).get("importance") == "urgent"
-    ]
+    urgent_messages = [m for m in messages if m.get("metadata", {}).get("importance") == "urgent"]
     assert len(urgent_messages) == 1
 
 

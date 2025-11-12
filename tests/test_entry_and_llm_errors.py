@@ -13,7 +13,6 @@ def test_module_entry_point_executes_main(monkeypatch, tmp_path: Path):
 def test_llm_env_bridge_no_crash(monkeypatch):
     # Ensure missing env vars don't crash initialization
     from mcp_agent_mail.llm import _bridge_provider_env
+
     _bridge_provider_env()
     # No assertion needed; should not raise
-
-

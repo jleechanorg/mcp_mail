@@ -23,4 +23,3 @@ async def test_mailbox_with_commits_includes_commit_meta(isolated_env):
         assert blocks and blocks[0].text
         # Text is JSON; ensure it mentions commit key when present
         assert "messages" in blocks[0].text
-
