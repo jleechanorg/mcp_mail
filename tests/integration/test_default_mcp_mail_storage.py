@@ -228,7 +228,7 @@ async def test_parallel_writes_to_mcp_mail_no_race_conditions(mcp_mail_storage):
 
     # Verify Git commits were created (check git log)
     git_dir = storage_dir
-    result = subprocess.run(  # noqa: ASYNC221
+    result = subprocess.run(
         ["git", "log", "--oneline", "--all"],
         cwd=git_dir,
         capture_output=True,
@@ -345,5 +345,6 @@ async def test_mcp_mail_gitignore_excludes_sqlite(mcp_mail_storage):
     # Verify .gitignore patterns (if exists)
     if gitignore_path.exists():
         gitignore_content = gitignore_path.read_text()
-        assert "*.db" in gitignore_content or ".db" in gitignore_content, \
+        assert "*.db" in gitignore_content or ".db" in gitignore_content, (
             ".gitignore should exclude SQLite database files"
+        )
