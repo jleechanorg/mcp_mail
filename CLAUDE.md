@@ -85,16 +85,34 @@ If you encounter missing tools or commands during your work, install them using 
 
 ### GitHub CLI (gh)
 
-If `gh` is not available, install it via npm:
+If `gh` is not available, use the precompiled binary method (recommended):
+
+```bash
+# Download and extract the latest gh CLI binary
+curl -sL https://github.com/cli/cli/releases/download/v2.40.1/gh_2.40.1_linux_amd64.tar.gz | tar -xz -C /tmp
+
+# Verify installation
+/tmp/gh_2.40.1_linux_amd64/bin/gh --version
+
+# Check authentication (uses GITHUB_TOKEN automatically)
+/tmp/gh_2.40.1_linux_amd64/bin/gh auth status
+```
+
+**Benefits of precompiled binary:**
+- Fast installation (no package dependencies)
+- No deprecation warnings
+- Latest version from GitHub releases
+- Works immediately with GITHUB_TOKEN environment variable
+
+**Alternative: npm installation**
+
+If you prefer npm or need a globally installed version:
 
 ```bash
 npm install -g gh
 ```
 
-Verify installation:
-```bash
-gh --version
-```
+**Note**: The npm package may be older and install with deprecation warnings, but works for basic operations.
 
 ### General Tool Installation Pattern
 
@@ -127,14 +145,18 @@ For any missing tool/command, agents should:
 ### Example: Auto-install pattern
 
 ```bash
-# Check and install gh if missing
-if ! command -v gh &> /dev/null; then
-    echo "Installing gh CLI..."
-    npm install -g gh
+# Check and install gh if missing (using precompiled binary)
+if ! command -v gh &> /dev/null && [ ! -f /tmp/gh_2.40.1_linux_amd64/bin/gh ]; then
+    echo "Installing gh CLI from GitHub releases..."
+    curl -sL https://github.com/cli/cli/releases/download/v2.40.1/gh_2.40.1_linux_amd64.tar.gz | tar -xz -C /tmp
 fi
 
-# Use the tool
-gh pr list
+# Use the tool (either system gh or downloaded binary)
+if command -v gh &> /dev/null; then
+    gh pr list
+else
+    /tmp/gh_2.40.1_linux_amd64/bin/gh pr list
+fi
 ```
 
 **Note**: Always verify tool availability before use and install dependencies proactively to avoid workflow interruptions.
