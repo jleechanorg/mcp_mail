@@ -40,9 +40,7 @@ def init_git_repo(path: Path) -> None:
     Args:
         path: Path to initialize as a git repository
     """
-    subprocess.run(
-        ["git", "init"], cwd=path, check=True, capture_output=True
-    )
+    subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
     subprocess.run(
         ["git", "config", "user.email", "test@example.com"],
         cwd=path,

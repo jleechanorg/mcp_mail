@@ -79,9 +79,17 @@ packages = ["src/mcp_agent_mail"]
 [tool.hatch.build.targets.sdist]
 exclude = ["/.venv", "/.vscode", "/.idea", "/.git", "/__pycache__", "*.py[cod]", "*.db*", ".DS_Store"]
 
+[tool.ty]
+overrides = [
+    { include = ["scripts/**/*.py"], rules = { "unresolved-reference" = "ignore" } },
+    { include = ["src/mcp_agent_mail/app.py"], rules = { "redundant-cast" = "warn" } },
+    { include = ["src/mcp_agent_mail/http.py"], rules = { "invalid-argument-type" = "warn" } }
+]
+
 [tool.ruff]
 line-length = 120
 target-version = "py311"
+extend-exclude = ["scripts/share_to_github_pages.py"]
 
 [tool.ruff.lint]
 select = [
@@ -106,6 +114,10 @@ ignore = [
 known-first-party = ["mcp_agent_mail"]
 combine-as-imports = true
 
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ASYNC221"]  # Allow subprocess.run in async test functions
+"src/mcp_agent_mail/rich_logger.py" = ["RUF001"]  # Allow emoji/unicode in logging UI
+
 [tool.mypy]
 python_version = "3.11"
 warn_return_any = true
@@ -116,6 +128,12 @@ check_untyped_defs = true
 no_implicit_optional = true
 strict_optional = true
 plugins = []
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

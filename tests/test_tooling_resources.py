@@ -78,11 +78,10 @@ async def test_tooling_recent_filters(isolated_env):
             "health_check",
             {},
         )
-        blocks = await client.read_resource(
-            f"resource://tooling/recent/60?agent={agent_name}&project={project_slug}"
-        )
+        blocks = await client.read_resource(f"resource://tooling/recent/60?agent={agent_name}&project={project_slug}")
         assert blocks and blocks[0].text
         import json as _json
+
         data = _json.loads(blocks[0].text)
         assert isinstance(data, dict)
         assert data.get("project") is None or data.get("project") == "Backend" or data.get("entries") is not None

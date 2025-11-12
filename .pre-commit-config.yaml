@@ -1,14 +1,21 @@
 # Pre-commit hooks for MCP Mail
+# Install: pip install pre-commit && pre-commit install
+# Run manually: pre-commit run --all-files
 # See https://pre-commit.com for more information
 
 repos:
-  # Ruff - Fast Python linter and formatter
+  # Ruff - Fast Python linter and formatter (runs on all files)
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.1
+    rev: v0.14.4
     hooks:
-      - id: ruff
-        args: [--fix, --exit-non-zero-on-fix]
-        name: Ruff linter
+      - id: ruff-check
+        name: Ruff linter (all files)
+        args: [--fix, --output-format=github]
+        pass_filenames: false  # Check all files, not just staged ones
+
+      - id: ruff-format
+        name: Ruff formatter (all files)
+        pass_filenames: false  # Format check all files
 
   # Standard pre-commit hooks
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -32,15 +39,23 @@ repos:
   # Python-specific checks
   - repo: local
     hooks:
-      # Type checking with ty
+      # Type checking with ty (all files)
       - id: ty-check
-        name: Ty type checker
+        name: Ty type checker (all files)
         entry: bash -c 'uvx ty check || true'  # Non-blocking: version mismatches expected
         language: system
         types: [python]
-        pass_filenames: false
-        # Skip in CI since we have dedicated CI job
+        pass_filenames: false  # Check all files
         stages: [pre-commit]
+
+      # Full codebase ruff check (runs on every commit including merges)
+      - id: ruff-check-all-strict
+        name: Ruff check all files (strict - catches merge issues)
+        entry: bash -c 'uv run ruff check --output-format=github'
+        language: system
+        pass_filenames: false  # Always check all files
+        stages: [pre-commit, post-merge, manual]
+        verbose: true
 
       # Run fast unit tests (not integration tests to keep it fast)
       - id: pytest-fast
@@ -66,7 +81,6 @@ repos:
         language: system
         types: [python]
         pass_filenames: false
-        # Only run on commit, not on push
         stages: [pre-commit]
 
       # Run integration tests on push only (slower)

@@ -118,9 +118,7 @@ def _seed_mailbox(db_path: Path, storage_root: Path) -> None:
             """
         )
         conn.execute("INSERT INTO file_reservations (id, project_id) VALUES (1, 1)")
-        conn.execute(
-            "INSERT INTO agent_links (id, a_project_id, b_project_id) VALUES (1, 1, 1)"
-        )
+        conn.execute("INSERT INTO agent_links (id, a_project_id, b_project_id) VALUES (1, 1, 1)")
         conn.commit()
     finally:
         conn.close()

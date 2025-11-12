@@ -78,7 +78,9 @@ def sample_db(tmp_path: Path) -> Path:
 
         # Insert messages spanning multiple threads
         for i in range(1, 101):
-            thread_id = f"thread-{(i - 1) // 10 + 1}" if i % 3 != 0 else None  # Some messages have thread_id, some don't
+            thread_id = (
+                f"thread-{(i - 1) // 10 + 1}" if i % 3 != 0 else None
+            )  # Some messages have thread_id, some don't
             conn.execute(
                 """INSERT INTO messages
                    (id, project_id, subject, body_md, importance, ack_required, created_ts, attachments, thread_id)
@@ -277,8 +279,9 @@ def test_get_thread_messages_specific_thread_query_uses_index(sample_db: Path) -
             print(f"  {step}")
 
         # Should use thread_id index for the first condition
-        assert _has_search_using_index(plan, "messages", "idx_messages_thread_id"), \
+        assert _has_search_using_index(plan, "messages", "idx_messages_thread_id"), (
             "getThreadMessages(specific) should use thread_id index"
+        )
 
     finally:
         conn.close()
@@ -321,8 +324,7 @@ def test_fts_search_query_uses_fts_index(sample_db: Path) -> None:
         assert has_fts, "FTS search query should use fts_messages virtual table"
 
         # Messages table should be accessed via SEARCH using primary key (rowid)
-        assert _has_search_using_index(plan, "messages"), \
-            "FTS search should use primary key lookup for messages join"
+        assert _has_search_using_index(plan, "messages"), "FTS search should use primary key lookup for messages join"
 
     finally:
         conn.close()
@@ -440,7 +442,9 @@ def test_query_plan_dbstat_locality(sample_db: Path) -> None:
             name, page_count, page_span, total_cells = stat
             if page_count > 0:
                 locality_ratio = page_count / page_span if page_span > 0 else 1.0
-                print(f"  {name}: {page_count} pages, span {page_span}, ratio {locality_ratio:.2f}, cells {total_cells}")
+                print(
+                    f"  {name}: {page_count} pages, span {page_span}, ratio {locality_ratio:.2f}, cells {total_cells}"
+                )
 
                 # Verify stats are computed (basic validation)
                 assert page_count > 0, f"Table {name} should have pages"

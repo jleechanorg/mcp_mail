@@ -28,7 +28,14 @@ def _stage_file(repo_path: Path, rel_path: str, content: str = "x") -> None:
 def _run_precommit(script_path: Path, repo_path: Path, agent_name: str) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env["AGENT_NAME"] = agent_name
-    return subprocess.run(["python", str(script_path)], cwd=str(repo_path), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    return subprocess.run(
+        ["python", str(script_path)],
+        cwd=str(repo_path),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
 
 
 @pytest.mark.asyncio

@@ -736,7 +736,7 @@ Once messages exist, visit `/mail`, click your project, then open an agent inbox
 
 ## Static Mailbox Export (Share & Distribute Archives)
 
-The `share` command group provides a complete pipeline for exporting mailbox archives into self-contained static HTML bundles. These bundles can be distributed to stakeholders, auditors, or team members who need read-only access to message history without running the full MCP Agent Mail server.
+The `share` command group exports a project’s mailbox into a portable, read‑only bundle that anyone can review in a browser. It’s designed for auditors, stakeholders, or teammates who need to browse threads, search history, or prove delivery timelines without spinning up the full MCP Agent Mail stack.
 
 ### Why export to static bundles?
 
@@ -754,13 +754,12 @@ The `share` command group provides a complete pipeline for exporting mailbox arc
 
 Each bundle contains:
 
-- **Static HTML viewer**: A single-page application with three-pane interface (projects, threads, messages) that runs entirely in the browser. No server required after the initial file serving.
-- **SQLite database snapshot**: A read-only copy of the messages, agents, and metadata, loaded via SQL.js (WebAssembly).
-- **Full-text search**: FTS5 search index embedded in the database allows fast subject/body searches entirely client-side.
-- **Attachments**: Images and files, either bundled directly (for small files) or marked as external references (for large files).
-- **Integrity metadata**: SHA-256 hashes for all assets (vendor libraries, database, attachments) stored in `manifest.json` for verification.
-- **Optional signature**: Ed25519 cryptographic signature over the manifest to prove authenticity and detect tampering.
-- **Security hardening**: Content Security Policy headers, DOMPurify sanitization, and Trusted Types enforcement protect against XSS attacks in message bodies.
+- **Self-contained**: Everything ships in a single directory (HTML, CSS/JS, SQLite snapshot, attachments). Drop it on a static host or open it locally.
+- **Rich reader UI**: Gmail-style inbox with project filters, search, and full-thread rendering—each message is shown with its metadata and Markdown body, just like in the live web UI.
+- **Fast search & filters**: FTS-backed search and precomputed per-message summaries keep scrolling and filtering responsive even with large archives.
+- **Verifiable integrity**: SHA-256 hashes for every asset plus optional Ed25519 signing make authenticity and tampering checks straightforward.
+- **Chunk-friendly archives**: Large databases can be chunked for httpvfs streaming; a companion `chunks.sha256` file lists digests for each chunk so clients can trust streamed blobs without recomputing hashes.
+- **One-click hosting**: The interactive wizard can publish straight to GitHub Pages or Cloudflare Pages, or you can serve the bundle locally with the CLI preview command.
 
 ### Quick Start: Interactive Deployment Wizard
 
@@ -974,7 +973,30 @@ The export process:
 4. Generates `manifest.json` with SHA-256 hashes for all assets
 5. Optionally signs the manifest with Ed25519 (produces `manifest.sig.json`)
 6. Packages everything into a ZIP archive (optional, enabled by default)
-7. Optionally encrypts the ZIP with age (produces `bundle.zip.age`)
+7. If chunking is enabled, writes the segmented database plus a `chunks.sha256` manifest so streamed pages can be verified cheaply
+8. Optionally encrypts the ZIP with age (produces `bundle.zip.age`)
+
+### Refresh an existing bundle
+
+Once you have published a bundle you can refresh it in place without re-running the full wizard. Every export records the settings that were used (projects, scrub preset, attachment thresholds, chunking config) inside `manifest.json`. The new `share update` command reads those defaults, regenerates the SQLite snapshot and viewer assets in a temporary directory, and then replaces the bundle atomically—removing obsolete chunked files or attachments along the way.
+
+```bash
+# Refresh bundle using the originally recorded settings
+uv run python -m mcp_agent_mail.cli share update ./my-bundle
+
+# Override one or more export options while updating
+uv run python -m mcp_agent_mail.cli share update ./my-bundle \
+  --project backend-abc123 \
+  --inline-threshold 16384 \
+  --chunk-threshold 104857600
+
+# Re-sign and package the refreshed bundle
+uv run python -m mcp_agent_mail.cli share update ./my-bundle \
+  --zip \
+  --signing-key ./keys/signing.key
+```
+
+When chunking was enabled previously but the refreshed snapshot no longer needs it, `share update` cleans up the `chunks/` directory, `chunks.sha256`, and `mailbox.sqlite3.config.json` automatically, ensuring the bundle tree matches the new manifest. You can still tweak any setting at update time; overrides are written back into the `export_config` section of `manifest.json` for the next refresh.
 
 **2. Preview locally**
 
@@ -1542,6 +1564,41 @@ sequenceDiagram
 <!-- View URIs consolidated in API Quick Reference → Resources -->
 
 ## File Reservations and the optional pre-commit guard
+- Guard status and pre-push
+  - Print guard status:
+    - `mcp-agent-mail guard status /path/to/repo`
+  - Install both guards (pre-commit + pre-push):
+    - `mcp-agent-mail guard install <project_key> <repo_path> --prepush`
+  - Pre-commit honors `WORKTREES_ENABLED` and `AGENT_MAIL_GUARD_MODE` (`warn` advisory).
+  - Pre-push enumerates to-be-pushed commits (`rev-list`) and uses `diff-tree` with `--no-ext-diff`.
+
+## Identity and worktree mode (opt-in)
+
+- Gate: `WORKTREES_ENABLED=1` enables worktree-friendly features. Default off.
+- Identity modes (default `dir`): `dir`, `git-remote`, `git-toplevel`, `git-common-dir`.
+- Inspect identity for a path:
+  - Resource (MCP): `resource://identity/{/abs/path}`
+  - CLI (diagnostics): `mcp-agent-mail mail status /abs/path`
+
+## Build slots and helpers (opt-in)
+
+- `amctl env` prints helpful environment keys:
+  - `SLUG`, `PROJECT_UID`, `BRANCH`, `AGENT`, `CACHE_KEY`, `ARTIFACT_DIR`
+  - Example: `mcp-agent-mail amctl env --path . --agent AliceDev`
+- `am-run` wraps a command with those keys set:
+  - Example: `mcp-agent-mail am-run frontend-build -- npm run dev`
+
+- Build slots (advisory, per-project coarse locking):
+  - Acquire:
+    - Tool: `acquire_build_slot(project_key, agent_name, slot, ttl_seconds=3600, exclusive=true)`
+  - Renew:
+    - Tool: `renew_build_slot(project_key, agent_name, slot, extend_seconds=1800)`
+  - Release (non-destructive; marks released):
+    - Tool: `release_build_slot(project_key, agent_name, slot)`
+  - Notes:
+    - Slots are recorded under the project archive `build_slots/<slot>/<agent>__<branch>.json`
+    - `exclusive=true` reports conflicts if another active exclusive holder exists
+    - Intended for long-running tasks (dev servers, watchers); pair with `am-run` and `amctl env`
 
 Exclusive file reservations are advisory but visible and auditable:
 
@@ -2077,6 +2134,7 @@ The project exposes a developer CLI for common operations:
 - `guard uninstall <code_repo_path>`: remove the guard from a repo
 - `share wizard`: launch interactive deployment wizard (auto-installs CLIs, authenticates, exports, deploys to GitHub Pages or Cloudflare Pages)
 - `share export --output <path> [options]`: export mailbox to a static HTML bundle (see Static Mailbox Export section for full options)
+- `share update <bundle_path> [options]`: refresh an existing bundle using recorded (or overridden) export settings
 - `share preview <bundle_path> [--port N] [--open-browser]`: serve a static bundle locally for inspection
 - `share verify <bundle_path> [--public-key <key>]`: verify bundle integrity (SRI hashes and Ed25519 signature)
 - `share decrypt <encrypted_path> [--identity <file> | --passphrase]`: decrypt an age-encrypted bundle
@@ -2108,6 +2166,9 @@ uv run python -m mcp_agent_mail.cli share preview ./bundle --port 9000 --open-br
 
 # Verify bundle integrity
 uv run python -m mcp_agent_mail.cli share verify ./bundle
+
+# Refresh an existing bundle in place with recorded settings
+uv run python -m mcp_agent_mail.cli share update ./bundle
 
 # Change server port
 uv run python -m mcp_agent_mail.cli config set-port 9000

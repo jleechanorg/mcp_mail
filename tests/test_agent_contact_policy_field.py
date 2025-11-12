@@ -49,9 +49,7 @@ async def test_agent_has_contact_policy_field_in_model(isolated_env):
 
         # Verify the contact_policy field exists in the database
         async with get_session() as session:
-            db_result = await session.execute(
-                select(Agent).where(Agent.id == agent_id)
-            )
+            db_result = await session.execute(select(Agent).where(Agent.id == agent_id))
             agent = db_result.scalars().first()
 
             # Verify agent exists and has contact_policy field
@@ -93,9 +91,7 @@ async def test_agent_registration_with_auto_generated_name_has_contact_policy(is
 
         # Verify the contact_policy field exists and has default value
         async with get_session() as session:
-            db_result = await session.execute(
-                select(Agent).where(Agent.id == agent_id)
-            )
+            db_result = await session.execute(select(Agent).where(Agent.id == agent_id))
             agent = db_result.scalars().first()
 
             assert agent is not None
@@ -132,9 +128,7 @@ async def test_multiple_agent_registrations_all_have_contact_policy(isolated_env
         # Verify all agents have contact_policy field set
         async with get_session() as session:
             for agent_id, expected_name in zip(agent_ids, agent_names, strict=True):
-                db_result = await session.execute(
-                    select(Agent).where(Agent.id == agent_id)
-                )
+                db_result = await session.execute(select(Agent).where(Agent.id == agent_id))
                 agent = db_result.scalars().first()
 
                 assert agent is not None

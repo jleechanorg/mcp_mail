@@ -13,11 +13,12 @@ import shutil
 import sqlite3
 import subprocess
 from collections import defaultdict
+from contextlib import suppress
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from importlib import abc, resources
 from pathlib import Path
-from typing import Any, Optional, Sequence, cast
+from typing import Any, Mapping, Optional, Sequence, cast
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from sqlalchemy.engine import make_url
@@ -124,12 +125,12 @@ HOSTING_GUIDES: dict[str, dict[str, object]] = {
         "instructions": [
             "Copy `viewer/`, `manifest.json`, and `mailbox.sqlite3` into your `docs/` folder or gh-pages branch.",
             "Add a `.nojekyll` file so `.wasm` assets are served with correct MIME types.",
-            "**CRITICAL**: Edit `viewer/index.html` and uncomment the line `<script src=\"./coi-serviceworker.js\"></script>` (around line 63).",
+            '**CRITICAL**: Edit `viewer/index.html` and uncomment the line `<script src="./coi-serviceworker.js"></script>` (around line 63).',
             "This service worker enables Cross-Origin-Isolation (COOP/COEP headers) required for OPFS caching and optimal sqlite-wasm performance.",
             "GitHub Pages does not support the `_headers` file, so the service worker intercepts requests and adds the required headers.",
             "Commit and push, then enable GitHub Pages for your repository branch in repository settings.",
             "On first visit, the page will reload automatically once the service worker activates (this is normal behavior).",
-            "Verify isolation: open browser DevTools console and check that `window.crossOriginIsolated === true`."
+            "Verify isolation: open browser DevTools console and check that `window.crossOriginIsolated === true`.",
         ],
     },
     "cloudflare_pages": {
@@ -140,7 +141,7 @@ HOSTING_GUIDES: dict[str, dict[str, object]] = {
             "The included `_headers` file will automatically apply `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` headers.",
             "These headers are required for OPFS caching and optimal sqlite-wasm performance.",
             "Verify isolation: open browser DevTools console and check that `window.crossOriginIsolated === true`.",
-            "For attachments >25 MiB, push them to R2 and reference the signed URLs in the manifest."
+            "For attachments >25 MiB, push them to R2 and reference the signed URLs in the manifest.",
         ],
     },
     "netlify": {
@@ -151,7 +152,7 @@ HOSTING_GUIDES: dict[str, dict[str, object]] = {
             "These headers are required for OPFS caching and optimal sqlite-wasm performance.",
             "Deploy the bundle directory (or ZIP) via CLI or the Netlify UI.",
             "Verify isolation: open browser DevTools console and check that `window.crossOriginIsolated === true`.",
-            "Verify `.wasm` assets are served with `application/wasm` using Netlify's response headers tooling."
+            "Verify `.wasm` assets are served with `application/wasm` using Netlify's response headers tooling.",
         ],
     },
     "s3": {
@@ -160,7 +161,7 @@ HOSTING_GUIDES: dict[str, dict[str, object]] = {
         "instructions": [
             "Upload the bundle directory to your bucket (e.g., via `aws s3 sync`).",
             "Set `Content-Type` metadata: `.wasm` → `application/wasm`, SQLite files → `application/octet-stream`.",
-            "When fronted by CloudFront, configure response headers for COOP/COEP and caching policies."
+            "When fronted by CloudFront, configure response headers for COOP/COEP and caching policies.",
         ],
     },
 }
@@ -173,6 +174,21 @@ GENERIC_HOSTING_NOTES: list[str] = [
     "If cross-origin isolation is unavailable, the viewer will show a warning banner with platform-specific instructions and fall back to streaming mode.",
     "Verify isolation: open browser DevTools console and check that `window.crossOriginIsolated === true`.",
 ]
+
+
+@dataclass(slots=True, frozen=True)
+class SnapshotContext:
+    snapshot_path: Path
+    scope: ProjectScopeResult
+    scrub_summary: ScrubSummary
+    fts_enabled: bool
+
+
+@dataclass(slots=True, frozen=True)
+class BundleArtifacts:
+    attachments_manifest: dict[str, Any]
+    chunk_manifest: Optional[dict[str, Any]]
+    viewer_data: Optional[dict[str, Any]]
 
 
 def _find_repo_root(start: Path) -> Optional[Path]:
@@ -273,7 +289,9 @@ def detect_hosting_hints(output_dir: Path) -> list[HostingHint]:
         )
 
     preferred_order = ["github_pages", "cloudflare_pages", "netlify", "s3"]
-    hints.sort(key=lambda hint: preferred_order.index(hint.key) if hint.key in preferred_order else len(preferred_order))
+    hints.sort(
+        key=lambda hint: preferred_order.index(hint.key) if hint.key in preferred_order else len(preferred_order)
+    )
     return hints
 
 
@@ -308,7 +326,9 @@ def build_how_to_deploy(hosting_hints: Sequence[HostingHint]) -> str:
     for note in GENERIC_HOSTING_NOTES:
         sections.append(f"- {note}")
     sections.append("")
-    sections.append("Review `manifest.json` before publication to confirm the included projects, hashing, and scrubbing policies.")
+    sections.append(
+        "Review `manifest.json` before publication to confirm the included projects, hashing, and scrubbing policies."
+    )
 
     return "\n".join(sections)
 
@@ -368,13 +388,18 @@ def export_viewer_data(
     }
 
 
-def sign_manifest(manifest_path: Path, signing_key_path: Path, output_path: Path, *, public_out: Optional[Path] = None) -> dict[str, str]:
+def sign_manifest(
+    manifest_path: Path,
+    signing_key_path: Path,
+    output_path: Path,
+    *,
+    public_out: Optional[Path] = None,
+    overwrite: bool = False,
+) -> dict[str, str]:
     try:
         from nacl.signing import SigningKey  # type: ignore
     except ImportError as exc:  # pragma: no cover - optional dependency
-        raise ShareExportError(
-            "PyNaCl is required for Ed25519 signing. Install it with `uv add PyNaCl`."
-        ) from exc
+        raise ShareExportError("PyNaCl is required for Ed25519 signing. Install it with `uv add PyNaCl`.") from exc
 
     # Expand and validate manifest path
     manifest_path = manifest_path.expanduser().resolve()
@@ -420,7 +445,10 @@ def sign_manifest(manifest_path: Path, signing_key_path: Path, output_path: Path
 
     sig_path = output_path / "manifest.sig.json"
     try:
-        _write_json_file(sig_path, payload)
+        if overwrite and sig_path.exists():
+            sig_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        else:
+            _write_json_file(sig_path, payload)
     except ShareExportError:
         raise  # Re-raise ShareExportError as-is
     except Exception as exc:
@@ -649,9 +677,7 @@ def _scrub_text(value: str) -> tuple[str, int]:
 def _normalize_scrub_preset(preset: str) -> str:
     key = (preset or "standard").strip().lower()
     if key not in SCRUB_PRESETS:
-        raise ShareExportError(
-            f"Unknown scrub preset '{preset}'. Supported presets: {', '.join(SCRUB_PRESETS)}"
-        )
+        raise ShareExportError(f"Unknown scrub preset '{preset}'. Supported presets: {', '.join(SCRUB_PRESETS)}")
     return key
 
 
@@ -874,6 +900,10 @@ def finalize_snapshot_for_export(snapshot_path: Path) -> None:
         # Compact database and improve page locality
         conn.execute("VACUUM")
 
+        # Update planner statistics after schema/index changes
+        conn.execute("PRAGMA analysis_limit=400")
+        conn.execute("ANALYZE")
+
         # Update query planner statistics for optimal execution plans
         conn.execute("PRAGMA optimize")
 
@@ -893,165 +923,70 @@ def build_materialized_views(snapshot_path: Path) -> None:
     """
     conn = sqlite3.connect(str(snapshot_path))
     try:
-        # Check which columns exist in messages table (backward compatibility)
-        has_thread_id = _column_exists(conn, "messages", "thread_id")
-        has_sender_id = _column_exists(conn, "messages", "sender_id")
-
         # Message overview materialized view
         # Denormalizes messages with sender names for efficient list rendering
-        if has_thread_id and has_sender_id:
-            overview_query = """
-                DROP TABLE IF EXISTS message_overview_mv;
-                CREATE TABLE message_overview_mv AS
-                SELECT
-                    m.id,
-                    m.project_id,
-                    m.thread_id,
-                    m.subject,
-                    m.importance,
-                    m.ack_required,
-                    m.created_ts,
-                    a.name AS sender_name,
-                    LENGTH(m.body_md) AS body_length,
-                    json_array_length(m.attachments) AS attachment_count
-                FROM messages m
-                JOIN agents a ON m.sender_id = a.id
-                ORDER BY m.created_ts DESC;
-
-                -- Covering indexes for common query patterns
-                CREATE INDEX idx_msg_overview_created ON message_overview_mv(created_ts DESC);
-                CREATE INDEX idx_msg_overview_thread ON message_overview_mv(thread_id, created_ts DESC);
-                CREATE INDEX idx_msg_overview_project ON message_overview_mv(project_id, created_ts DESC);
-                CREATE INDEX idx_msg_overview_importance ON message_overview_mv(importance, created_ts DESC);
+        conn.executescript(
             """
-        elif has_thread_id:
-            # Has thread_id but not sender_id
-            overview_query = """
-                DROP TABLE IF EXISTS message_overview_mv;
-                CREATE TABLE message_overview_mv AS
+            DROP TABLE IF EXISTS message_overview_mv;
+            CREATE TABLE message_overview_mv AS
+            SELECT
+                m.id,
+                m.project_id,
+                m.thread_id,
+                m.subject,
+                m.importance,
+                m.ack_required,
+                m.created_ts,
+                a.name AS sender_name,
+                LENGTH(m.body_md) AS body_length,
+                json_array_length(m.attachments) AS attachment_count,
+                SUBSTR(COALESCE(m.body_md, ''), 1, 280) AS latest_snippet,
+                COALESCE(r.recipients, '') AS recipients
+            FROM messages m
+            JOIN agents a ON m.sender_id = a.id
+            LEFT JOIN (
                 SELECT
-                    m.id,
-                    m.project_id,
-                    m.thread_id,
-                    m.subject,
-                    m.importance,
-                    m.ack_required,
-                    m.created_ts,
-                    NULL AS sender_name,
-                    LENGTH(m.body_md) AS body_length,
-                    json_array_length(m.attachments) AS attachment_count
-                FROM messages m
-                ORDER BY m.created_ts DESC;
+                    mr.message_id,
+                    GROUP_CONCAT(COALESCE(ag.name, ''), ', ') AS recipients
+                FROM message_recipients mr
+                LEFT JOIN agents ag ON ag.id = mr.agent_id
+                GROUP BY mr.message_id
+            ) r ON r.message_id = m.id
+            ORDER BY m.created_ts DESC;
 
-                -- Covering indexes for common query patterns
-                CREATE INDEX idx_msg_overview_created ON message_overview_mv(created_ts DESC);
-                CREATE INDEX idx_msg_overview_thread ON message_overview_mv(thread_id, created_ts DESC);
-                CREATE INDEX idx_msg_overview_project ON message_overview_mv(project_id, created_ts DESC);
-                CREATE INDEX idx_msg_overview_importance ON message_overview_mv(importance, created_ts DESC);
+            -- Covering indexes for common query patterns
+            CREATE INDEX idx_msg_overview_created ON message_overview_mv(created_ts DESC);
+            CREATE INDEX idx_msg_overview_thread ON message_overview_mv(thread_id, created_ts DESC);
+            CREATE INDEX idx_msg_overview_project ON message_overview_mv(project_id, created_ts DESC);
+            CREATE INDEX idx_msg_overview_importance ON message_overview_mv(importance, created_ts DESC);
             """
-        elif has_sender_id:
-            # Has sender_id but not thread_id
-            overview_query = """
-                DROP TABLE IF EXISTS message_overview_mv;
-                CREATE TABLE message_overview_mv AS
-                SELECT
-                    m.id,
-                    m.project_id,
-                    printf('msg:%d', m.id) AS thread_id,
-                    m.subject,
-                    m.importance,
-                    m.ack_required,
-                    m.created_ts,
-                    a.name AS sender_name,
-                    LENGTH(m.body_md) AS body_length,
-                    json_array_length(m.attachments) AS attachment_count
-                FROM messages m
-                JOIN agents a ON m.sender_id = a.id
-                ORDER BY m.created_ts DESC;
-
-                -- Covering indexes for common query patterns
-                CREATE INDEX idx_msg_overview_created ON message_overview_mv(created_ts DESC);
-                CREATE INDEX idx_msg_overview_thread ON message_overview_mv(thread_id, created_ts DESC);
-                CREATE INDEX idx_msg_overview_project ON message_overview_mv(project_id, created_ts DESC);
-                CREATE INDEX idx_msg_overview_importance ON message_overview_mv(importance, created_ts DESC);
-            """
-        else:
-            # Neither thread_id nor sender_id (very old schema)
-            overview_query = """
-                DROP TABLE IF EXISTS message_overview_mv;
-                CREATE TABLE message_overview_mv AS
-                SELECT
-                    m.id,
-                    m.project_id,
-                    printf('msg:%d', m.id) AS thread_id,
-                    m.subject,
-                    m.importance,
-                    m.ack_required,
-                    m.created_ts,
-                    NULL AS sender_name,
-                    LENGTH(m.body_md) AS body_length,
-                    json_array_length(m.attachments) AS attachment_count
-                FROM messages m
-                ORDER BY m.created_ts DESC;
-
-                -- Covering indexes for common query patterns
-                CREATE INDEX idx_msg_overview_created ON message_overview_mv(created_ts DESC);
-                CREATE INDEX idx_msg_overview_thread ON message_overview_mv(thread_id, created_ts DESC);
-                CREATE INDEX idx_msg_overview_project ON message_overview_mv(project_id, created_ts DESC);
-                CREATE INDEX idx_msg_overview_importance ON message_overview_mv(importance, created_ts DESC);
-            """
-
-        conn.executescript(overview_query)
+        )
 
         # Attachments by message materialized view
         # Flattens JSON attachments array for easier filtering and counting
-        if has_thread_id:
-            attachments_query = """
-                DROP TABLE IF EXISTS attachments_by_message_mv;
-                CREATE TABLE attachments_by_message_mv AS
-                SELECT
-                    m.id AS message_id,
-                    m.project_id,
-                    m.thread_id,
-                    m.created_ts,
-                    json_extract(value, '$.type') AS attachment_type,
-                    json_extract(value, '$.media_type') AS media_type,
-                    json_extract(value, '$.path') AS path,
-                    CAST(json_extract(value, '$.size_bytes') AS INTEGER) AS size_bytes
-                FROM messages m,
-                     json_each(m.attachments)
-                WHERE m.attachments != '[]';
-
-                -- Indexes for attachment queries
-                CREATE INDEX idx_attach_by_msg ON attachments_by_message_mv(message_id);
-                CREATE INDEX idx_attach_by_type ON attachments_by_message_mv(attachment_type, created_ts DESC);
-                CREATE INDEX idx_attach_by_project ON attachments_by_message_mv(project_id, created_ts DESC);
+        conn.executescript(
             """
-        else:
-            # Use synthetic thread_id for older databases
-            attachments_query = """
-                DROP TABLE IF EXISTS attachments_by_message_mv;
-                CREATE TABLE attachments_by_message_mv AS
-                SELECT
-                    m.id AS message_id,
-                    m.project_id,
-                    printf('msg:%d', m.id) AS thread_id,
-                    m.created_ts,
-                    json_extract(value, '$.type') AS attachment_type,
-                    json_extract(value, '$.media_type') AS media_type,
-                    json_extract(value, '$.path') AS path,
-                    CAST(json_extract(value, '$.size_bytes') AS INTEGER) AS size_bytes
-                FROM messages m,
-                     json_each(m.attachments)
-                WHERE m.attachments != '[]';
+            DROP TABLE IF EXISTS attachments_by_message_mv;
+            CREATE TABLE attachments_by_message_mv AS
+            SELECT
+                m.id AS message_id,
+                m.project_id,
+                m.thread_id,
+                m.created_ts,
+                json_extract(value, '$.type') AS attachment_type,
+                json_extract(value, '$.media_type') AS media_type,
+                json_extract(value, '$.path') AS path,
+                CAST(json_extract(value, '$.size_bytes') AS INTEGER) AS size_bytes
+            FROM messages m,
+                 json_each(m.attachments)
+            WHERE m.attachments != '[]';
 
-                -- Indexes for attachment queries
-                CREATE INDEX idx_attach_by_msg ON attachments_by_message_mv(message_id);
-                CREATE INDEX idx_attach_by_type ON attachments_by_message_mv(attachment_type, created_ts DESC);
-                CREATE INDEX idx_attach_by_project ON attachments_by_message_mv(project_id, created_ts DESC);
+            -- Indexes for attachment queries
+            CREATE INDEX idx_attach_by_msg ON attachments_by_message_mv(message_id);
+            CREATE INDEX idx_attach_by_type ON attachments_by_message_mv(attachment_type, created_ts DESC);
+            CREATE INDEX idx_attach_by_project ON attachments_by_message_mv(project_id, created_ts DESC);
             """
-
-        conn.executescript(attachments_query)
+        )
 
         # FTS search overview materialized view
         # Pre-computes search result snippets and highlights for efficient rendering
@@ -1082,6 +1017,54 @@ def build_materialized_views(snapshot_path: Path) -> None:
         except sqlite3.OperationalError:
             # FTS5 not available or not configured, skip this view
             pass
+
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def create_performance_indexes(snapshot_path: Path) -> None:
+    """Create covering indexes on hot message lookup paths used by the static viewer."""
+
+    conn = sqlite3.connect(str(snapshot_path))
+    try:
+        # Ensure derived lowercase columns exist for case-insensitive search
+        for column in ("subject_lower", "sender_lower"):
+            with suppress(sqlite3.OperationalError):
+                conn.execute(f"ALTER TABLE messages ADD COLUMN {column} TEXT")
+
+        conn.execute(
+            """
+            UPDATE messages
+            SET
+                subject_lower = LOWER(COALESCE(subject, '')),
+                sender_lower = LOWER(
+                    COALESCE(
+                        (SELECT name FROM agents WHERE agents.id = messages.sender_id),
+                        ''
+                    )
+                )
+            """
+        )
+
+        conn.executescript(
+            """
+            CREATE INDEX IF NOT EXISTS idx_messages_created_ts
+              ON messages(created_ts DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_messages_thread
+              ON messages(thread_id, created_ts DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_messages_sender
+              ON messages(sender_id, created_ts DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_messages_subject_lower
+              ON messages(subject_lower);
+
+            CREATE INDEX IF NOT EXISTS idx_messages_sender_lower
+              ON messages(sender_lower);
+            """
+        )
 
         conn.commit()
     finally:
@@ -1178,6 +1161,30 @@ def summarize_snapshot(
         "importance": importance_counts,
         "attachments": attachments_stats,
     }
+
+
+def create_snapshot_context(
+    *,
+    source_database: Path,
+    snapshot_path: Path,
+    project_filters: Sequence[str],
+    scrub_preset: str,
+) -> SnapshotContext:
+    """Materialize and prepare a snapshot for export."""
+
+    create_sqlite_snapshot(source_database, snapshot_path)
+    scope = apply_project_scope(snapshot_path, project_filters)
+    scrub_summary = scrub_snapshot(snapshot_path, preset=scrub_preset)
+    fts_enabled = build_search_indexes(snapshot_path)
+    build_materialized_views(snapshot_path)
+    create_performance_indexes(snapshot_path)
+    finalize_snapshot_for_export(snapshot_path)
+    return SnapshotContext(
+        snapshot_path=snapshot_path,
+        scope=scope,
+        scrub_summary=scrub_summary,
+        fts_enabled=fts_enabled,
+    )
 
 
 def bundle_attachments(
@@ -1373,6 +1380,8 @@ def maybe_chunk_database(
     chunk_dir = output_dir / "chunks"
     chunk_dir.mkdir(parents=True, exist_ok=True)
 
+    checksum_lines: list[str] = []
+
     with snapshot_path.open("rb") as src:
         index = 0
         while True:
@@ -1381,7 +1390,13 @@ def maybe_chunk_database(
                 break
             chunk_path = chunk_dir / f"{index:05d}.bin"
             chunk_path.write_bytes(chunk)
+            digest = hashlib.sha256(chunk).hexdigest()
+            checksum_lines.append(f"{digest}  chunks/{chunk_path.name}\n")
             index += 1
+
+    if checksum_lines:
+        checksums_path = output_dir / "chunks.sha256"
+        checksums_path.write_text("".join(checksum_lines), encoding="utf-8")
 
     config = {
         "version": 1,
@@ -1389,9 +1404,64 @@ def maybe_chunk_database(
         "chunk_count": index,
         "pattern": "chunks/{index:05d}.bin",
         "original_bytes": size,
+        "threshold_bytes": threshold_bytes,
     }
     _write_json_file(output_dir / "mailbox.sqlite3.config.json", config)
     return config
+
+
+def build_bundle_assets(
+    snapshot_path: Path,
+    output_dir: Path,
+    *,
+    storage_root: Path,
+    inline_threshold: int,
+    detach_threshold: int,
+    chunk_threshold: int,
+    chunk_size: int,
+    scope: ProjectScopeResult,
+    project_filters: Sequence[str],
+    scrub_summary: ScrubSummary,
+    hosting_hints: Sequence[HostingHint],
+    fts_enabled: bool,
+    export_config: Mapping[str, Any],
+    exporter_version: str = "prototype",
+) -> BundleArtifacts:
+    """Bundle attachments, viewer assets, and scaffolding for the export."""
+
+    attachments_manifest = bundle_attachments(
+        snapshot_path,
+        output_dir,
+        storage_root=storage_root,
+        inline_threshold=inline_threshold,
+        detach_threshold=detach_threshold,
+    )
+    chunk_manifest = maybe_chunk_database(
+        snapshot_path,
+        output_dir,
+        threshold_bytes=chunk_threshold,
+        chunk_bytes=chunk_size,
+    )
+    copy_viewer_assets(output_dir)
+    viewer_data = export_viewer_data(snapshot_path, output_dir, fts_enabled=fts_enabled)
+    write_bundle_scaffolding(
+        output_dir,
+        snapshot=snapshot_path,
+        scope=scope,
+        project_filters=project_filters,
+        scrub_summary=scrub_summary,
+        attachments_manifest=attachments_manifest,
+        chunk_manifest=chunk_manifest,
+        hosting_hints=hosting_hints,
+        viewer_data=viewer_data,
+        exporter_version=exporter_version,
+        export_config=export_config,
+    )
+    return BundleArtifacts(
+        attachments_manifest=attachments_manifest,
+        chunk_manifest=chunk_manifest,
+        viewer_data=viewer_data,
+    )
 
 
 def copy_viewer_assets(output_dir: Path) -> None:
@@ -1440,8 +1510,7 @@ def _verify_viewer_vendor_assets() -> None:
                 data = asset_path.read_bytes()
             except FileNotFoundError as exc:
                 raise ShareExportError(
-                    "Viewer vendor asset "
-                    f"'{filename}' missing. Run scripts/update_sqlite_vendor.py to refresh assets."
+                    f"Viewer vendor asset '{filename}' missing. Run scripts/update_sqlite_vendor.py to refresh assets."
                 ) from exc
             digest = hashlib.sha256(data).hexdigest()
             if digest != expected:
@@ -1540,9 +1609,7 @@ def verify_bundle(bundle_path: Path, *, public_key: Optional[str] = None) -> dic
             continue
         actual = _compute_sri(target)
         if actual != expected:
-            sri_failures.append(
-                f"SRI mismatch for {relative_path}: expected {expected}, got {actual}"
-            )
+            sri_failures.append(f"SRI mismatch for {relative_path}: expected {expected}, got {actual}")
 
     signature_checked = False
     signature_verified = False
@@ -1648,14 +1715,12 @@ def write_bundle_scaffolding(
     chunk_manifest: Optional[dict[str, Any]],
     hosting_hints: Sequence[HostingHint],
     viewer_data: Optional[dict[str, Any]],
+    export_config: Mapping[str, Any],
     exporter_version: str = "prototype",
 ) -> None:
     """Create manifest and helper docs around the freshly minted snapshot."""
 
-    project_entries = [
-        {"slug": record.slug, "human_key": record.human_key}
-        for record in scope.projects
-    ]
+    project_entries = [{"slug": record.slug, "human_key": record.human_key} for record in scope.projects]
 
     viewer_sri = _build_viewer_sri(output_dir)
 
@@ -1704,6 +1769,10 @@ def write_bundle_scaffolding(
         manifest["viewer"] = viewer_meta
     elif viewer_sri:
         manifest["viewer"] = {"sri": viewer_sri}
+    export_config_payload = dict(export_config)
+    export_config_payload.setdefault("projects", list(project_filters))
+    export_config_payload.setdefault("scrub_preset", scrub_summary.preset)
+    manifest["export_config"] = {k: v for k, v in export_config_payload.items() if v is not None}
     _write_json_file(output_dir / "manifest.json", manifest)
 
     readme_content = (
@@ -1813,7 +1882,7 @@ def package_directory_as_zip(source_dir: Path, destination: Path) -> Path:
             info.compress_type = ZIP_DEFLATED
             info.date_time = (1980, 1, 1, 0, 0, 0)
             mode = path.stat().st_mode & 0o777
-            info.external_attr = (mode << 16)
+            info.external_attr = mode << 16
 
             with path.open("rb") as data, archive.open(info, "w") as zip_file:
                 shutil.copyfileobj(data, zip_file, length=1 << 20)
