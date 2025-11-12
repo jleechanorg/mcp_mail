@@ -39,6 +39,20 @@ console = Console()
 # Configuration directory
 CONFIG_DIR = Path.home() / ".mcp-agent-mail"
 CONFIG_FILE = CONFIG_DIR / "wizard-config.json"
+RESUME_STATE_FILE = CONFIG_DIR / "wizard-resume-state.json"
+
+
+def save_resume_state(state: dict[str, Any]) -> None:
+    """Save wizard resume state to allow continuing after interruption."""
+    import json
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    RESUME_STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+
+def clear_resume_state() -> None:
+    """Clear wizard resume state after successful completion."""
+    with contextlib.suppress(FileNotFoundError):
+        RESUME_STATE_FILE.unlink()
 
 
 def find_available_port(start: int = 9000, end: int = 9100) -> int:
@@ -944,6 +958,9 @@ def main() -> None:
     # Export to temp directory first for preview
     with tempfile.TemporaryDirectory(prefix="mailbox-preview-") as temp_dir:
         temp_path = Path(temp_dir)
+
+    # Initialize signing_pub to None in case bundle is reused
+    signing_pub = None
 
     if not reuse_existing:
         if bundle_path.exists():

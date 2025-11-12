@@ -1771,6 +1771,34 @@ window.viewerController = function() {
       return ids;
     },
 
+    isAdministrativeMessage(msg) {
+      // Check if message is administrative (system notifications, errors, etc.)
+      const subject = (msg.subject || '').toLowerCase();
+      const sender = (msg.sender_name || '').toLowerCase();
+      const body = (msg.body_md || '').toLowerCase();
+
+      // System message patterns
+      const adminPatterns = [
+        'system notification',
+        'error notification',
+        'build failed',
+        'deployment failed',
+        'ci/cd',
+        'automated message',
+      ];
+
+      // Check if sender is a system agent
+      const systemAgents = ['system', 'automation', 'bot', 'ci'];
+      const isSystemSender = systemAgents.some(agent => sender.includes(agent));
+
+      // Check subject and body for admin patterns
+      const hasAdminPattern = adminPatterns.some(pattern =>
+        subject.includes(pattern) || body.includes(pattern)
+      );
+
+      return isSystemSender || hasAdminPattern;
+    },
+
     buildRecipientsMap() {
       const map = new Map();
       const stmt = state.db.prepare(`
@@ -1778,7 +1806,7 @@ window.viewerController = function() {
           mr.message_id AS message_id,
           COALESCE(a.name, 'Unknown') AS recipient_name
         FROM message_recipients mr
-        LEFT JOIN agents a ON a.id = mr.to_agent_id
+        LEFT JOIN agents a ON a.id = mr.agent_id
         ORDER BY mr.message_id, recipient_name
       `);
 
