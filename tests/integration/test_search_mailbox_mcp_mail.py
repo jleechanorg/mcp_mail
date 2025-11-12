@@ -17,7 +17,7 @@ from fastmcp import Client
 
 from mcp_agent_mail import config as _config
 from mcp_agent_mail.app import build_mcp_server
-from mcp_agent_mail.db import ensure_schema
+from mcp_agent_mail.db import ensure_schema, reset_database_state
 
 
 def extract_results(result):
@@ -43,8 +43,9 @@ async def mcp_mail_search_env(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_AUTHOR_NAME", "test-agent")
     monkeypatch.setenv("GIT_AUTHOR_EMAIL", "test@example.com")
 
-    # Clear settings cache to pick up new env vars
+    # Clear caches and reset DB state so the new env vars take effect
     _config.clear_settings_cache()
+    reset_database_state()
 
     # Initialize database (creates FTS5 tables)
     await ensure_schema()
@@ -57,6 +58,7 @@ async def mcp_mail_search_env(tmp_path, monkeypatch):
 
     # Cleanup
     _config.clear_settings_cache()
+    reset_database_state()
 
 
 @pytest.mark.asyncio

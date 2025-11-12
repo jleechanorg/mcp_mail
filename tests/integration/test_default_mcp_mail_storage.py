@@ -200,7 +200,10 @@ async def test_parallel_writes_to_mcp_mail_no_race_conditions(mcp_mail_storage):
                         "body_md": f"Testing concurrent write safety - message {i}",
                     },
                 )
-                results.append(result.data["deliveries"][0]["payload"]["id"])
+                deliveries = result.data.get("deliveries", [])
+                if not deliveries:
+                    raise AssertionError(f"Expected deliveries for message {i} from {agent_name}")
+                results.append(deliveries[0]["payload"]["id"])
                 # Small delay to simulate realistic timing
                 await asyncio.sleep(0.01)
             return results
@@ -282,7 +285,10 @@ async def test_sqlite_and_git_storage_consistency(mcp_mail_storage):
                     "body_md": f"Testing SQLite/Git sync - message {i}",
                 },
             )
-            message_ids.append(result.data["deliveries"][0]["payload"]["id"])
+            deliveries = result.data.get("deliveries", [])
+            if not deliveries:
+                raise AssertionError(f"Expected deliveries for message {i}")
+            message_ids.append(deliveries[0]["payload"]["id"])
 
         # Verify messages in SQLite via fetch_inbox
         inbox = await client.call_tool(
@@ -294,7 +300,10 @@ async def test_sqlite_and_git_storage_consistency(mcp_mail_storage):
             },
         )
 
-        sqlite_message_ids = {msg["id"] for msg in inbox.structured_content["result"]}
+        result_data = inbox.structured_content.get("result")
+        if result_data is None:
+            raise AssertionError(f"Expected 'result' key in structured_content, got: {inbox.structured_content}")
+        sqlite_message_ids = {msg["id"] for msg in result_data}
         assert len(sqlite_message_ids) == 10, "SQLite should have all 10 messages"
 
     # Verify messages in Git archive
