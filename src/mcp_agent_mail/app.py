@@ -1969,13 +1969,15 @@ async def _find_mentions_in_global_inbox(
                 text("fts_messages MATCH :agent_name"),
             )
             .order_by(desc(Message.created_ts))
-            .limit(limit)
         )
 
         if since_ts:
             since_dt = _parse_iso(since_ts)
             if since_dt:
                 stmt = stmt.where(Message.created_ts > since_dt)
+
+        # Apply limit after all filters for clarity and maintainability
+        stmt = stmt.limit(limit)
 
         # Execute with agent name as parameter (escaped for FTS5)
         # FTS5 tokenizes on word boundaries, so this effectively does word matching
@@ -2018,7 +2020,6 @@ async def _list_inbox_basic(
                 MessageRecipient.agent_id == agent.id,
             )
             .order_by(desc(Message.created_ts))
-            .limit(limit)
         )
         if urgent_only:
             stmt = stmt.where(cast(Any, Message.importance).in_(["high", "urgent"]))
@@ -2026,6 +2027,8 @@ async def _list_inbox_basic(
             since_dt = _parse_iso(since_ts)
             if since_dt:
                 stmt = stmt.where(Message.created_ts > since_dt)
+        # Apply limit after all filters for clarity and maintainability
+        stmt = stmt.limit(limit)
         result = await session.execute(stmt)
         rows = result.all()
     messages: list[dict[str, Any]] = []
@@ -2050,11 +2053,13 @@ async def _list_outbox(
     await ensure_schema()
     messages: list[dict[str, Any]] = []
     async with get_session() as session:
-        stmt = select(Message).where(Message.sender_id == agent.id).order_by(desc(Message.created_ts)).limit(limit)
+        stmt = select(Message).where(Message.sender_id == agent.id).order_by(desc(Message.created_ts))
         if since_ts:
             since_dt = _parse_iso(since_ts)
             if since_dt:
                 stmt = stmt.where(Message.created_ts > since_dt)
+        # Apply limit after all filters for clarity and maintainability
+        stmt = stmt.limit(limit)
         result = await session.execute(stmt)
         message_rows = result.scalars().all()
 
