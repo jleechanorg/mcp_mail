@@ -162,7 +162,7 @@ async def test_fetch_inbox_since_ts_filter(mcp_mail_storage):
         messages_with_filter = list(result_with_filter.data)
 
         # Debug: Check what we actually got
-        print(f"\n=== Debug Info ===")
+        print("\n=== Debug Info ===")
         print(f"Checkpoint: {checkpoint_ts}")
         print(f"Msg1 timestamp: {msg1_ts}")
         print(f"Msg2 timestamp: {msg2_ts}")
