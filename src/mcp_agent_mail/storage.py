@@ -42,6 +42,7 @@ class ProjectArchive:
     def attachments_dir(self) -> Path:
         return self.root / "attachments"
 
+
 _PROCESS_LOCKS: dict[tuple[int, str], asyncio.Lock] = {}
 _PROCESS_LOCK_OWNERS: dict[tuple[int, str], int] = {}
 
@@ -53,8 +54,8 @@ class AsyncFileLock:
         self,
         path: Path,
         *,
-        timeout_seconds: float = 60.0,
-        stale_timeout_seconds: float = 180.0,
+        timeout_seconds: float = 120.0,  # Increased from 60 to 120 seconds
+        stale_timeout_seconds: float = 300.0,  # Increased from 180 to 300 seconds
     ) -> None:
         self._path = Path(path)
         self._lock = SoftFileLock(str(self._path))
@@ -99,8 +100,7 @@ class AsyncFileLock:
                     if cleaned:
                         continue
                     raise TimeoutError(
-                        f"Timed out acquiring lock {self._path} after {self._timeout:.2f}s "
-                        "and no stale owner detected."
+                        f"Timed out acquiring lock {self._path} after {self._timeout:.2f}s and no stale owner detected."
                     ) from None
         except Exception:
             if self._loop_key is not None:
@@ -108,11 +108,7 @@ class AsyncFileLock:
             if self._process_lock_held and self._process_lock:
                 self._process_lock.release()
                 self._process_lock_held = False
-            if (
-                self._loop_key is not None
-                and self._process_lock
-                and not self._process_lock.locked()
-            ):
+            if self._loop_key is not None and self._process_lock and not self._process_lock.locked():
                 _PROCESS_LOCKS.pop(self._loop_key, None)
             self._process_lock = None
             raise
@@ -173,11 +169,7 @@ class AsyncFileLock:
         if self._process_lock_held and self._process_lock:
             self._process_lock.release()
             self._process_lock_held = False
-        if (
-            self._loop_key is not None
-            and self._process_lock
-            and not self._process_lock.locked()
-        ):
+        if self._loop_key is not None and self._process_lock and not self._process_lock.locked():
             _PROCESS_LOCKS.pop(self._loop_key, None)
         self._process_lock = None
         self._loop_key = None
@@ -199,7 +191,7 @@ class AsyncFileLock:
 
 
 @asynccontextmanager
-async def archive_write_lock(archive: ProjectArchive, *, timeout_seconds: float = 60.0):
+async def archive_write_lock(archive: ProjectArchive, *, timeout_seconds: float = 120.0):
     """Context manager for safely mutating archive surfaces."""
 
     lock = AsyncFileLock(archive.lock_path, timeout_seconds=timeout_seconds)
@@ -273,7 +265,12 @@ def collect_lock_status(settings: Settings) -> dict[str, Any]:
             stale_threshold = AsyncFileLock(lock_path)._stale_timeout
             info["stale_timeout_seconds"] = stale_threshold
             age_val = info.get("age_seconds")
-            is_stale = bool(metadata) and not info["owner_alive"] and isinstance(age_val, (int, float)) and age_val >= stale_threshold
+            is_stale = (
+                bool(metadata)
+                and not info["owner_alive"]
+                and isinstance(age_val, (int, float))
+                and age_val >= stale_threshold
+            )
             info["stale_suspected"] = is_stale
 
             summary["total"] += 1
@@ -320,9 +317,11 @@ async def _ensure_repo(root: Path, settings: Settings) -> Repo:
     repo = await _to_thread(Repo.init, str(root))
     # Ensure deterministic, non-interactive commits (disable GPG signing)
     try:
+
         def _configure_repo() -> None:
             with repo.config_writer() as cw:
                 cw.set_value("commit", "gpgsign", "false")
+
         await _to_thread(_configure_repo)
     except Exception:
         pass
@@ -337,13 +336,7 @@ async def write_agent_profile(archive: ProjectArchive, agent: dict[str, object])
     agent_name = agent["name"].__str__()
     # Sanitize agent_name to prevent path traversal
     # Check for path separators before normalization to give clear error messages
-    if (
-        not agent_name
-        or "/" in agent_name
-        or "\\" in agent_name
-        or agent_name.startswith(".")
-        or agent_name == ".."
-    ):
+    if not agent_name or "/" in agent_name or "\\" in agent_name or agent_name.startswith(".") or agent_name == "..":
         raise ValueError(f"Invalid agent name: {agent_name!r}")
 
     # Additional normalization for platform consistency
@@ -364,17 +357,13 @@ async def write_agent_profile(archive: ProjectArchive, agent: dict[str, object])
     await _commit(archive.repo, archive.settings, f"agent: profile {agent_name}", [rel])
 
 
-async def write_agent_deletion_marker(archive: ProjectArchive, agent_name: str, deletion_stats: dict[str, object]) -> None:
+async def write_agent_deletion_marker(
+    archive: ProjectArchive, agent_name: str, deletion_stats: dict[str, object]
+) -> None:
     """Write a deletion marker to the Git archive for an agent."""
     # Sanitize agent_name to prevent path traversal
     # Check for path separators before normalization to give clear error messages
-    if (
-        not agent_name
-        or "/" in agent_name
-        or "\\" in agent_name
-        or agent_name.startswith(".")
-        or agent_name == ".."
-    ):
+    if not agent_name or "/" in agent_name or "\\" in agent_name or agent_name.startswith(".") or agent_name == "..":
         raise ValueError(f"Invalid agent name: {agent_name!r}")
 
     # Additional normalization for platform consistency
@@ -453,11 +442,7 @@ async def write_message_bundle(
     subject_value = str(message.get("subject", "")).strip() or "message"
     subject_slug = re.sub(r"[^a-zA-Z0-9._-]+", "-", subject_value).strip("-_").lower()[:80] or "message"
     id_suffix = str(message.get("id", ""))
-    filename = (
-        f"{created_iso}__{subject_slug}__{id_suffix}.md"
-        if id_suffix
-        else f"{created_iso}__{subject_slug}.md"
-    )
+    filename = f"{created_iso}__{subject_slug}__{id_suffix}.md" if id_suffix else f"{created_iso}__{subject_slug}.md"
     canonical_path = canonical_dir / filename
     await _write_text(canonical_path, content)
     rel_paths.append(canonical_path.relative_to(archive.repo_root).as_posix())
@@ -535,9 +520,7 @@ async def _update_thread_digest(
         recipients_list = [to_value]
     else:
         recipients_list = []
-    header = (
-        f"## {meta.get('created', '')} — {meta.get('from', '')} → {', '.join(recipients_list)}\n\n"
-    )
+    header = f"## {meta.get('created', '')} — {meta.get('from', '')} → {', '.join(recipients_list)}\n\n"
     link_line = f"[View canonical]({canonical_rel_path})\n\n"
     subject = str(meta.get("subject", "")).strip()
     subject_line = f"### {subject}\n\n" if subject else ""
@@ -631,10 +614,12 @@ async def _convert_markdown_images(
                     mt = header[5:].split(";", 1)[0]
                     if mt:
                         media_type = mt
-                meta.append({
-                    "type": "inline",
-                    "media_type": media_type,
-                })
+                meta.append(
+                    {
+                        "type": "inline",
+                        "media_type": media_type,
+                    }
+                )
             except Exception:
                 meta.append({"type": "inline"})
             result_parts.append(raw_path)
@@ -665,7 +650,9 @@ async def _convert_markdown_images(
     return "".join(result_parts)
 
 
-async def _store_image(archive: ProjectArchive, path: Path, *, embed_policy: str = "auto") -> tuple[dict[str, object], str | None]:
+async def _store_image(
+    archive: ProjectArchive, path: Path, *, embed_policy: str = "auto"
+) -> tuple[dict[str, object], str | None]:
     data = await _to_thread(path.read_bytes)
     pil = await _to_thread(Image.open, path)
     img = pil.convert("RGBA" if pil.mode in ("LA", "RGBA") else "RGB")
@@ -822,6 +809,7 @@ async def _commit(repo: Repo, settings: Settings, message: str, rel_paths: Seque
             if trailers:
                 final_message = message + "\n\n" + "\n".join(trailers) + "\n"
             repo.index.commit(final_message, author=actor, committer=actor)
+
     # Serialize commits across all projects sharing the same Git repo to avoid index races
     commit_lock_path = Path(repo.working_tree_dir).resolve() / ".commit.lock"
     async with AsyncFileLock(commit_lock_path):
@@ -893,6 +881,7 @@ async def get_recent_commits(
         List of commit dicts with keys: sha, short_sha, author, email, date,
         relative_date, subject, body, files_changed, insertions, deletions
     """
+
     def _get_commits() -> list[dict[str, Any]]:
         commits = []
         path_spec = None
@@ -932,28 +921,28 @@ async def get_recent_commits(
             else:
                 relative_date = "just now"
 
-            commits.append({
-                "sha": commit.hexsha,
-                "short_sha": commit.hexsha[:8],
-                "author": commit.author.name,
-                "email": commit.author.email,
-                "date": commit_time.isoformat(),
-                "relative_date": relative_date,
-                "subject": commit.message.split("\n")[0],
-                "body": commit.message,
-                "files_changed": files_changed,
-                "insertions": insertions,
-                "deletions": deletions,
-            })
+            commits.append(
+                {
+                    "sha": commit.hexsha,
+                    "short_sha": commit.hexsha[:8],
+                    "author": commit.author.name,
+                    "email": commit.author.email,
+                    "date": commit_time.isoformat(),
+                    "relative_date": relative_date,
+                    "subject": commit.message.split("\n")[0],
+                    "body": commit.message,
+                    "files_changed": files_changed,
+                    "insertions": insertions,
+                    "deletions": deletions,
+                }
+            )
 
         return commits
 
     return await _to_thread(_get_commits)
 
 
-async def get_commit_detail(
-    repo: Repo, sha: str, max_diff_size: int = 5 * 1024 * 1024
-) -> dict[str, Any]:
+async def get_commit_detail(repo: Repo, sha: str, max_diff_size: int = 5 * 1024 * 1024) -> dict[str, Any]:
     """
     Get detailed information about a specific commit including full diff.
 
@@ -965,6 +954,7 @@ async def get_commit_detail(
     Returns:
         Dict with commit metadata and diff information
     """
+
     def _get_detail() -> dict[str, Any]:
         # Validate SHA format (basic check)
         if not sha or not (7 <= len(sha) <= 40) or not all(c in "0123456789abcdef" for c in sha.lower()):
@@ -999,12 +989,14 @@ async def get_commit_detail(
             else:
                 change_type = "modified"
 
-            changed_files.append({
-                "path": b_path if b_path != "/dev/null" else a_path,
-                "change_type": change_type,
-                "a_path": a_path,
-                "b_path": b_path,
-            })
+            changed_files.append(
+                {
+                    "path": b_path if b_path != "/dev/null" else a_path,
+                    "change_type": change_type,
+                    "a_path": a_path,
+                    "b_path": b_path,
+                }
+            )
 
             # Get diff text with size limit
             if diff.diff:
@@ -1059,10 +1051,10 @@ async def get_commit_detail(
                         trailer_lines = []
                     else:
                         # Valid trailers with blank separator
-                        trailer_lines = rest_lines[trailer_start_idx:end_idx + 1]
+                        trailer_lines = rest_lines[trailer_start_idx : end_idx + 1]
                 else:
                     # Trailers start at beginning (no body) - this is valid
-                    trailer_lines = rest_lines[trailer_start_idx:end_idx + 1]
+                    trailer_lines = rest_lines[trailer_start_idx : end_idx + 1]
             else:
                 trailer_lines = []
 
@@ -1113,6 +1105,7 @@ async def get_message_commit_sha(archive: ProjectArchive, message_id: int) -> st
     Returns:
         Commit SHA string or None if not found
     """
+
     def _find_commit() -> str | None:
         # Find message file in archive
         messages_dir = archive.root / "messages"
@@ -1168,6 +1161,7 @@ async def get_archive_tree(
     Returns:
         List of tree entries with keys: name, path, type (file/dir), size, mode
     """
+
     def _get_tree() -> list[dict[str, Any]]:
         # Sanitize path to prevent directory traversal
         if path:
@@ -1211,13 +1205,15 @@ async def get_archive_tree(
             entry_type = "dir" if item.type == "tree" else "file"
             size = item.size if hasattr(item, "size") else 0
 
-            entries.append({
-                "name": item.name,
-                "path": f"{path}/{item.name}" if path else item.name,
-                "type": entry_type,
-                "size": size,
-                "mode": item.mode,
-            })
+            entries.append(
+                {
+                    "name": item.name,
+                    "path": f"{path}/{item.name}" if path else item.name,
+                    "type": entry_type,
+                    "size": size,
+                    "mode": item.mode,
+                }
+            )
 
         # Sort: directories first, then files, both alphabetically
         entries.sort(key=lambda x: (x["type"] != "dir", x["name"].lower()))
@@ -1245,6 +1241,7 @@ async def get_file_content(
     Returns:
         File content as string, or None if not found
     """
+
     def _get_content() -> str | None:
         # Sanitize path to prevent directory traversal
         if path:
@@ -1304,6 +1301,7 @@ async def get_agent_communication_graph(
     Returns:
         Dict with keys: nodes (list of agent dicts), edges (list of connection dicts)
     """
+
     def _analyze_graph() -> dict[str, Any]:
         path_spec = f"projects/{project_slug}/messages"
 
@@ -1321,7 +1319,7 @@ async def get_agent_communication_graph(
 
             # Extract sender and recipients
             try:
-                rest = subject[len("mail: "):]
+                rest = subject[len("mail: ") :]
                 sender_part, _ = rest.split(" | ", 1) if " | " in rest else (rest, "")
 
                 if " -> " not in sender_part:
@@ -1358,22 +1356,26 @@ async def get_agent_communication_graph(
         nodes = []
         for agent_name, stats in agent_stats.items():
             total = stats["sent"] + stats["received"]
-            nodes.append({
-                "id": agent_name,
-                "label": agent_name,
-                "sent": stats["sent"],
-                "received": stats["received"],
-                "total": total,
-            })
+            nodes.append(
+                {
+                    "id": agent_name,
+                    "label": agent_name,
+                    "sent": stats["sent"],
+                    "received": stats["received"],
+                    "total": total,
+                }
+            )
 
         # Build edges list
         edges = []
         for (sender, recipient), count in connections.items():
-            edges.append({
-                "from": sender,
-                "to": recipient,
-                "count": count,
-            })
+            edges.append(
+                {
+                    "from": sender,
+                    "to": recipient,
+                    "count": count,
+                }
+            )
 
         return {
             "nodes": nodes,
@@ -1399,6 +1401,7 @@ async def get_timeline_commits(
     Returns:
         List of commit dicts with timeline-specific metadata
     """
+
     def _get_timeline() -> list[dict[str, Any]]:
         path_spec = f"projects/{project_slug}"
 
@@ -1416,7 +1419,7 @@ async def get_timeline_commits(
                 commit_type = "message"
                 # Parse sender and recipients
                 try:
-                    rest = subject[len("mail: "):]
+                    rest = subject[len("mail: ") :]
                     sender_part, _ = rest.split(" | ", 1) if " | " in rest else (rest, "")
                     if " -> " in sender_part:
                         sender, recipients_str = sender_part.split(" -> ", 1)
@@ -1429,17 +1432,19 @@ async def get_timeline_commits(
             elif subject.startswith("chore: "):
                 commit_type = "chore"
 
-            timeline.append({
-                "sha": commit.hexsha,
-                "short_sha": commit.hexsha[:8],
-                "date": commit_time.isoformat(),
-                "timestamp": commit.authored_date,
-                "subject": subject,
-                "type": commit_type,
-                "sender": sender,
-                "recipients": recipients,
-                "author": commit.author.name,
-            })
+            timeline.append(
+                {
+                    "sha": commit.hexsha,
+                    "short_sha": commit.hexsha[:8],
+                    "date": commit_time.isoformat(),
+                    "timestamp": commit.authored_date,
+                    "subject": subject,
+                    "type": commit_type,
+                    "sender": sender,
+                    "recipients": recipients,
+                    "author": commit.author.name,
+                }
+            )
 
         # Sort by timestamp (oldest first for timeline)
         timeline.sort(key=lambda x: x["timestamp"])
@@ -1481,7 +1486,7 @@ async def get_historical_inbox_snapshot(
     def _get_snapshot() -> dict[str, Any]:
         try:
             # Parse timestamp - handle both with and without timezone
-            timestamp_clean = timestamp.replace('Z', '+00:00')
+            timestamp_clean = timestamp.replace("Z", "+00:00")
             target_time = datetime.fromisoformat(timestamp_clean)
 
             # If naive datetime (no timezone), assume UTC
@@ -1496,7 +1501,7 @@ async def get_historical_inbox_snapshot(
                 "snapshot_time": None,
                 "commit_sha": None,
                 "requested_time": timestamp,
-                "error": f"Invalid timestamp format: {e}"
+                "error": f"Invalid timestamp format: {e}",
             }
 
         # Find commit closest to (but not after) target timestamp
@@ -1513,7 +1518,7 @@ async def get_historical_inbox_snapshot(
                 "snapshot_time": None,
                 "commit_sha": None,
                 "requested_time": timestamp,
-                "note": "No commits found before this timestamp"
+                "note": "No commits found before this timestamp",
             }
 
         # Get agent inbox directory at that commit
@@ -1556,32 +1561,32 @@ async def get_historical_inbox_snapshot(
                             importance = "normal"
 
                             try:
-                                blob_content = item.data_stream.read().decode('utf-8', errors='ignore')
+                                blob_content = item.data_stream.read().decode("utf-8", errors="ignore")
 
                                 # Parse JSON frontmatter (format: ---json\n{...}\n---)
-                                if blob_content.startswith('---json\n') or blob_content.startswith('---json\r\n'):
+                                if blob_content.startswith("---json\n") or blob_content.startswith("---json\r\n"):
                                     # Find the closing --- delimiter
-                                    end_marker = blob_content.find('\n---\n', 8)
+                                    end_marker = blob_content.find("\n---\n", 8)
                                     if end_marker == -1:
-                                        end_marker = blob_content.find('\r\n---\r\n', 8)
+                                        end_marker = blob_content.find("\r\n---\r\n", 8)
 
                                     if end_marker > 0:
                                         # Extract JSON between markers
                                         # '---json\n' is 8 chars, '---json\r\n' is 9 chars
-                                        json_start = 8 if blob_content.startswith('---json\n') else 9
+                                        json_start = 8 if blob_content.startswith("---json\n") else 9
                                         json_str = blob_content[json_start:end_marker]
 
                                         try:
                                             metadata = json.loads(json_str)
                                             # Extract sender from 'from' field
-                                            if 'from' in metadata:
-                                                from_agent = str(metadata['from'])
+                                            if "from" in metadata:
+                                                from_agent = str(metadata["from"])
                                             # Extract importance
-                                            if 'importance' in metadata:
-                                                importance = str(metadata['importance'])
+                                            if "importance" in metadata:
+                                                importance = str(metadata["importance"])
                                             # Extract actual subject
-                                            if 'subject' in metadata:
-                                                actual_subject = str(metadata['subject']).strip()
+                                            if "subject" in metadata:
+                                                actual_subject = str(metadata["subject"]).strip()
                                                 if actual_subject:
                                                     subject = actual_subject
                                         except (json.JSONDecodeError, KeyError, TypeError):
@@ -1590,13 +1595,15 @@ async def get_historical_inbox_snapshot(
                             except Exception:
                                 pass  # Use defaults if parsing fails
 
-                            messages.append({
-                                "id": msg_id,
-                                "subject": subject,
-                                "date": date_str,
-                                "from": from_agent,
-                                "importance": importance,
-                            })
+                            messages.append(
+                                {
+                                    "id": msg_id,
+                                    "subject": subject,
+                                    "date": date_str,
+                                    "from": from_agent,
+                                    "importance": importance,
+                                }
+                            )
 
                             if len(messages) >= limit:
                                 return  # Stop when we hit the limit

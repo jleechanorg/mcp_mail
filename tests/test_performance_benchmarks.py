@@ -97,7 +97,9 @@ def _create_test_database(tmp_path: Path, name: str, num_messages: int, body_siz
         conn.execute("INSERT INTO projects (id, slug, human_key) VALUES (1, 'perf-test', 'Performance Test')")
 
         # Insert test agents
-        conn.execute("INSERT INTO agents (id, project_id, name, program, model) VALUES (1, 1, 'TestAgent', 'test', 'test-model')")
+        conn.execute(
+            "INSERT INTO agents (id, project_id, name, program, model) VALUES (1, 1, 'TestAgent', 'test', 'test-model')"
+        )
 
         # Insert messages with realistic size
         # Use a repeating pattern to ensure compressibility
@@ -276,8 +278,7 @@ def test_database_compressibility(small_db: Path, tmp_path: Path) -> None:
     print(f"  Compression ratio: {compression_ratio:.2%}")
 
     # Expect at least 30% compression for repetitive test data
-    assert compression_ratio < 0.7, \
-        f"Database should compress to < 70% of original size, got {compression_ratio:.2%}"
+    assert compression_ratio < 0.7, f"Database should compress to < 70% of original size, got {compression_ratio:.2%}"
 
 
 @pytest.mark.benchmark
@@ -327,8 +328,9 @@ def test_chunk_size_validation(large_db: Path, tmp_path: Path) -> None:
                     print(f"    {chunk_file.name}: {chunk_size:.2f} MB")
 
                     # Chunks should not wildly exceed requested size
-                    assert chunk_size <= chunk_size_mb * 2, \
+                    assert chunk_size <= chunk_size_mb * 2, (
                         f"Chunk {chunk_file.name} too large ({chunk_size:.2f} > {chunk_size_mb * 2})"
+                    )
     else:
         print("  Database not chunked (below threshold)")
 
@@ -519,7 +521,7 @@ def test_export_scales_linearly(tmp_path: Path, num_messages: int) -> None:
     snapshot_time = time.time() - start_time
 
     # Calculate throughput
-    throughput = num_messages / snapshot_time if snapshot_time > 0 else float('inf')
+    throughput = num_messages / snapshot_time if snapshot_time > 0 else float("inf")
 
     db_size_mb = _get_file_size_mb(snapshot_path)
 

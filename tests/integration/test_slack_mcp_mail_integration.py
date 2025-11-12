@@ -212,7 +212,7 @@ async def test_slack_message_creates_mcp_mail_entry(mcp_mail_repo):
     commit_messages(mcp_mail_repo, "Slack message: deployment help")
 
     # Verify git commit
-    result = subprocess.run(  # noqa: ASYNC221
+    result = subprocess.run(
         ["git", "log", "--oneline", "-1"],
         cwd=mcp_mail_repo,
         capture_output=True,
@@ -445,7 +445,7 @@ async def test_slack_bridge_agent_messages_history(mcp_mail_repo):
     commit_messages(mcp_mail_repo, "Slack messages batch 2")
 
     # Verify git history
-    result = subprocess.run(  # noqa: ASYNC221
+    result = subprocess.run(
         ["git", "log", "--oneline"],
         cwd=mcp_mail_repo,
         capture_output=True,
@@ -536,9 +536,7 @@ async def test_update_slack_message_metadata(mcp_mail_repo):
     msg = messages[0]
 
     # Update metadata to include reaction
-    msg["metadata"]["reactions"] = [
-        {"name": "thumbsup", "user": "U2222222222", "ts": "1234567890.234567"}
-    ]
+    msg["metadata"]["reactions"] = [{"name": "thumbsup", "user": "U2222222222", "ts": "1234567890.234567"}]
 
     # Rewrite messages (simulating update)
     messages_file = mcp_mail_repo / ".mcp_mail" / "messages.jsonl"
@@ -572,9 +570,7 @@ async def test_delete_slack_message_from_mcp_mail(mcp_mail_repo):
 
     # Delete specific message (by filtering)
     target_ts = "1234567892.000000"
-    filtered_messages = [
-        m for m in messages if m["metadata"]["slack_ts"] != target_ts
-    ]
+    filtered_messages = [m for m in messages if m["metadata"]["slack_ts"] != target_ts]
     assert len(filtered_messages) == 4
 
     # Rewrite messages file without deleted message
@@ -696,8 +692,6 @@ async def test_query_mcp_mail_for_slack_messages(mcp_mail_repo):
     assert all(m["from"]["agent"] == "SlackBridge" for m in slack_messages)
 
     # Filter non-Slack messages
-    regular_messages = [
-        m for m in messages if m.get("metadata", {}).get("source") != "slack"
-    ]
+    regular_messages = [m for m in messages if m.get("metadata", {}).get("source") != "slack"]
     assert len(regular_messages) == 1
     assert regular_messages[0]["from"]["agent"] == "RegularAgent"

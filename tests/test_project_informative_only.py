@@ -49,34 +49,29 @@ async def test_unified_inbox_does_not_filter_by_project(isolated_env):
 
         # 1. Should NOT have a project filter dropdown
         assert 'x-model="filters.project"' not in html_content, (
-            "Unified inbox should not have project filter dropdown - "
-            "projects should be informational only"
+            "Unified inbox should not have project filter dropdown - projects should be informational only"
         )
 
         # 2. Should NOT have "All Projects" option in a filter
         assert '<option value="">All Projects</option>' not in html_content, (
-            "Unified inbox should not have 'All Projects' filter option - "
-            "projects should be informational only"
+            "Unified inbox should not have 'All Projects' filter option - projects should be informational only"
         )
 
         # 3. Should NOT have project filtering logic in JavaScript
-        assert 'this.filters.project' not in html_content, (
-            "Unified inbox should not filter by project in JavaScript - "
-            "projects should be informational only"
+        assert "this.filters.project" not in html_content, (
+            "Unified inbox should not filter by project in JavaScript - projects should be informational only"
         )
 
         # 4. Should NOT compute uniqueProjects for filtering
-        assert 'get uniqueProjects()' not in html_content, (
-            "Unified inbox should not compute unique projects for filtering - "
-            "projects should be informational only"
+        assert "get uniqueProjects()" not in html_content, (
+            "Unified inbox should not compute unique projects for filtering - projects should be informational only"
         )
 
         # 5. Should NOT have label "Project" for a filter
         # (This is tricky - we want to allow displaying project metadata,
         #  but not as a filter label)
         project_filter_label_pattern = (
-            '<label class="block text-xs font-semibold text-slate-700 '
-            'dark:text-slate-300 mb-1">Project</label>'
+            '<label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Project</label>'
         )
         assert project_filter_label_pattern not in html_content, (
             "Unified inbox should not have 'Project' as a filter label"
@@ -86,7 +81,7 @@ async def test_unified_inbox_does_not_filter_by_project(isolated_env):
 
         # 6. SHOULD still display project metadata (like in message cards)
         # Project metadata can appear in message display
-        assert 'project_name' in html_content or 'project_slug' in html_content, (
+        assert "project_name" in html_content or "project_slug" in html_content, (
             "Projects should still be visible as informational metadata on messages"
         )
 
@@ -147,6 +142,4 @@ async def test_global_message_lookup_function_exists(isolated_env):
 
     # Verify the docstring mentions global access
     assert _get_message_by_id_global.__doc__ is not None, "Function should have documentation"
-    assert "global" in _get_message_by_id_global.__doc__.lower(), (
-        "Docstring should mention global access"
-    )
+    assert "global" in _get_message_by_id_global.__doc__.lower(), "Docstring should mention global access"

@@ -15,6 +15,7 @@ import time
 import warnings
 import webbrowser
 from contextlib import suppress
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -40,25 +41,17 @@ from .share import (
     INLINE_ATTACHMENT_THRESHOLD,
     SCRUB_PRESETS,
     ShareExportError,
-    apply_project_scope,
-    build_materialized_views,
-    build_search_indexes,
-    bundle_attachments,
-    copy_viewer_assets,
-    create_sqlite_snapshot,
+    build_bundle_assets,
+    create_snapshot_context,
     detect_hosting_hints,
     encrypt_bundle,
-    export_viewer_data,
-    finalize_snapshot_for_export,
-    maybe_chunk_database,
     package_directory_as_zip,
     prepare_output_directory,
     resolve_sqlite_database_path,
-    scrub_snapshot,
     sign_manifest,
     summarize_snapshot,
-    write_bundle_scaffolding,
 )
+from .storage import ensure_archive
 from .utils import slugify
 
 # Suppress annoying bleach CSS sanitizer warning from dependencies
@@ -79,6 +72,10 @@ app.add_typer(file_reservations_app, name="file_reservations")
 app.add_typer(acks_app, name="acks")
 app.add_typer(share_app, name="share")
 app.add_typer(config_app, name="config")
+mail_app = typer.Typer(help="Mail diagnostics and routing status")
+app.add_typer(mail_app, name="mail")
+projects_app = typer.Typer(help="Project maintenance utilities")
+app.add_typer(projects_app, name="projects")
 
 
 async def _get_project_record(identifier: str) -> Project:
@@ -98,9 +95,7 @@ async def _get_agent_record(project: Project, agent_name: str) -> Agent:
         raise ValueError("Project must have an id before querying agents")
     await ensure_schema()
     async with get_session() as session:
-        result = await session.execute(
-            select(Agent).where(Agent.project_id == project.id, Agent.name == agent_name)
-        )
+        result = await session.execute(select(Agent).where(Agent.project_id == project.id, Agent.name == agent_name))
         agent = result.scalars().first()
         if not agent:
             raise ValueError(f"Agent '{agent_name}' not registered for project '{project.human_key}'")
@@ -127,6 +122,7 @@ def serve_http(
 
     # Display awesome startup banner with database stats
     from . import rich_logger
+
     rich_logger.display_startup_banner(settings, resolved_host, resolved_port, resolved_path)
 
     server = build_mcp_server()
@@ -134,6 +130,7 @@ def serve_http(
     # Disable WebSockets: HTTP-only MCP transport. Stay compatible with tests that
     # monkeypatch uvicorn.run without the 'ws' parameter.
     import inspect as _inspect
+
     _sig = _inspect.signature(uvicorn.run)
     _kwargs: dict[str, Any] = {"host": resolved_host, "port": resolved_port, "log_level": "info"}
     if "ws" in _sig.parameters:
@@ -175,7 +172,9 @@ def share_export(
             help="Launch an interactive wizard (future enhancement; currently prints guidance).",
         ),
     ] = False,
-    projects: Annotated[list[str] | None, typer.Option("--project", "-p", help="Limit export to specific project slugs or human keys.")] = None,
+    projects: Annotated[
+        list[str] | None, typer.Option("--project", "-p", help="Limit export to specific project slugs or human keys.")
+    ] = None,
     inline_threshold: Annotated[
         int,
         typer.Option(
@@ -237,8 +236,12 @@ def share_export(
             show_default=True,
         ),
     ] = True,
-    signing_key: Annotated[Optional[Path], typer.Option("--signing-key", help="Path to Ed25519 signing key (32-byte seed).")]=None,
-    signing_public_out: Annotated[Optional[Path], typer.Option("--signing-public-out", help="Write public key to this file after signing.")]=None,
+    signing_key: Annotated[
+        Optional[Path], typer.Option("--signing-key", help="Path to Ed25519 signing key (32-byte seed).")
+    ] = None,
+    signing_public_out: Annotated[
+        Optional[Path], typer.Option("--signing-public-out", help="Write public key to this file after signing.")
+    ] = None,
     age_recipients: Annotated[
         Optional[list[str]],
         typer.Option(
@@ -254,10 +257,7 @@ def share_export(
         projects = []
     scrub_preset = (scrub_preset or "standard").strip().lower()
     if scrub_preset not in SCRUB_PRESETS:
-        console.print(
-            "[red]Invalid scrub preset:[/] "
-            f"{scrub_preset}. Choose one of: {', '.join(SCRUB_PRESETS)}."
-        )
+        console.print(f"[red]Invalid scrub preset:[/] {scrub_preset}. Choose one of: {', '.join(SCRUB_PRESETS)}.")
         raise typer.Exit(code=1)
     raw_output = _resolve_path(output)
     temp_dir: Optional[tempfile.TemporaryDirectory[str]] = None
@@ -305,18 +305,8 @@ def share_export(
     snapshot_path = output_path / "mailbox.sqlite3"
     console.print(f"[cyan]Creating snapshot:[/] {snapshot_path}")
 
-    try:
-        create_sqlite_snapshot(database_path, snapshot_path)
-    except ShareExportError as exc:
-        console.print(f"[red]Snapshot failed:[/] {exc}")
-        if temp_dir is not None:
-            temp_dir.cleanup()
-        raise typer.Exit(code=1) from exc
-
     if detach_threshold <= inline_threshold:
-        console.print(
-            "[yellow]Adjusting detach threshold to exceed inline threshold to avoid conflicts.[/]"
-        )
+        console.print("[yellow]Adjusting detach threshold to exceed inline threshold to avoid conflicts.[/]")
         detach_threshold = inline_threshold + max(1024, inline_threshold // 2 or 1)
 
     hosting_hints = detect_hosting_hints(output_path)
@@ -332,30 +322,25 @@ def share_export(
 
     console.print("[cyan]Applying project filters and scrubbing data...[/]")
     try:
-        scope = apply_project_scope(snapshot_path, projects)
+        snapshot_ctx = create_snapshot_context(
+            source_database=database_path,
+            snapshot_path=snapshot_path,
+            project_filters=projects,
+            scrub_preset=scrub_preset,
+        )
     except ShareExportError as exc:
-        console.print(f"[red]Project filtering failed:[/] {exc}")
+        console.print(f"[red]Snapshot preparation failed:[/] {exc}")
         if temp_dir is not None:
             temp_dir.cleanup()
         raise typer.Exit(code=1) from exc
 
-    try:
-        scrub_summary = scrub_snapshot(snapshot_path, preset=scrub_preset)
-    except ShareExportError as exc:
-        console.print(f"[red]Snapshot scrubbing failed:[/] {exc}")
-        if temp_dir is not None:
-            temp_dir.cleanup()
-        raise typer.Exit(code=1) from exc
-
-    fts_enabled = build_search_indexes(snapshot_path)
+    scope = snapshot_ctx.scope
+    scrub_summary = snapshot_ctx.scrub_summary
+    fts_enabled = snapshot_ctx.fts_enabled
     if not fts_enabled:
         console.print("[yellow]FTS5 not available; viewer will fall back to LIKE search.[/]")
-
-    console.print("[cyan]Building materialized views for httpvfs performance...[/]")
-    build_materialized_views(snapshot_path)
-
-    console.print("[cyan]Finalizing snapshot (SQL hygiene optimizations)...[/]")
-    finalize_snapshot_for_export(snapshot_path)
+    else:
+        console.print("[green]✓ Built FTS5 index for snapshot search.[/]")
 
     settings = get_settings()
     storage_root = Path(settings.storage.root).expanduser()
@@ -414,52 +399,44 @@ def share_export(
             temp_dir = None
         return
 
+    export_config: dict[str, Any] = {
+        "inline_threshold": inline_threshold,
+        "detach_threshold": detach_threshold,
+        "chunk_threshold": chunk_threshold,
+        "chunk_size": chunk_size,
+        "scrub_preset": scrub_preset,
+        "projects": list(projects),
+    }
+
+    console.print("[cyan]Packaging attachments, viewer assets, and manifest...[/]")
     try:
-        attachments_manifest = bundle_attachments(
-            snapshot_path,
+        bundle_artifacts = build_bundle_assets(
+            snapshot_ctx.snapshot_path,
             output_path,
             storage_root=storage_root,
             inline_threshold=inline_threshold,
             detach_threshold=detach_threshold,
-        )
-    except ShareExportError as exc:
-        console.print(f"[red]Attachment packaging failed:[/] {exc}")
-        if temp_dir is not None:
-            temp_dir.cleanup()
-        raise typer.Exit(code=1) from exc
-
-    chunk_manifest = maybe_chunk_database(
-        snapshot_path,
-        output_path,
-        threshold_bytes=chunk_threshold,
-        chunk_bytes=chunk_size,
-    )
-    if chunk_manifest:
-        console.print(
-            f"[cyan]Chunked database into {chunk_manifest['chunk_count']} files of ~{chunk_manifest['chunk_size']//1024} KiB.[/]"
-        )
-
-    copy_viewer_assets(output_path)
-    viewer_data = export_viewer_data(snapshot_path, output_path, fts_enabled=fts_enabled)
-
-    console.print("[cyan]Writing manifest and helper docs...[/]")
-    try:
-        write_bundle_scaffolding(
-            output_path,
-            snapshot=snapshot_path,
+            chunk_threshold=chunk_threshold,
+            chunk_size=chunk_size,
             scope=scope,
             project_filters=projects,
             scrub_summary=scrub_summary,
-            attachments_manifest=attachments_manifest,
-            chunk_manifest=chunk_manifest,
             hosting_hints=hosting_hints,
-            viewer_data=viewer_data,
+            fts_enabled=fts_enabled,
+            export_config=export_config,
         )
     except ShareExportError as exc:
-        console.print(f"[red]Failed to scaffold bundle:[/] {exc}")
+        console.print(f"[red]Failed to build bundle assets:[/] {exc}")
         if temp_dir is not None:
             temp_dir.cleanup()
         raise typer.Exit(code=1) from exc
+
+    attachments_manifest = bundle_artifacts.attachments_manifest
+    chunk_manifest = bundle_artifacts.chunk_manifest
+    if chunk_manifest:
+        console.print(
+            f"[cyan]Chunked database into {chunk_manifest['chunk_count']} files of ~{chunk_manifest['chunk_size'] // 1024} KiB.[/]"
+        )
 
     if signing_key is not None:
         try:
@@ -470,9 +447,7 @@ def share_export(
                 output_path,
                 public_out=public_out_path,
             )
-            console.print(
-                f"[green]✓ Signed manifest (Ed25519, public key {signature_info['public_key']})[/]"
-            )
+            console.print(f"[green]✓ Signed manifest (Ed25519, public key {signature_info['public_key']})[/]")
         except ShareExportError as exc:
             console.print(f"[red]Manifest signing failed:[/] {exc}")
             if temp_dir is not None:
@@ -618,9 +593,7 @@ def _run_share_export_wizard(
     )
     preset_value = (preset_input or default_scrub_preset).strip().lower()
     if preset_value not in SCRUB_PRESETS:
-        console.print(
-            f"[yellow]Unknown preset '{preset_value}'. Using {default_scrub_preset} instead.[/]"
-        )
+        console.print(f"[yellow]Unknown preset '{preset_value}'. Using {default_scrub_preset} instead.[/]")
         preset_value = default_scrub_preset
 
     zip_bundle = typer.confirm("Package the output directory as a .zip archive?", default=True)
@@ -694,6 +667,290 @@ def _start_preview_server(bundle_path: Path, host: str, port: int) -> ThreadingH
     server = ThreadingHTTPServer((host, port), PreviewRequestHandler)
     server.daemon_threads = True
     return server
+
+
+@share_app.command("update")
+def share_update(
+    bundle: Annotated[
+        str, typer.Argument(help="Path to the existing bundle directory (e.g., your GitHub Pages repo).")
+    ],
+    projects: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--project",
+            "-p",
+            help="Override project scope for this update (slugs or human keys). May be provided multiple times.",
+        ),
+    ] = None,
+    inline_threshold_override: Annotated[
+        Optional[int],
+        typer.Option("--inline-threshold", help="Override inline attachment threshold (bytes).", min=0),
+    ] = None,
+    detach_threshold_override: Annotated[
+        Optional[int],
+        typer.Option("--detach-threshold", help="Override detach attachment threshold (bytes).", min=0),
+    ] = None,
+    chunk_threshold_override: Annotated[
+        Optional[int],
+        typer.Option("--chunk-threshold", help="Override chunking threshold (bytes).", min=0),
+    ] = None,
+    chunk_size_override: Annotated[
+        Optional[int],
+        typer.Option("--chunk-size", help="Override chunk size when chunking is enabled.", min=1024),
+    ] = None,
+    scrub_preset_override: Annotated[
+        Optional[str],
+        typer.Option(
+            "--scrub-preset",
+            help="Override scrub preset (standard, strict, ...).",
+            case_sensitive=False,
+        ),
+    ] = None,
+    zip_bundle: Annotated[
+        bool,
+        typer.Option("--zip/--no-zip", help="Package the updated bundle into a ZIP archive.", show_default=True),
+    ] = False,
+    signing_key: Annotated[
+        Optional[Path], typer.Option("--signing-key", help="Path to Ed25519 signing key (32-byte seed).")
+    ] = None,
+    signing_public_out: Annotated[
+        Optional[Path], typer.Option("--signing-public-out", help="Write public key to this file after signing.")
+    ] = None,
+    age_recipients: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--age-recipient",
+            help="Encrypt the ZIP archive with age using the provided recipient(s). May be passed multiple times.",
+        ),
+    ] = None,
+) -> None:
+    """Refresh an existing static mailbox bundle using the previous export settings."""
+
+    age_recipient_list = list(age_recipients or ())
+    bundle_path = _resolve_path(bundle)
+    if not bundle_path.exists() or not bundle_path.is_dir():
+        console.print(f"[red]Bundle path {bundle_path} does not exist or is not a directory.[/]")
+        raise typer.Exit(code=1)
+
+    manifest_path = bundle_path / "manifest.json"
+    if not manifest_path.exists():
+        console.print(f"[red]manifest.json not found inside {bundle_path}. Are you sure this is a bundle directory?[/]")
+        raise typer.Exit(code=1)
+
+    try:
+        stored_config = _load_bundle_export_config(bundle_path)
+    except ShareExportError as exc:
+        console.print(f"[red]Failed to load existing bundle configuration:[/] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    project_filters = list(projects) if projects else list(stored_config.projects)
+    scrub_preset = (scrub_preset_override or stored_config.scrub_preset or "standard").strip().lower()
+    if scrub_preset not in SCRUB_PRESETS:
+        console.print(
+            f"[red]Invalid scrub preset override:[/] {scrub_preset}. Choose one of: {', '.join(SCRUB_PRESETS)}."
+        )
+        raise typer.Exit(code=1)
+
+    inline_threshold = (
+        inline_threshold_override if inline_threshold_override is not None else stored_config.inline_threshold
+    )
+    detach_threshold = (
+        detach_threshold_override if detach_threshold_override is not None else stored_config.detach_threshold
+    )
+    chunk_threshold = (
+        chunk_threshold_override if chunk_threshold_override is not None else stored_config.chunk_threshold
+    )
+    chunk_size = chunk_size_override if chunk_size_override is not None else stored_config.chunk_size
+
+    if inline_threshold < 0:
+        console.print("[red]Inline threshold must be non-negative.[/]")
+        raise typer.Exit(code=1)
+    if detach_threshold < 0:
+        console.print("[red]Detach threshold must be non-negative.[/]")
+        raise typer.Exit(code=1)
+    if chunk_threshold < 0:
+        console.print("[red]Chunk threshold must be non-negative.[/]")
+        raise typer.Exit(code=1)
+    if chunk_size < 1024:
+        console.print("[red]Chunk size must be at least 1024 bytes.[/]")
+        raise typer.Exit(code=1)
+
+    if detach_threshold <= inline_threshold:
+        console.print("[yellow]Adjusting detach threshold to exceed inline threshold to avoid conflicts.[/]")
+        detach_threshold = inline_threshold + max(1024, inline_threshold // 2 or 1)
+
+    existing_signature = (bundle_path / "manifest.sig.json").exists()
+
+    console.rule("[bold]Static Mailbox Update[/bold]")
+
+    try:
+        database_path = resolve_sqlite_database_path()
+    except ShareExportError as exc:
+        console.print(f"[red]Failed to resolve SQLite database: {exc}[/]")
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"[cyan]Using database:[/] {database_path}")
+
+    hosting_hints = detect_hosting_hints(bundle_path)
+    if hosting_hints:
+        table = Table(title="Detected Hosting Targets")
+        table.add_column("Host")
+        table.add_column("Signals")
+        for hint in hosting_hints:
+            table.add_row(hint.title, "\n".join(hint.signals))
+        console.print(table)
+    else:
+        console.print("[dim]No hosting targets detected automatically; consult HOW_TO_DEPLOY.md for guidance.[/]")
+
+    attachments_manifest: dict[str, Any] = {}
+    chunk_manifest: Optional[dict[str, Any]] = None
+    scope = None
+    scrub_summary = None
+    fts_enabled = False
+
+    with tempfile.TemporaryDirectory(prefix="mailbox-share-update-") as temp_dir_name:
+        temp_path = Path(temp_dir_name)
+        snapshot_path = temp_path / "mailbox.sqlite3"
+        console.print(f"[cyan]Creating snapshot:[/] {snapshot_path}")
+        try:
+            snapshot_ctx = create_snapshot_context(
+                source_database=database_path,
+                snapshot_path=snapshot_path,
+                project_filters=project_filters,
+                scrub_preset=scrub_preset,
+            )
+        except ShareExportError as exc:
+            console.print(f"[red]Snapshot preparation failed:[/] {exc}")
+            raise typer.Exit(code=1) from exc
+
+        scope = snapshot_ctx.scope
+        scrub_summary = snapshot_ctx.scrub_summary
+        fts_enabled = snapshot_ctx.fts_enabled
+        if not fts_enabled:
+            console.print("[yellow]FTS5 not available; viewer will fall back to LIKE search.[/]")
+        else:
+            console.print("[green]✓ Built FTS5 index for snapshot search.[/]")
+
+        settings = get_settings()
+        storage_root = Path(settings.storage.root).expanduser()
+
+        export_config = {
+            "inline_threshold": inline_threshold,
+            "detach_threshold": detach_threshold,
+            "chunk_threshold": chunk_threshold,
+            "chunk_size": chunk_size,
+            "scrub_preset": scrub_preset,
+            "projects": project_filters,
+        }
+
+        console.print("[cyan]Packaging attachments, viewer assets, and manifest...[/]")
+        try:
+            bundle_artifacts = build_bundle_assets(
+                snapshot_ctx.snapshot_path,
+                temp_path,
+                storage_root=storage_root,
+                inline_threshold=inline_threshold,
+                detach_threshold=detach_threshold,
+                chunk_threshold=chunk_threshold,
+                chunk_size=chunk_size,
+                scope=scope,
+                project_filters=project_filters,
+                scrub_summary=scrub_summary,
+                hosting_hints=hosting_hints,
+                fts_enabled=fts_enabled,
+                export_config=export_config,
+            )
+        except ShareExportError as exc:
+            console.print(f"[red]Failed to build bundle assets:[/] {exc}")
+            raise typer.Exit(code=1) from exc
+
+        attachments_manifest = bundle_artifacts.attachments_manifest
+        chunk_manifest = bundle_artifacts.chunk_manifest
+        if chunk_manifest:
+            console.print(
+                f"[cyan]Chunked database into {chunk_manifest['chunk_count']} files of ~{chunk_manifest['chunk_size'] // 1024} KiB.[/]"
+            )
+
+        console.print(f"[cyan]Synchronizing updated bundle into:[/] {bundle_path}")
+        _copy_bundle_contents(temp_path, bundle_path)
+
+    assert scope is not None and scrub_summary is not None
+
+    if signing_key is not None:
+        try:
+            public_out_path = _resolve_path(signing_public_out) if signing_public_out else None
+            signature_info = sign_manifest(
+                bundle_path / "manifest.json",
+                signing_key,
+                bundle_path,
+                public_out=public_out_path,
+                overwrite=True,
+            )
+            console.print(f"[green]✓ Signed manifest (Ed25519, public key {signature_info['public_key']})[/]")
+        except ShareExportError as exc:
+            console.print(f"[red]Manifest signing failed:[/] {exc}")
+            raise typer.Exit(code=1) from exc
+    elif existing_signature:
+        console.print(
+            "[yellow]Existing manifest signature may no longer match. Re-run with --signing-key to refresh it.[/]"
+        )
+
+    archive_path: Optional[Path] = None
+    if zip_bundle:
+        archive_path = bundle_path.parent / f"{bundle_path.name}.zip"
+        console.print(f"[cyan]Packaging archive:[/] {archive_path}")
+        if archive_path.exists():
+            console.print(
+                f"[red]Archive already exists at {archive_path}. Remove it or specify --no-zip to skip packaging.[/]"
+            )
+            raise typer.Exit(code=1)
+        try:
+            package_directory_as_zip(bundle_path, archive_path)
+        except ShareExportError as exc:
+            console.print(f"[red]Failed to create ZIP archive:[/] {exc}")
+            raise typer.Exit(code=1) from exc
+
+    if age_recipient_list:
+        if not archive_path:
+            console.print("[yellow]Skipped age encryption because --zip was not enabled.[/]")
+        else:
+            console.print("[cyan]Encrypting archive with age...[/]")
+            try:
+                encrypted_path = encrypt_bundle(archive_path, age_recipient_list)
+                if encrypted_path:
+                    console.print(f"[green]✓ Encrypted archive written to {encrypted_path}[/]")
+            except ShareExportError as exc:
+                console.print(f"[red]age encryption failed:[/] {exc}")
+                raise typer.Exit(code=1) from exc
+
+    console.print("[green]✓ Updated SQLite snapshot for sharing.[/]")
+    console.print(
+        f"[green]✓ Applied '{scrub_summary.preset}' scrub (pseudonymized {scrub_summary.agents_pseudonymized}/{scrub_summary.agents_total} agents, "
+        f"{scrub_summary.secrets_replaced} secret tokens redacted, {scrub_summary.bodies_redacted} bodies replaced).[/]"
+    )
+    included_projects = ", ".join(record.slug for record in scope.projects)
+    console.print(f"[green]✓ Project scope includes: {included_projects or 'none'}[/]")
+    att_stats = attachments_manifest.get("stats", {})
+    console.print(
+        "[green]✓ Packaged attachments: "
+        f"{att_stats.get('inline', 0)} inline, "
+        f"{att_stats.get('copied', 0)} copied, "
+        f"{att_stats.get('externalized', 0)} external, "
+        f"{att_stats.get('missing', 0)} missing "
+        f"(inline ≤ {inline_threshold} B, external ≥ {detach_threshold} B).[/]"
+    )
+    if fts_enabled:
+        console.print("[green]✓ Built FTS5 index for full-text viewer search.[/]")
+    else:
+        console.print("[yellow]Search fallback active (FTS5 unavailable in current sqlite build).[/]")
+    if chunk_manifest:
+        console.print("[green]✓ Chunk manifest refreshed (mailbox.sqlite3.config.json updated).[/]")
+        console.print(
+            "[dim]Existing chunk files beyond the new chunk count remain on disk; remove them manually if needed.[/]"
+        )
+
+    if zip_bundle and archive_path:
+        console.print(f"[green]✓ Bundle archive available at {archive_path}[/]")
 
 
 @share_app.command("preview")
@@ -894,6 +1151,150 @@ def _resolve_path(raw_path: str | Path) -> Path:
     return path
 
 
+@dataclass(slots=True)
+class StoredExportConfig:
+    projects: list[str]
+    inline_threshold: int
+    detach_threshold: int
+    chunk_threshold: int
+    chunk_size: int
+    scrub_preset: str
+
+
+def _coerce_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _load_bundle_export_config(bundle_dir: Path) -> StoredExportConfig:
+    manifest_path = bundle_dir / "manifest.json"
+    if not manifest_path.exists():
+        raise ShareExportError(f"manifest.json not found in {bundle_dir}")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ShareExportError(f"Failed to parse manifest.json: {exc}") from exc
+
+    export_config = manifest.get("export_config", {}) or {}
+    attachments_section = manifest.get("attachments", {}) or {}
+    attachments_config = attachments_section.get("config", {}) or {}
+    project_scope = manifest.get("project_scope", {}) or {}
+    scrub_section = manifest.get("scrub", {}) or {}
+    database_section = manifest.get("database", {}) or {}
+
+    raw_projects = export_config.get("projects", project_scope.get("requested", []))
+    projects = [str(p) for p in raw_projects if isinstance(p, str)]
+
+    scrub_preset = str(export_config.get("scrub_preset") or scrub_section.get("preset") or "standard")
+
+    inline_threshold = _coerce_int(
+        export_config.get("inline_threshold") or attachments_config.get("inline_threshold"),
+        INLINE_ATTACHMENT_THRESHOLD,
+    )
+    detach_threshold = _coerce_int(
+        export_config.get("detach_threshold") or attachments_config.get("detach_threshold"),
+        DETACH_ATTACHMENT_THRESHOLD,
+    )
+    chunk_threshold = _coerce_int(export_config.get("chunk_threshold"), DEFAULT_CHUNK_THRESHOLD)
+
+    chunk_manifest = database_section.get("chunk_manifest") or {}
+    chunk_size = _coerce_int(
+        export_config.get("chunk_size") or chunk_manifest.get("chunk_size"),
+        DEFAULT_CHUNK_SIZE,
+    )
+
+    chunk_config: dict[str, Any] = {}
+    chunk_config_path = bundle_dir / "mailbox.sqlite3.config.json"
+    if chunk_config_path.exists():
+        try:
+            chunk_config = json.loads(chunk_config_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            chunk_config = {}
+    if chunk_config:
+        chunk_size = _coerce_int(chunk_config.get("chunk_size"), chunk_size)
+        chunk_threshold = _coerce_int(chunk_config.get("threshold_bytes"), chunk_threshold)
+
+    return StoredExportConfig(
+        projects=projects,
+        inline_threshold=inline_threshold,
+        detach_threshold=detach_threshold,
+        chunk_threshold=chunk_threshold,
+        chunk_size=chunk_size,
+        scrub_preset=scrub_preset,
+    )
+
+
+def _copy_bundle_contents(source: Path, destination: Path) -> None:
+    """Synchronise *destination* with *source* by mirroring files and pruning stale artefacts."""
+
+    source = source.resolve()
+    destination = destination.resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+
+    # Protected directories that should never be deleted
+    PROTECTED_ROOTS = {".git", ".github", ".vscode", ".idea", "node_modules", "__pycache__"}
+
+    def _is_protected(path: Path) -> bool:
+        """Check if a path is within a protected directory."""
+        try:
+            rel = path.relative_to(destination)
+            return any(part in PROTECTED_ROOTS for part in rel.parts)
+        except ValueError:
+            return False
+
+    desired_files: set[Path] = set()
+    desired_dirs: set[Path] = {destination}
+
+    for root, _, files in os.walk(source):
+        root_path = Path(root)
+        relative_root = root_path.relative_to(source)
+        dest_root = destination / relative_root
+        desired_dirs.add(dest_root)
+        for filename in files:
+            rel_file = relative_root / filename
+            desired_files.add(destination / rel_file)
+            parent = (destination / rel_file).parent
+            while parent != destination:
+                desired_dirs.add(parent)
+                parent = parent.parent
+
+    # Remove files that are no longer present in the source bundle (skip protected paths).
+    existing_files = {
+        path for path in destination.rglob("*") if (path.is_file() or path.is_symlink()) and not _is_protected(path)
+    }
+    for stale_file in existing_files - desired_files:
+        try:
+            if stale_file.is_symlink():
+                # Remove the symlink itself without following its target.
+                stale_file.unlink()
+                continue
+            stale_file.unlink()
+        except FileNotFoundError:
+            # File disappeared between discovery and removal attempt.
+            continue
+        except OSError as exc:  # pragma: no cover - filesystem edge cases
+            console.print(f"[yellow]Warning:[/] Failed to remove stale file {stale_file}: {exc}")
+
+    # Remove directories that are no longer needed (deepest first).
+    existing_dirs = {path for path in destination.rglob("*") if path.is_dir()}
+    for stale_dir in sorted(existing_dirs - desired_dirs, key=lambda p: len(p.parts), reverse=True):
+        with suppress(OSError):
+            stale_dir.rmdir()
+
+    # Copy fresh files from source (overwrite in place to handle updated content).
+    for root, _, files in os.walk(source):
+        root_path = Path(root)
+        relative_root = root_path.relative_to(source)
+        dest_root = destination / relative_root
+        dest_root.mkdir(parents=True, exist_ok=True)
+        for filename in files:
+            src_file = root_path / filename
+            dest_file = dest_root / filename
+            shutil.copy2(src_file, dest_file)
+
+
 @app.command("clear-and-reset-everything")
 def clear_and_reset_everything(
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt."),
@@ -1022,6 +1423,7 @@ def list_projects(
                 entry["agent_count"] = agent_count
             projects_json.append(entry)
         import sys
+
         json.dump(projects_json, sys.stdout, indent=2)
         sys.stdout.write("\n")
     else:
@@ -1045,6 +1447,13 @@ def list_projects(
 def guard_install(
     project: str,
     repo: Annotated[Path, typer.Argument(..., help="Path to git repo")],
+    prepush: Annotated[
+        bool,
+        typer.Option(
+            "--prepush/--no-prepush",
+            help="Also install a pre-push guard.",
+        ),
+    ] = False,
 ) -> None:
     """Install the advisory pre-commit guard into the given repository."""
 
@@ -1054,6 +1463,13 @@ def guard_install(
     async def _run() -> tuple[Project, Path]:
         project_record = await _get_project_record(project)
         hook_path = await install_guard_script(settings, project_record.slug, repo_path)
+        if prepush:
+            try:
+                from .guard import install_prepush_guard as _install_prepush
+
+                await _install_prepush(settings, project_record.slug, repo_path)
+            except Exception as exc:
+                console.print(f"[yellow]Warning: failed to install pre-push guard: {exc}[/]")
         return project_record, hook_path
 
     try:
@@ -1091,8 +1507,10 @@ def file_reservations_list(
             raise ValueError("Project must have an id")
         await ensure_schema()
         async with get_session() as session:
-            stmt = select(FileReservation, Agent.name).join(Agent, FileReservation.agent_id == Agent.id).where(
-                FileReservation.project_id == project_record.id
+            stmt = (
+                select(FileReservation, Agent.name)
+                .join(Agent, FileReservation.agent_id == Agent.id)
+                .where(FileReservation.project_id == project_record.id)
             )
             if active_only:
                 stmt = stmt.where(cast(Any, FileReservation.released_ts).is_(None))
@@ -1124,6 +1542,485 @@ def file_reservations_list(
     console.print(table)
 
 
+@app.command("amctl-env")
+def amctl_env(
+    project_path: Annotated[
+        Path,
+        typer.Option(
+            "--path",
+            "-p",
+            help="Path to repo/worktree",
+        ),
+    ] = Path(),
+    agent: Annotated[Optional[str], typer.Option("--agent", "-a", help="Agent name (defaults to $AGENT_NAME)")] = None,
+) -> None:
+    """
+    Print environment variables useful for build wrappers (slots, caches, artifacts).
+    """
+    p = project_path.expanduser().resolve()
+    agent_name = agent or os.environ.get("AGENT_NAME") or "Unknown"
+    # Reuse server helper for identity
+    from mcp_agent_mail.app import _resolve_project_identity as _resolve_ident  # type: ignore
+
+    ident = _resolve_ident(str(p))
+    slug = ident["slug"]
+    project_uid = ident["project_uid"]
+    # Determine branch
+    branch = ident.get("branch") or ""
+    if not branch:
+        try:
+            from git import Repo as _Repo
+
+            repo = _Repo(str(p), search_parent_directories=True)
+            try:
+                branch = repo.active_branch.name
+            except Exception:
+                branch = repo.git.rev_parse("--abbrev-ref", "HEAD").strip()
+        except Exception:
+            branch = "unknown"
+    # Compute cache key and artifact dir
+    settings = get_settings()
+    cache_key = f"am-cache-{project_uid}-{agent_name}-{branch}"
+    artifact_dir = (
+        Path(settings.storage.root).expanduser().resolve() / "projects" / slug / "artifacts" / agent_name / branch
+    )
+    # Print as KEY=VALUE lines
+    console.print(f"SLUG={slug}")
+    console.print(f"PROJECT_UID={project_uid}")
+    console.print(f"BRANCH={branch}")
+    console.print(f"AGENT={agent_name}")
+    console.print(f"CACHE_KEY={cache_key}")
+    console.print(f"ARTIFACT_DIR={artifact_dir}")
+
+
+@app.command(name="am-run")
+def am_run(
+    slot: Annotated[str, typer.Argument(help="Build slot name (e.g., frontend-build)")],
+    cmd: Annotated[list[str], typer.Argument(..., help="Command to run")],
+    project_path: Annotated[
+        Path,
+        typer.Option(
+            "--path",
+            "-p",
+            help="Path to repo/worktree",
+        ),
+    ] = Path(),
+    agent: Annotated[Optional[str], typer.Option("--agent", "-a", help="Agent name (defaults to $AGENT_NAME)")] = None,
+) -> None:
+    """
+    Build wrapper that prepares environment variables and manages a build slot:
+    - Acquires the slot (advisory), prints conflicts in warn mode.
+    - Renews lease in the background while the child runs.
+    - Releases the slot on exit.
+    """
+    p = project_path.expanduser().resolve()
+    agent_name = agent or os.environ.get("AGENT_NAME") or "Unknown"
+    from mcp_agent_mail.app import _resolve_project_identity as _resolve_ident  # type: ignore
+
+    ident = _resolve_ident(str(p))
+    slug = ident["slug"]
+    project_uid = ident["project_uid"]
+    branch = ident.get("branch") or ""
+    if not branch:
+        try:
+            from git import Repo as _Repo
+
+            repo = _Repo(str(p), search_parent_directories=True)
+            try:
+                branch = repo.active_branch.name
+            except Exception:
+                branch = repo.git.rev_parse("--abbrev-ref", "HEAD").strip()
+        except Exception:
+            branch = "unknown"
+    settings = get_settings()
+    guard_mode = (os.environ.get("AGENT_MAIL_GUARD_MODE", "block") or "block").strip().lower()
+    worktrees_enabled = bool(settings.worktrees_enabled)
+
+    def _safe_component(value: str) -> str:
+        s = value.strip()
+        for ch in ("/", "\\\\", ":", "*", "?", '"', "<", ">", "|", " "):
+            s = s.replace(ch, "_")
+        return s or "unknown"
+
+    async def _ensure_slot_paths() -> Path:
+        archive = await ensure_archive(settings, slug)
+        slot_dir = archive.root / "build_slots" / _safe_component(slot)
+        slot_dir.mkdir(parents=True, exist_ok=True)
+        return slot_dir
+
+    def _read_active(slot_dir: Path) -> list[dict[str, Any]]:
+        now = datetime.now(timezone.utc)
+        results: list[dict[str, Any]] = []
+        for f in slot_dir.glob("*.json"):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                exp = data.get("expires_ts")
+                if exp:
+                    try:
+                        if datetime.fromisoformat(exp) <= now:
+                            continue
+                    except Exception:
+                        pass
+                results.append(data)
+            except Exception:
+                continue
+        return results
+
+    def _lease_path(slot_dir: Path) -> Path:
+        holder = _safe_component(f"{agent_name}__{branch or 'unknown'}")
+        return slot_dir / f"{holder}.json"
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "AM_SLOT": slot,
+            "SLUG": slug,
+            "PROJECT_UID": project_uid or "",
+            "BRANCH": branch,
+            "AGENT": agent_name,
+            "CACHE_KEY": f"am-cache-{project_uid}-{agent_name}-{branch}",
+        }
+    )
+    lease_path: Optional[Path] = None
+    renew_stop = threading.Event()
+    renew_thread: Optional[threading.Thread] = None
+    ttl_seconds = 3600
+    try:
+        if worktrees_enabled:
+            slot_dir = asyncio.run(_ensure_slot_paths())
+            active = _read_active(slot_dir)
+            conflicts = [
+                e
+                for e in active
+                if e.get("exclusive", True) and not (e.get("agent") == agent_name and e.get("branch") == branch)
+            ]
+            if conflicts and guard_mode == "warn":
+                console.print("[yellow]Build slot conflicts (advisory, proceeding):[/]")
+                for c in conflicts:
+                    console.print(
+                        f"  - slot={c.get('slot', '')} agent={c.get('agent', '')} "
+                        f"branch={c.get('branch', '')} expires={c.get('expires_ts', '')}"
+                    )
+            lease_path = _lease_path(slot_dir)
+            payload = {
+                "slot": slot,
+                "agent": agent_name,
+                "branch": branch,
+                "exclusive": True,
+                "acquired_ts": datetime.now(timezone.utc).isoformat(),
+                "expires_ts": (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).isoformat(),
+            }
+            with suppress(Exception):
+                lease_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+            def _renewer() -> None:
+                interval = max(60, ttl_seconds // 2)
+                while not renew_stop.wait(interval):
+                    try:
+                        now = datetime.now(timezone.utc)
+                        new_exp = now + timedelta(seconds=max(60, ttl_seconds // 2))
+                        try:
+                            current = json.loads(lease_path.read_text(encoding="utf-8")) if lease_path else {}
+                        except Exception:
+                            current = {}
+                        current.update({"expires_ts": new_exp.isoformat()})
+                        if lease_path:
+                            lease_path.write_text(json.dumps(current, indent=2), encoding="utf-8")
+                    except Exception:
+                        continue
+
+            renew_thread = threading.Thread(target=_renewer, name="am-run-renew", daemon=True)
+            renew_thread.start()
+        console.print(f"[cyan]$ {' '.join(cmd)}[/]  [dim](slot={slot})[/]")
+        rc = subprocess.run(list(cmd), env=env, check=False).returncode
+    except FileNotFoundError:
+        rc = 127
+    finally:
+        if worktrees_enabled and lease_path:
+            try:
+                now = datetime.now(timezone.utc)
+                try:
+                    data = json.loads(lease_path.read_text(encoding="utf-8"))
+                except Exception:
+                    data = {}
+                data.update({"released_ts": now.isoformat(), "expires_ts": now.isoformat()})
+                with suppress(Exception):
+                    lease_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+            finally:
+                renew_stop.set()
+                if renew_thread and renew_thread.is_alive():
+                    renew_thread.join(timeout=1.0)
+    if rc != 0:
+        raise typer.Exit(code=rc)
+
+
+@mail_app.command("status")
+def mail_status(
+    project_path: Annotated[
+        Path,
+        typer.Argument(..., help="Absolute path to a repo/worktree directory (use '.' for current)."),
+    ],
+) -> None:
+    """
+    Print routing diagnostics: gate state, configured identity mode, normalized remote (if any),
+    and the slug that would be used for this path.
+    """
+    settings = get_settings()
+    p = project_path.expanduser().resolve()
+    gate = settings.worktrees_enabled
+    mode = (settings.project_identity_mode or "dir").strip().lower()
+    remote_name = (settings.project_identity_remote or "origin").strip()
+
+    def _norm_remote(url: Optional[str]) -> Optional[str]:
+        if not url:
+            return None
+        u = url.strip()
+        try:
+            if u.startswith("git@"):
+                host = u.split("@", 1)[1].split(":", 1)[0]
+                path = u.split(":", 1)[1]
+            else:
+                from urllib.parse import urlparse as _urlparse
+
+                pr = _urlparse(u)
+                host = pr.hostname or ""
+                path = pr.path or ""
+        except Exception:
+            return None
+        if not host:
+            return None
+        path = path.lstrip("/")
+        if path.endswith(".git"):
+            path = path[:-4]
+        parts = [seg for seg in path.split("/") if seg]
+        if len(parts) < 2:
+            return None
+        owner, repo = parts[0], parts[1]
+        return f"{host}/{owner}/{repo}"
+
+    normalized_remote: Optional[str] = None
+    try:
+        from git import Repo as _Repo  # local import to avoid CLI startup cost
+
+        repo = _Repo(str(p), search_parent_directories=True)
+        try:
+            url = repo.git.remote("get-url", remote_name).strip() or None
+        except Exception:
+            try:
+                r = next((r for r in repo.remotes if r.name == remote_name), None)
+                url = next(iter(r.urls), None) if r and r.urls else None
+            except Exception:
+                url = None
+        normalized_remote = _norm_remote(url)
+    except Exception:
+        normalized_remote = None
+
+    # Compute a candidate slug using the same logic as the server helper (summarized)
+    from mcp_agent_mail.app import _compute_project_slug as _compute_slug  # type: ignore
+
+    slug_value = _compute_slug(str(p))
+
+    table = Table(title="Mail routing status", show_lines=False)
+    table.add_column("Field")
+    table.add_column("Value")
+    table.add_row("WORKTREES_ENABLED", "true" if gate else "false")
+    table.add_row("PROJECT_IDENTITY_MODE", mode or "dir")
+    table.add_row("PROJECT_IDENTITY_REMOTE", remote_name)
+    table.add_row("normalized_remote", normalized_remote or "")
+    table.add_row("slug", slug_value)
+    table.add_row("path", str(p))
+    console.print(table)
+
+
+@guard_app.command("status")
+def guard_status(
+    repo: Annotated[Path, typer.Argument(..., help="Path to git repo")],
+) -> None:
+    """
+    Print guard status: gate/mode, resolved hooks directory, and presence of hooks.
+    """
+    settings = get_settings()
+    p = repo.expanduser().resolve()
+    gate = settings.worktrees_enabled
+    mode = (settings.project_identity_mode or "dir").strip().lower()
+    guard_mode = (os.environ.get("AGENT_MAIL_GUARD_MODE", "block") or "block").strip().lower()
+
+    def _git(cwd: Path, *args: str) -> str | None:
+        try:
+            cp = subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True, text=True)
+            return cp.stdout.strip()
+        except Exception:
+            return None
+
+    hooks_path = _git(p, "config", "--get", "core.hooksPath")
+    if hooks_path:
+        if hooks_path.startswith("/") or (
+            ((len(hooks_path) > 1) and (hooks_path[1:3] == ":\\")) or (hooks_path[1:3] == ":/")
+        ):
+            hooks_dir = Path(hooks_path)
+        else:
+            root = _git(p, "rev-parse", "--show-toplevel") or str(p)
+            hooks_dir = Path(root) / hooks_path
+    else:
+        git_dir = _git(p, "rev-parse", "--git-dir") or ".git"
+        g = Path(git_dir)
+        if not g.is_absolute():
+            g = p / g
+        hooks_dir = g / "hooks"
+
+    pre_commit = hooks_dir / "pre-commit"
+    pre_push = hooks_dir / "pre-push"
+
+    table = Table(title="Guard status", show_lines=False)
+    table.add_column("Field")
+    table.add_column("Value")
+    table.add_row("WORKTREES_ENABLED", "true" if gate else "false")
+    table.add_row("AGENT_MAIL_GUARD_MODE", guard_mode)
+    table.add_row("PROJECT_IDENTITY_MODE", mode or "dir")
+    table.add_row("hooks_dir", str(hooks_dir))
+    table.add_row("pre-commit", "present" if pre_commit.exists() else "missing")
+    table.add_row("pre-push", "present" if pre_push.exists() else "missing")
+    console.print(table)
+
+
+@projects_app.command("adopt")
+def projects_adopt(
+    source: Annotated[str, typer.Argument(..., help="Old project slug or human key")],
+    target: Annotated[str, typer.Argument(..., help="New project slug or project_uid (future)")],
+    dry_run: Annotated[bool, typer.Option("--dry-run/--apply", help="Show plan without applying changes.")] = True,
+) -> None:
+    """
+    Plan consolidation of legacy per-worktree projects into a canonical project.
+    NOTE: Apply is not yet implemented; this command currently prints a dry-run only.
+    """
+
+    async def _load(slug_or_key: str) -> Project:
+        return await _get_project_record(slug_or_key)
+
+    async def _load_both() -> tuple[Project, Project]:
+        return await asyncio.gather(_load(source), _load(target))
+
+    try:
+        src, dst = asyncio.run(_load_both())
+    except Exception as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    if src.id == dst.id:
+        console.print("[yellow]Source and target refer to the same project; nothing to do.[/]")
+        return
+
+    plan: list[str] = []
+    plan.append(f"Source: id={src.id} slug={src.slug} key={src.human_key}")
+    plan.append(f"Target: id={dst.id} slug={dst.slug} key={dst.human_key}")
+
+    # Heuristic: same repo if git-common-dir hashes match
+    def _git(path: Path, *args: str) -> str | None:
+        try:
+            cp = subprocess.run(["git", "-C", str(path), *args], check=True, capture_output=True, text=True)
+            return cp.stdout.strip()
+        except Exception:
+            return None
+
+    src_gdir = _git(Path(src.human_key), "rev-parse", "--git-common-dir")
+    dst_gdir = _git(Path(dst.human_key), "rev-parse", "--git-common-dir")
+    same_repo = bool(src_gdir and dst_gdir and Path(src_gdir).resolve() == Path(dst_gdir).resolve())
+    plan.append(f"Same repo (git-common-dir): {'yes' if same_repo else 'no'}")
+
+    if not same_repo:
+        console.print("[red]Refusing to adopt: projects do not appear to belong to the same repository.[/]")
+        return
+
+    # Describe filesystem moves (archive layout)
+    settings = get_settings()
+    from .storage import ensure_archive as _ensure_archive
+
+    src_archive = asyncio.run(_ensure_archive(settings, src.slug))
+    dst_archive = asyncio.run(_ensure_archive(settings, dst.slug))
+    plan.append(f"Move Git artifacts: {src_archive.root} -> {dst_archive.root}")
+    plan.append("Re-key DB rows: source project_id -> target project_id (messages, agents, file_reservations, etc.)")
+    plan.append("Write aliases.json under target 'projects/<slug>/' with former_slugs")
+
+    console.print("[bold]Projects adopt plan (dry-run)[/bold]")
+    for line in plan:
+        console.print(f"- {line}")
+
+    if dry_run:
+        return
+
+    # Apply phase
+    async def _apply() -> None:
+        if src.id is None or dst.id is None:
+            raise typer.BadParameter("Projects must be persisted (id not null).")
+        # Detect agent name conflicts
+        await ensure_schema()
+        async with get_session() as session:
+            src_agents = [
+                row[0] for row in (await session.execute(select(Agent.name).where(Agent.project_id == src.id))).all()
+            ]
+            dst_agents = [
+                row[0] for row in (await session.execute(select(Agent.name).where(Agent.project_id == dst.id))).all()
+            ]
+            dup = sorted(set(src_agents).intersection(set(dst_agents)))
+            if dup:
+                raise typer.BadParameter(f"Agent name conflicts in target project: {', '.join(dup)}")
+        # Move Git artifacts
+        settings = get_settings()
+        # local import to minimize top-level churn and keep ordering stable
+        from .storage import AsyncFileLock as _AsyncFileLock, ensure_archive as _ensure_archive  # type: ignore
+
+        src_archive = asyncio.run(_ensure_archive(settings, src.slug))
+        dst_archive = asyncio.run(_ensure_archive(settings, dst.slug))
+        moved_relpaths: list[str] = []
+        for path in sorted(src_archive.root.rglob("*"), key=str):
+            if not path.is_file():
+                continue
+            if path.name.endswith(".lock") or path.name.endswith(".lock.owner.json"):
+                continue
+            rel_from_root = path.relative_to(src_archive.root)
+            dest_path = dst_archive.root / rel_from_root
+            await asyncio.to_thread(dest_path.parent.mkdir, parents=True, exist_ok=True)
+            if dest_path.exists():
+                continue
+            await asyncio.to_thread(path.replace, dest_path)
+            moved_relpaths.append(dest_path.relative_to(dst_archive.repo_root).as_posix())
+        from .storage import _commit as _archive_commit  # type: ignore
+
+        async with _AsyncFileLock(dst_archive.lock_path):
+            await _archive_commit(dst_archive.repo, settings, f"adopt: move {src.slug} into {dst.slug}", moved_relpaths)
+        # Re-key database rows (agents, messages, file_reservations)
+        async with get_session() as session:
+            from sqlalchemy import update as _update  # local import to avoid top-of-file churn
+
+            await session.execute(_update(Agent).where(Agent.project_id == src.id).values(project_id=dst.id))
+            await session.execute(_update(Message).where(Message.project_id == src.id).values(project_id=dst.id))
+            await session.execute(
+                _update(FileReservation).where(FileReservation.project_id == src.id).values(project_id=dst.id)
+            )
+            await session.commit()
+        # Write aliases.json under target
+        aliases_path = dst_archive.root / "aliases.json"
+        try:
+            existing = {}
+            if aliases_path.exists():
+                existing = json.loads(aliases_path.read_text(encoding="utf-8"))
+            former = set(existing.get("former_slugs", []))
+            former.add(src.slug)
+            existing["former_slugs"] = sorted(former)
+            await asyncio.to_thread(aliases_path.write_text, json.dumps(existing, indent=2), "utf-8")
+            rel_alias = aliases_path.relative_to(dst_archive.repo_root).as_posix()
+            await _archive_commit(dst_archive.repo, settings, f"adopt: record alias for {src.slug}", [rel_alias])
+        except Exception as exc:
+            console.print(f"[yellow]Warning: failed to write aliases.json: {exc}[/]")
+
+    try:
+        asyncio.run(_apply())
+        console.print("[green]Adoption apply completed.[/]")
+    except Exception as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
 @file_reservations_app.command("active")
 def file_reservations_active(
     project: str = typer.Argument(..., help="Project slug or human key"),
@@ -1140,7 +2037,9 @@ def file_reservations_active(
             stmt = (
                 select(FileReservation, Agent.name)
                 .join(Agent, FileReservation.agent_id == Agent.id)
-                .where(FileReservation.project_id == project_record.id, cast(Any, FileReservation.released_ts).is_(None))
+                .where(
+                    FileReservation.project_id == project_record.id, cast(Any, FileReservation.released_ts).is_(None)
+                )
                 .order_by(asc(FileReservation.expires_ts))
                 .limit(limit)
             )
@@ -1245,6 +2144,7 @@ def file_reservations_soon(
         )
     console.print(table)
 
+
 @acks_app.command("pending")
 def acks_pending(
     project: str = typer.Argument(..., help="Project slug or human key"),
@@ -1290,6 +2190,7 @@ def acks_pending(
     table.add_column("Ack Age")
 
     now = datetime.now(timezone.utc)
+
     def _age(dt: datetime) -> str:
         # Coerce naive datetimes from SQLite to UTC for arithmetic
         if dt.tzinfo is None:
@@ -1352,8 +2253,10 @@ def acks_remind(
 
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(minutes=min_age_minutes)
+
     def _aware(dt: datetime) -> datetime:
         return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
     stale = [(m, rts, ats, k) for (m, rts, ats, k) in rows if _aware(m.created_ts) <= cutoff]
 
     table = Table(title=f"ACK Reminders (>{min_age_minutes}m) for {agent_record.name}")
@@ -1434,6 +2337,7 @@ def acks_overdue(
     table.add_column("Kind")
 
     now = datetime.now(timezone.utc)
+
     def _age(dt: datetime) -> str:
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
@@ -1457,9 +2361,6 @@ def acks_overdue(
         console.print(table)
 
 
-
-
-
 @app.command("list-acks")
 def list_acks(
     project_key: str = typer.Option(..., "--project", help="Project human key or slug."),
@@ -1472,7 +2373,9 @@ def list_acks(
         await ensure_schema()
         async with get_session() as session:
             # Resolve project and agent
-            proj_result = await session.execute(select(Project).where((Project.slug == slugify(project_key)) | (Project.human_key == project_key)))
+            proj_result = await session.execute(
+                select(Project).where((Project.slug == slugify(project_key)) | (Project.human_key == project_key))
+            )
             project = proj_result.scalars().first()
             if not project:
                 raise typer.BadParameter(f"Project not found for key: {project_key}")
@@ -1549,9 +2452,7 @@ def config_set_port(
             action = "Created"
 
         # Write to temporary file in same directory (for atomic move)
-        temp_fd, temp_path = tempfile.mkstemp(
-            dir=env_path.parent, prefix=".env.tmp.", text=True
-        )
+        temp_fd, temp_path = tempfile.mkstemp(dir=env_path.parent, prefix=".env.tmp.", text=True)
         try:
             # Write content with secure permissions from the start
             # (best-effort on Windows where Unix permissions don't apply)

@@ -1525,71 +1525,304 @@ window.viewerController = function() {
       const results = [];
       const stmt = state.db.prepare(`
         SELECT
-          m.id,
-          m.subject,
-          m.created_ts,
-          m.importance,
-          m.thread_id,
+          mv.id,
+          mv.subject,
+          mv.created_ts,
+          mv.importance,
+          mv.thread_id,
           m.project_id,
-          CASE WHEN m.thread_id IS NULL OR m.thread_id = '' THEN printf('msg:%d', m.id) ELSE m.thread_id END AS thread_key,
-          substr(COALESCE(m.body_md, ''), 1, 280) AS snippet,
-          m.body_md,
-          COALESCE(
-            (SELECT name FROM agents WHERE id = (SELECT from_agent_id FROM message_senders WHERE message_id = m.id LIMIT 1)),
-            'Unknown'
-          ) AS sender,
+          CASE WHEN mv.thread_id IS NULL OR mv.thread_id = '' THEN printf('msg:%d', mv.id) ELSE mv.thread_id END AS thread_key,
+          mv.body_length,
+          mv.latest_snippet,
+          mv.recipients,
+          mv.sender_name AS sender,
           COALESCE(p.slug, 'unknown') AS project_slug,
           COALESCE(p.human_key, 'Unknown Project') AS project_name
-        FROM messages m
+        FROM message_overview_mv mv
+        JOIN messages m ON m.id = mv.id
         LEFT JOIN projects p ON p.id = m.project_id
-        ORDER BY datetime(m.created_ts) DESC, m.id DESC
+        ORDER BY datetime(mv.created_ts) DESC, mv.id DESC
       `);
 
       try {
         while (stmt.step()) {
-          const row = stmt.getAsObject();
-
-          // Get recipients for this message
-          const recipients = this.getMessageRecipients(row.id);
-
-          // Enrich message with additional fields
-          results.push({
-            ...row,
-            recipients: recipients,
-            excerpt: row.snippet || '',
-            created_relative: this.formatTimestamp(row.created_ts),
-            created_full: this.formatTimestampFull(row.created_ts),
-            read: false // Static viewer doesn't track read state
-          });
+          results.push(stmt.getAsObject());
         }
       } finally {
         stmt.free();
       }
 
-      return results;
+      // Build a recipients map in a single query (MUCH faster than N+1 queries)
+      const recipientsMap = this.buildRecipientsMap();
+      this.recipientsMap = recipientsMap;
+
+      // Enrich messages with recipients and formatted dates
+      return results.map((msg) => {
+        const importance = (msg.importance || '').toLowerCase();
+        const bodyLength = Number(msg.body_length) || 0;
+        const excerpt = msg.latest_snippet || msg.snippet || '';
+        const isAdministrative = this.isAdministrativeMessage(msg);
+
+        return {
+          ...msg,
+          importance,
+          body_length: bodyLength,
+          recipients: msg.recipients || recipientsMap.get(msg.id) || 'Unknown',
+          excerpt,
+          created_relative: this.formatTimestamp(msg.created_ts),
+          created_full: this.formatTimestampFull(msg.created_ts),
+          read: false, // Static viewer doesn't track read state
+          isAdministrative,
+          message_category: isAdministrative ? 'admin' : 'user'
+        };
+      });
     },
 
-    getMessageRecipients(messageId) {
+    async loadMessageBodyById(id) {
+      const stmt = state.db.prepare(`SELECT COALESCE(body_md, '') AS body_md FROM messages WHERE id = ? LIMIT 1`);
+      try {
+        stmt.bind([id]);
+        if (stmt.step()) {
+          const row = stmt.getAsObject();
+          return row.body_md ?? '';
+        }
+        return '';
+      } finally {
+        stmt.free();
+      }
+    },
+
+    // Search across ALL messages using SQL: FTS when available, otherwise LIKE.
+    // Supports parentheses, NOT, quoted phrases, and OR with proper precedence (NOT > AND > OR).
+    searchDatabaseIds(query) {
+      if (!state.db) return new Set();
+      const raw = String(query || '').trim();
+      if (!raw) return new Set();
+
+      // 1) Tokenize: terms, quoted phrases, operators, parentheses
+      const tokens = [];
+      const re = /\s*(\(|\)|"([^"]*)"|AND|OR|NOT|\||[^\s()"]+)\s*/gi;
+      let m;
+      while ((m = re.exec(raw)) !== null) {
+        const full = m[1];
+        if (full === '(' || full === ')') {
+          tokens.push({ kind: full });
+        } else if (/^AND$/i.test(full)) {
+          tokens.push({ kind: 'op', value: 'AND' });
+        } else if (/^(OR|\|)$/i.test(full)) {
+          tokens.push({ kind: 'op', value: 'OR' });
+        } else if (/^NOT$/i.test(full)) {
+          tokens.push({ kind: 'op', value: 'NOT' });
+        } else if (m[2] != null) {
+          tokens.push({ kind: 'term', value: m[2] });
+        } else if (full && full.trim()) {
+          tokens.push({ kind: 'term', value: full.trim() });
+        }
+      }
+      if (tokens.length === 0) return new Set();
+
+      // 2) Shunting-yard → RPN with precedence: NOT(3) > AND(2) > OR(1)
+      const prec = { NOT: 3, AND: 2, OR: 1 };
+      const rightAssoc = { NOT: true };
+      const output = [];
+      const ops = [];
+      for (const t of tokens) {
+        if (t.kind === 'term') {
+          output.push(t);
+        } else if (t.kind === 'op') {
+          while (
+            ops.length > 0 && ops[ops.length - 1].kind === 'op' && (
+              (rightAssoc[t.value] !== true && prec[ops[ops.length - 1].value] >= prec[t.value]) ||
+              (rightAssoc[t.value] === true && prec[ops[ops.length - 1].value] > prec[t.value])
+            )
+          ) {
+            output.push(ops.pop());
+          }
+          ops.push(t);
+        } else if (t.kind === '(') {
+          ops.push(t);
+        } else if (t.kind === ')') {
+          while (ops.length > 0 && ops[ops.length - 1].kind !== '(') {
+            output.push(ops.pop());
+          }
+          if (ops.length > 0 && ops[ops.length - 1].kind === '(') ops.pop();
+        }
+      }
+      while (ops.length > 0) output.push(ops.pop());
+
+      // 3) Build AST from RPN
+      function buildAst(rpn) {
+        const stack = [];
+        for (const t of rpn) {
+          if (t.kind === 'term') {
+            stack.push({ type: 'term', value: t.value });
+          } else if (t.kind === 'op') {
+            if (t.value === 'NOT') {
+              const a = stack.pop();
+              stack.push({ type: 'not', child: a });
+            } else {
+              const b = stack.pop();
+              const a = stack.pop();
+              stack.push({ type: t.value.toLowerCase(), left: a, right: b });
+            }
+          }
+        }
+        return stack.pop() || null;
+      }
+      const ast = buildAst(output);
+      if (!ast) return new Set();
+
+      const ids = new Set();
+
+      // 4) Try FTS
+      const ftsQuote = (s) => `"${String(s).replace(/"/g, '"')}"`;
+      function buildFts(node) {
+        if (!node) return '';
+        switch (node.type) {
+          case 'term':
+            return /\s/.test(node.value) ? ftsQuote(node.value) : node.value;
+          case 'not':
+            return `(NOT ${buildFts(node.child)})`;
+          case 'and':
+            return `(${buildFts(node.left)} AND ${buildFts(node.right)})`;
+          case 'or':
+            return `(${buildFts(node.left)} OR ${buildFts(node.right)})`;
+        }
+        return '';
+      }
+
+      if (this.ftsEnabled) {
+        const ftsExpr = buildFts(ast).trim();
+        if (ftsExpr) {
+          const sql = `SELECT rowid AS id FROM fts_messages WHERE fts_messages MATCH ?`;
+          let stmt;
+          try {
+            explainQuery(state.db, sql, [ftsExpr], 'searchDatabaseIds (FTS)');
+            stmt = state.db.prepare(sql);
+            stmt.bind([ftsExpr]);
+            while (stmt.step()) {
+              const row = stmt.getAsObject();
+              if (row.id != null) ids.add(Number(row.id));
+            }
+          } catch (error) {
+            console.warn('[viewer] FTS search failed, falling back to LIKE', error);
+          } finally {
+            if (stmt) stmt.free();
+          }
+          if (ids.size > 0) return ids;
+        }
+      }
+
+      // 5) LIKE fallback
+      function buildLike(node, acc) {
+        switch (node.type) {
+          case 'term': {
+            const needle = `%${String(node.value).toLowerCase()}%`;
+            acc.sql.push('(subject_lower LIKE ? OR LOWER(COALESCE(body_md, "")) LIKE ?)');
+            acc.params.push(needle, needle);
+            break;
+          }
+          case 'not': {
+            const sub = { sql: [], params: [] };
+            buildLike(node.child, sub);
+            acc.sql.push(`NOT (${sub.sql.join(' ')})`);
+            acc.params.push(...sub.params);
+            break;
+          }
+          case 'and': {
+            const left = { sql: [], params: [] };
+            const right = { sql: [], params: [] };
+            buildLike(node.left, left);
+            buildLike(node.right, right);
+            acc.sql.push(`(${left.sql.join(' ')} AND ${right.sql.join(' ')})`);
+            acc.params.push(...left.params, ...right.params);
+            break;
+          }
+          case 'or': {
+            const left = { sql: [], params: [] };
+            const right = { sql: [], params: [] };
+            buildLike(node.left, left);
+            buildLike(node.right, right);
+            acc.sql.push(`(${left.sql.join(' ')} OR ${right.sql.join(' ')})`);
+            acc.params.push(...left.params, ...right.params);
+            break;
+          }
+        }
+      }
+
+      const acc = { sql: [], params: [] };
+      buildLike(ast, acc);
+      const likeSql = `SELECT id FROM messages WHERE ${acc.sql.join(' ')}`;
+      let likeStmt;
+      try {
+        explainQuery(state.db, likeSql, acc.params, 'searchDatabaseIds (LIKE)');
+        likeStmt = state.db.prepare(likeSql);
+        likeStmt.bind(acc.params);
+        while (likeStmt.step()) {
+          const row = likeStmt.getAsObject();
+          if (row.id != null) ids.add(Number(row.id));
+        }
+      } catch (error) {
+        console.error('[viewer] LIKE search failed', error);
+      } finally {
+        if (likeStmt) likeStmt.free();
+      }
+
+      return ids;
+    },
+
+    isAdministrativeMessage(msg) {
+      // Check if message is administrative (system notifications, errors, etc.)
+      const subject = (msg.subject || '').toLowerCase();
+      const sender = (msg.sender || '').toLowerCase();  // Use msg.sender (aliased in query)
+      const body = (msg.latest_snippet || '').toLowerCase();  // Use msg.latest_snippet (available in query)
+
+      // System message patterns
+      const adminPatterns = [
+        'system notification',
+        'error notification',
+        'build failed',
+        'deployment failed',
+        'ci/cd',
+        'automated message',
+      ];
+
+      // Check if sender is a system agent
+      const systemAgents = ['system', 'automation', 'bot', 'ci'];
+      const isSystemSender = systemAgents.some(agent => sender.includes(agent));
+
+      // Check subject and body for admin patterns
+      const hasAdminPattern = adminPatterns.some(pattern =>
+        subject.includes(pattern) || body.includes(pattern)
+      );
+
+      return isSystemSender || hasAdminPattern;
+    },
+
+    buildRecipientsMap() {
+      const map = new Map();
       const stmt = state.db.prepare(`
-        SELECT COALESCE(a.name, 'Unknown') AS recipient_name
+        SELECT
+          mr.message_id AS message_id,
+          COALESCE(a.name, 'Unknown') AS recipient_name
         FROM message_recipients mr
-        LEFT JOIN agents a ON a.id = mr.to_agent_id
-        WHERE mr.message_id = ?
-        ORDER BY recipient_name
+        LEFT JOIN agents a ON a.id = mr.agent_id
+        ORDER BY mr.message_id, recipient_name
       `);
 
-      const recipients = [];
       try {
-        stmt.bind([messageId]);
         while (stmt.step()) {
           const row = stmt.getAsObject();
-          recipients.push(row.recipient_name);
+          const messageId = Number(row.message_id);
+          const previous = map.get(messageId);
+          const recipient = row.recipient_name;
+          map.set(messageId, previous ? `${previous}, ${recipient}` : recipient);
         }
       } finally {
         stmt.free();
       }
 
-      return recipients.length > 0 ? recipients.join(', ') : 'Unknown';
+      return map;
     },
 
     buildThreadsForAlpine(rawThreads) {

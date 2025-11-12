@@ -366,9 +366,7 @@ class SlackClient:
         async with self._mappings_lock:
             self._thread_mappings[mcp_thread_id] = mapping
             self._reverse_thread_mappings[(slack_channel_id, slack_thread_ts)] = mcp_thread_id
-        logger.debug(
-            f"Mapped thread: MCP={mcp_thread_id} -> Slack={slack_channel_id}/{slack_thread_ts}"
-        )
+        logger.debug(f"Mapped thread: MCP={mcp_thread_id} -> Slack={slack_channel_id}/{slack_thread_ts}")
 
     async def get_slack_thread(self, mcp_thread_id: str) -> Optional[SlackThreadMapping]:
         """Get Slack thread mapping for an MCP thread ID.
@@ -430,11 +428,14 @@ class SlackClient:
 
             # Compute signature
             sig_basestring = f"v0:{timestamp}:{body.decode('utf-8')}"
-            expected_signature = "v0=" + hmac.new(
-                signing_secret.encode(),
-                sig_basestring.encode(),
-                hashlib.sha256,
-            ).hexdigest()
+            expected_signature = (
+                "v0="
+                + hmac.new(
+                    signing_secret.encode(),
+                    sig_basestring.encode(),
+                    hashlib.sha256,
+                ).hexdigest()
+            )
 
             return hmac.compare_digest(expected_signature, signature)
         except (ValueError, UnicodeDecodeError) as e:
@@ -485,14 +486,16 @@ def format_mcp_message_for_slack(
 
     # Header with importance indicator and subject
     header_text = f"{importance_emoji} {subject}"
-    blocks.append({
-        "type": "header",
-        "text": {
-            "type": "plain_text",
-            "text": header_text[:150],  # Slack header limit
-            "emoji": True,
-        },
-    })
+    blocks.append(
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": header_text[:150],  # Slack header limit
+                "emoji": True,
+            },
+        }
+    )
 
     # Metadata section
     metadata_fields = [
@@ -503,10 +506,12 @@ def format_mcp_message_for_slack(
     if message_id:
         metadata_fields.append({"type": "mrkdwn", "text": f"*Message ID:*\n`{message_id[:8]}`"})
 
-    blocks.append({
-        "type": "section",
-        "fields": metadata_fields,
-    })
+    blocks.append(
+        {
+            "type": "section",
+            "fields": metadata_fields,
+        }
+    )
 
     blocks.append({"type": "divider"})
 
@@ -515,13 +520,15 @@ def format_mcp_message_for_slack(
     if len(body_md) > 3000:
         body_text += "\n\n_...message truncated..._"
 
-    blocks.append({
-        "type": "section",
-        "text": {
-            "type": "mrkdwn",
-            "text": body_text,
-        },
-    })
+    blocks.append(
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": body_text,
+            },
+        }
+    )
 
     return (text, blocks)
 
@@ -598,9 +605,7 @@ async def notify_slack_message(
             if msg_ts and channel_id:
                 await client.map_thread(thread_id, channel_id, msg_ts)
 
-        logger.info(
-            f"Sent Slack notification for message {message_id[:8]} to channel {channel}"
-        )
+        logger.info(f"Sent Slack notification for message {message_id[:8]} to channel {channel}")
         return response
 
     except Exception as e:
@@ -711,7 +716,8 @@ async def handle_slack_message_event(
     # Extract @mentions for targeted delivery
     # Slack format: <@U1234567890|username> or <@U1234567890>
     import re
-    mention_pattern = r'<@([A-Z0-9]+)(?:\|[^>]+)?>'
+
+    mention_pattern = r"<@([A-Z0-9]+)(?:\|[^>]+)?>"
     mentioned_users = re.findall(mention_pattern, text)
 
     # Try to map Slack user to agent name (simplified - use display name)
@@ -725,16 +731,13 @@ async def handle_slack_message_event(
         mcp_thread_id = f"slack_{channel_id}_{thread_ts}"
 
     # Create subject from first line of text
-    subject_parts = text.split('\n', 1)
+    subject_parts = text.split("\n", 1)
     subject = subject_parts[0][:100] if subject_parts else "Message from Slack"
 
     # Clean up text (remove Slack formatting)
-    body_md = text.replace('<@', '@').replace('>', '')  # Basic cleanup
+    body_md = text.replace("<@", "@").replace(">", "")  # Basic cleanup
 
-    logger.info(
-        f"Creating MCP message from Slack: channel={channel_id}, "
-        f"user={user_id}, thread={mcp_thread_id}"
-    )
+    logger.info(f"Creating MCP message from Slack: channel={channel_id}, user={user_id}, thread={mcp_thread_id}")
 
     return {
         "sender_name": sender_name,

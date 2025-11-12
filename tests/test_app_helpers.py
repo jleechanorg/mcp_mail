@@ -30,7 +30,7 @@ def test_iso_and_parse_helpers():
     assert _parse_json_safely(raw) == {"a": 1}
     fenced = """```json\n{\n  \"x\": 2\n}\n```"""
     assert _parse_json_safely(fenced) == {"x": 2}
-    noisy = "xxx {\n \"y\": 3\n} yyy"
+    noisy = 'xxx {\n "y": 3\n} yyy'
     assert _parse_json_safely(noisy) == {"y": 3}
 
 

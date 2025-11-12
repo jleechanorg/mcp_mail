@@ -11,6 +11,7 @@ Usage:
     chmod +x scripts/test_rich_output.py
     ./scripts/test_rich_output.py
 """
+
 import sys
 from pathlib import Path
 
@@ -37,11 +38,7 @@ def test_basic_panel():
     print("Expected: Green double-bordered box with 'Hello World' inside\n")
 
     panel = Panel(
-        "Hello World",
-        title="[bold white]Test Panel[/bold white]",
-        border_style="green",
-        box=box.DOUBLE,
-        padding=(1, 2)
+        "Hello World", title="[bold white]Test Panel[/bold white]", border_style="green", box=box.DOUBLE, padding=(1, 2)
     )
     console.print(panel)
     console.print()

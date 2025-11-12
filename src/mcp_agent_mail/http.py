@@ -915,22 +915,16 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 signature = request.headers.get("X-Slack-Signature")
                 if not timestamp or not signature:
                     raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail="Missing Slack signature headers"
+                        status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing Slack signature headers"
                     )
 
                 # Use static verification method
                 from .slack_integration import SlackClient
+
                 if not SlackClient.verify_signature(
-                    settings.slack.signing_secret,
-                    str(timestamp),
-                    str(signature),
-                    body_bytes
+                    settings.slack.signing_secret, str(timestamp), str(signature), body_bytes
                 ):
-                    raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail="Invalid Slack signature"
-                    )
+                    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Slack signature")
             else:
                 # Strongly recommended in production; proceed for dev only
                 structlog.get_logger("slack").warning("slack_signing_secret_missing")
@@ -975,9 +969,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                 async with get_session() as session:
                                     # Try to find existing SlackBridge agent
                                     from sqlalchemy import select
-                                    result = await session.execute(
-                                        select(Agent).where(Agent.name == "SlackBridge")
-                                    )
+
+                                    result = await session.execute(select(Agent).where(Agent.name == "SlackBridge"))
                                     slack_agent = result.scalar_one_or_none()
 
                                     if not slack_agent:
@@ -1008,10 +1001,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                         select(Agent).where(Agent.is_active == True)  # noqa: E712
                                     )
                                     all_agents = result.scalars().all()
-                                    recipient_names = [
-                                        a.name for a in all_agents
-                                        if a.name != "SlackBridge"
-                                    ]
+                                    recipient_names = [a.name for a in all_agents if a.name != "SlackBridge"]
 
                                 if recipient_names:
                                     # Import send_message logic here to avoid circular import
@@ -1038,10 +1028,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             return JSONResponse({"ok": True})
 
         except json.JSONDecodeError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid JSON payload"
-            ) from None
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload") from None
         except HTTPException as exc:
             # Preserve intended status (e.g., 401/404)
             raise exc
@@ -1049,8 +1036,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             logger_err = structlog.get_logger("slack")
             logger_err.error("slack_webhook_error", error=str(exc))
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Internal server error"
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error"
             ) from exc
 
     # A minimal stateless ASGI adapter that does not rely on ASGI lifespan management
@@ -1300,9 +1286,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             payload = collect_lock_status(settings_local)
             return JSONResponse(payload)
 
-        async def _build_unified_inbox_payload(
-            *, limit: int = 500, include_projects: bool = True
-        ) -> dict[str, Any]:
+        async def _build_unified_inbox_payload(*, limit: int = 500, include_projects: bool = True) -> dict[str, Any]:
             """Fetch unified inbox data for HTML and JSON consumers."""
 
             safe_limit = max(1, min(int(limit), 1000))
@@ -1325,6 +1309,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                             m.id,
                             m.subject,
                             m.body_md,
+                            LENGTH(COALESCE(m.body_md, '')) AS body_length,
                             m.created_ts,
                             m.importance,
                             m.thread_id,
@@ -1356,13 +1341,15 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
                     for r in rows.fetchall():
                         body = r[2] or ""
-                        excerpt = body[:150].replace('#', '').replace('*', '').replace('`', '').strip()
-                        if len(body) > 150:
+                        raw_body_length = r[3]
+                        body_length = int(raw_body_length) if raw_body_length is not None else len(body)
+                        excerpt = body[:150].replace("#", "").replace("*", "").replace("`", "").strip()
+                        if body_length > 150:
                             excerpt += "..."
 
-                        created_ts = r[3]
+                        created_ts = r[4]
                         if isinstance(created_ts, str):
-                            created_dt = datetime.fromisoformat(created_ts.replace('Z', '+00:00'))
+                            created_dt = datetime.fromisoformat(created_ts.replace("Z", "+00:00"))
                         else:
                             created_dt = created_ts
 
@@ -1393,18 +1380,19 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                             {
                                 "id": r[0],
                                 "subject": r[1] or "(No subject)",
-                                "body_md": r[2] or "",
+                                "body_md": body,
+                                "body_length": body_length,
                                 "excerpt": excerpt,
-                                "created_ts": str(r[3]),
+                                "created_ts": str(r[4]),
                                 "created_full": created_dt.strftime("%B %d, %Y at %I:%M %p"),
                                 "created_relative": created_relative,
-                                "importance": r[4] or "normal",
-                                "thread_id": r[5],
-                                "sender": r[6],
-                                "project_slug": r[7],
-                                "project_name": r[8],
+                                "importance": r[5] or "normal",
+                                "thread_id": r[6],
+                                "sender": r[7],
+                                "project_slug": r[8],
+                                "project_name": r[9],
                                 "recipients": ", ".join(
-                                    part.strip() for part in (r[9] or "").split(",") if part.strip()
+                                    part.strip() for part in (r[10] or "").split(",") if part.strip()
                                 ),
                                 "read": False,
                             }
@@ -1902,7 +1890,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 if len(message_ids) > 500:
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Too many messages selected ({len(message_ids)}). Maximum is 500. Use 'Mark All Read' instead."
+                        detail=f"Too many messages selected ({len(message_ids)}). Maximum is 500. Use 'Mark All Read' instead.",
                     )
 
                 async with get_session() as session:
@@ -1934,7 +1922,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     now = datetime.now(timezone.utc)
 
                     # Use IN clause with parameter binding
-                    placeholders = ','.join([f':mid{i}' for i in range(len(message_ids))])
+                    placeholders = ",".join([f":mid{i}" for i in range(len(message_ids))])
                     params = {"aid": aid, "now": now}
                     params.update({f"mid{i}": mid for i, mid in enumerate(message_ids)})
 
@@ -1954,18 +1942,21 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
                     count = result.rowcount if result.rowcount is not None else 0
 
-                    return JSONResponse({
-                        "success": True,
-                        "marked_count": count,
-                        "requested_count": len(message_ids),
-                        "agent": agent,
-                        "project": prow[1],
-                    })
+                    return JSONResponse(
+                        {
+                            "success": True,
+                            "marked_count": count,
+                            "requested_count": len(message_ids),
+                            "agent": agent,
+                            "project": prow[1],
+                        }
+                    )
 
             except HTTPException:
                 raise
             except Exception as exc:
                 import traceback
+
                 traceback.print_exc()
                 raise HTTPException(status_code=500, detail=f"Failed to mark messages as read: {exc!s}") from exc
 
@@ -2017,17 +2008,20 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
                     count = result.rowcount if result.rowcount is not None else 0
 
-                    return JSONResponse({
-                        "success": True,
-                        "marked_count": count,
-                        "agent": agent,
-                        "project": prow[1],
-                    })
+                    return JSONResponse(
+                        {
+                            "success": True,
+                            "marked_count": count,
+                            "agent": agent,
+                            "project": prow[1],
+                        }
+                    )
 
             except HTTPException:
                 raise
             except Exception as exc:
                 import traceback
+
                 traceback.print_exc()
                 raise HTTPException(status_code=500, detail=f"Failed to mark messages as read: {exc!s}") from exc
 
@@ -2091,30 +2085,33 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     body_html = ""
                     if r[2]:  # body_md
                         body_html = markdown2.markdown(
-                            r[2],
-                            extras=["fenced-code-blocks", "tables", "strike", "cuddled-lists"]
+                            r[2], extras=["fenced-code-blocks", "tables", "strike", "cuddled-lists"]
                         )
                         body_html = _html_cleaner.clean(body_html)
 
-                    messages.append({
-                        "id": r[0],
-                        "subject": r[1],
-                        "body_md": r[2],
-                        "body_html": body_html,
-                        "sender": r[3],
-                        "created": str(r[4]),
-                        "importance": r[5],
-                        "thread_id": r[6],
-                    })
+                    messages.append(
+                        {
+                            "id": r[0],
+                            "subject": r[1],
+                            "body_md": r[2],
+                            "body_html": body_html,
+                            "sender": r[3],
+                            "created": str(r[4]),
+                            "importance": r[5],
+                            "thread_id": r[6],
+                        }
+                    )
 
                 if not messages:
                     return await _render(
                         "error.html",
-                        message=f"No messages found in thread '{thread_id}'. The thread may not exist or all messages may have been deleted."
+                        message=f"No messages found in thread '{thread_id}'. The thread may not exist or all messages may have been deleted.",
                     )
 
                 # Get unique subject (use first message's subject, with fallback)
-                thread_subject = messages[0]["subject"] if messages and messages[0]["subject"] else f"Thread {thread_id}"
+                thread_subject = (
+                    messages[0]["subject"] if messages and messages[0]["subject"] else f"Thread {thread_id}"
+                )
 
                 return await _render(
                     "mail_thread.html",
@@ -2242,7 +2239,11 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     }
                     for r in rows.fetchall()
                 ]
-            return await _render("mail_file_reservations.html", project={"slug": prow[1], "human_key": prow[2]}, file_reservations=file_reservations)
+            return await _render(
+                "mail_file_reservations.html",
+                project={"slug": prow[1], "human_key": prow[2]},
+                file_reservations=file_reservations,
+            )
 
         @fastapi_app.get("/mail/{project}/attachments", response_class=HTMLResponse)
         async def mail_attachments(project: str) -> HTMLResponse:
@@ -2292,15 +2293,12 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 # Get all agents for this project
                 pid = int(prow[0])
                 agent_rows = await session.execute(
-                    text("SELECT name FROM agents WHERE project_id = :pid ORDER BY name"),
-                    {"pid": pid}
+                    text("SELECT name FROM agents WHERE project_id = :pid ORDER BY name"), {"pid": pid}
                 )
                 agents = [{"name": r[0]} for r in agent_rows.fetchall()]
 
             return await _render(
-                "overseer_compose.html",
-                project={"slug": prow[1], "human_key": prow[2]},
-                agents=agents
+                "overseer_compose.html", project={"slug": prow[1], "human_key": prow[2]}, agents=agents
             )
 
         @fastapi_app.post("/mail/{project}/overseer/send")
@@ -2358,11 +2356,12 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     max_user_length = 50000 - preamble_length
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Message body too long ({len(body_md)} characters). Maximum is {max_user_length} characters to accommodate the overseer preamble ({preamble_length} characters)."
+                        detail=f"Message body too long ({len(body_md)} characters). Maximum is {max_user_length} characters to accommodate the overseer preamble ({preamble_length} characters).",
                     )
 
                 # Single atomic transaction for all database operations
                 from datetime import datetime, timezone
+
                 async with get_session() as session:
                     # Get project
                     prow = (
@@ -2384,7 +2383,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     overseer_row = (
                         await session.execute(
                             text("SELECT id, name FROM agents WHERE project_id = :pid AND name = :name"),
-                            {"pid": project_id, "name": overseer_name}
+                            {"pid": project_id, "name": overseer_name},
                         )
                     ).fetchone()
 
@@ -2429,7 +2428,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         overseer_row = (
                             await session.execute(
                                 text("SELECT id, name FROM agents WHERE project_id = :pid AND name = :name"),
-                                {"pid": project_id, "name": overseer_name}
+                                {"pid": project_id, "name": overseer_name},
                             )
                         ).fetchone()
 
@@ -2456,8 +2455,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                             "imp": "high",  # Always high importance for overseer
                             "tid": thread_id,
                             "ts": now,
-                            "ack": False
-                        }
+                            "ack": False,
+                        },
                     )
                     message_row = result.fetchone()
                     if not message_row:
@@ -2473,7 +2472,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     # Single query to get all valid recipient IDs
                     recipient_rows = await session.execute(
                         text(f"SELECT id, name FROM agents WHERE project_id = :pid AND name IN ({placeholders})"),
-                        params
+                        params,
                     )
                     recipient_map = {row[1]: row[0] for row in recipient_rows.fetchall()}  # name -> id mapping
 
@@ -2484,8 +2483,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     if valid_recipients:
                         # Prepare bulk insert params
                         insert_params = [
-                            {"mid": message_id, "aid": recipient_map[name], "kind": "to"}
-                            for name in valid_recipients
+                            {"mid": message_id, "aid": recipient_map[name], "kind": "to"} for name in valid_recipients
                         ]
                         # Use executemany for bulk insert
                         await session.execute(
@@ -2493,7 +2491,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                 INSERT INTO message_recipients (message_id, agent_id, kind)
                                 VALUES (:mid, :aid, :kind)
                             """),
-                            insert_params
+                            insert_params,
                         )
 
                     # If no valid recipients found, rollback and error
@@ -2501,11 +2499,12 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         await session.rollback()
                         raise HTTPException(
                             status_code=400,
-                            detail=f"None of the specified recipients exist in this project. Available agents can be seen at /mail/{project_slug}"
+                            detail=f"None of the specified recipients exist in this project. Available agents can be seen at /mail/{project_slug}",
                         )
 
                     # Write to Git archive BEFORE committing to database (for transaction consistency)
                     from .storage import ensure_archive, write_message_bundle
+
                     settings = get_settings()
                     archive = await ensure_archive(settings, project_slug)
 
@@ -2523,7 +2522,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         "importance": "high",
                         "ack_required": False,
                         "created": now.isoformat(),
-                        "attachments": []
+                        "attachments": [],
                     }
 
                     try:
@@ -2535,36 +2534,37 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                             overseer_name,
                             valid_recipients,
                             extra_paths=None,
-                            commit_text=f"Human Overseer message: {subject}"
+                            commit_text=f"Human Overseer message: {subject}",
                         )
                     except Exception as git_error:
                         # Rollback database transaction if Git write fails
                         await session.rollback()
                         raise HTTPException(
-                            status_code=500,
-                            detail=f"Failed to write message to Git archive: {git_error!s}"
+                            status_code=500, detail=f"Failed to write message to Git archive: {git_error!s}"
                         ) from git_error
 
                     # Update HumanOverseer activity timestamp (after successful Git write, before commit)
                     await session.execute(
-                        text("UPDATE agents SET last_active_ts = :ts WHERE id = :id"),
-                        {"ts": now, "id": overseer_id}
+                        text("UPDATE agents SET last_active_ts = :ts WHERE id = :id"), {"ts": now, "id": overseer_id}
                     )
 
                     # Commit all changes atomically: agent creation/update + message + recipients
                     await session.commit()
 
-                return JSONResponse({
-                    "success": True,
-                    "message_id": message_id,
-                    "recipients": valid_recipients,
-                    "sent_at": now.isoformat()
-                })
+                return JSONResponse(
+                    {
+                        "success": True,
+                        "message_id": message_id,
+                        "recipients": valid_recipients,
+                        "sent_at": now.isoformat(),
+                    }
+                )
 
             except HTTPException:
                 raise
             except Exception as e:
                 import traceback
+
                 traceback.print_exc()
                 raise HTTPException(status_code=500, detail=f"Failed to send message: {e!s}") from e
 
@@ -2619,7 +2619,9 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     # Estimate size with timeout (run blocking 'du' in a worker thread)
                     import asyncio as _asyncio
                     import subprocess as _subprocess
+
                     try:
+
                         def _run_du():
                             return _subprocess.run(
                                 ["du", "-sh", str(repo_root)],
@@ -2832,8 +2834,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             async with get_session() as session:
                 # Get project ID
                 proj_result = await session.execute(
-                    text("SELECT id FROM projects WHERE slug = :k OR human_key = :k"),
-                    {"k": project}
+                    text("SELECT id FROM projects WHERE slug = :k OR human_key = :k"), {"k": project}
                 )
                 prow = proj_result.fetchone()
                 if not prow:
@@ -2841,8 +2842,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
                 # Get agents for this project
                 agents_result = await session.execute(
-                    text("SELECT name FROM agents WHERE project_id = :pid ORDER BY name"),
-                    {"pid": prow[0]}
+                    text("SELECT name FROM agents WHERE project_id = :pid ORDER BY name"), {"pid": prow[0]}
                 )
                 agents = [r[0] for r in agents_result.fetchall()]
 
@@ -2871,7 +2871,9 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
             # Validate timestamp format (basic ISO 8601 check)
             if not timestamp or not re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}", timestamp):
-                raise HTTPException(status_code=400, detail="Invalid timestamp format. Use ISO 8601 format (YYYY-MM-DDTHH:MM)")
+                raise HTTPException(
+                    status_code=400, detail="Invalid timestamp format. Use ISO 8601 format (YYYY-MM-DDTHH:MM)"
+                )
 
             try:
                 # Get project archive
@@ -2886,20 +2888,17 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             except Exception as e:
                 # Log error but return empty result rather than failing
                 structlog.get_logger("archive").warning(
-                    "time_travel_failed",
-                    project=project,
-                    agent=agent,
-                    timestamp=timestamp,
-                    error=str(e)
+                    "time_travel_failed", project=project, agent=agent, timestamp=timestamp, error=str(e)
                 )
-                return JSONResponse({
-                    "messages": [],
-                    "snapshot_time": None,
-                    "commit_sha": None,
-                    "requested_time": timestamp,
-                    "error": f"Unable to retrieve historical snapshot: {e!s}"
-                })
-
+                return JSONResponse(
+                    {
+                        "messages": [],
+                        "snapshot_time": None,
+                        "commit_sha": None,
+                        "requested_time": timestamp,
+                        "error": f"Unable to retrieve historical snapshot: {e!s}",
+                    }
+                )
 
     try:
         _register_mail_ui()

@@ -96,7 +96,7 @@ XSS_VECTORS = {
         "javascript:/*--></title></style></textarea></script></xmp>"
         "<svg/onload='+/\"/+/onmouseover=1/+/[*/[]/+alert(1)//'>",
         "';alert(String.fromCharCode(88,83,83))//';alert(String.fromCharCode(88,83,83))//\";"
-        "alert(String.fromCharCode(88,83,83))//\";alert(String.fromCharCode(88,83,83))//--",
+        'alert(String.fromCharCode(88,83,83))//";alert(String.fromCharCode(88,83,83))//--',
         "'\"><img src=x onerror=alert(1)>//",
     ],
     "null_byte_injection": [
