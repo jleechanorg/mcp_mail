@@ -60,28 +60,26 @@ Custom slash commands are available in the git submodule at `claude-commands/.cl
 
 ### Using Commands
 
-**Method 1: Command Runner Script (Recommended)**
+**These are markdown instruction files for Claude to read and execute**, not standalone scripts.
 
-When the SlashCommand tool doesn't dynamically discover commands, use the `run-claude-command.sh` wrapper:
+**Method 1: Read and Execute (Primary Method)**
 
-```bash
-# List all available commands
-./run-claude-command.sh
+When the user requests a command (e.g., "run /list" or "use /status"), Claude agents should:
 
-# Run a specific command
-./run-claude-command.sh <command-name> [args...]
+1. Read the command file:
+   ```
+   Read: claude-commands/.claude/commands/<command-name>.md
+   ```
 
-# Examples
-./run-claude-command.sh list
-./run-claude-command.sh status
-./run-claude-command.sh push
-```
+2. Parse the instructions in the markdown file
 
-The script automatically:
-- Discovers commands from the submodule
-- Executes Python-based commands directly
-- Shows preview of prompt-based commands
-- Displays command descriptions
+3. Execute the steps described in the command
+
+Example workflow:
+- User says: "run /list"
+- Claude reads: `claude-commands/.claude/commands/list.md`
+- Claude follows the execution instructions in that file
+- Result: The command's workflow is executed
 
 **Method 2: Direct Slash Command (If Available)**
 
@@ -91,12 +89,13 @@ If the environment supports dynamic slash command discovery:
 /command-name [args]
 ```
 
-**Method 3: Manual Execution**
+**Method 3: Discover Available Commands**
 
-Read the command file and follow its instructions:
+Use the helper script to see what commands are available:
 
 ```bash
-cat claude-commands/.claude/commands/<command-name>.md
+# List all available commands
+./run-claude-command.sh
 ```
 
 ### Available Commands
