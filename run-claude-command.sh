@@ -18,7 +18,6 @@ fi
 
 COMMAND_NAME="$1"
 shift
-COMMAND_ARGS="$@"
 
 # Look for command in submodule
 COMMAND_FILE="claude-commands/.claude/commands/${COMMAND_NAME}.md"
@@ -45,7 +44,7 @@ COMMAND_SCRIPT="claude-commands/.claude/commands/${COMMAND_NAME}.py"
 
 if [ -f "${COMMAND_SCRIPT}" ]; then
     echo "🐍 Executing Python script: ${COMMAND_SCRIPT}"
-    python3 "${COMMAND_SCRIPT}" ${COMMAND_ARGS}
+    python3 "${COMMAND_SCRIPT}" "$@"
 else
     echo "📖 This is a prompt-based command."
     echo "📄 Read the full command with: cat ${COMMAND_FILE}"

@@ -196,11 +196,14 @@ For any missing tool/command, agents should:
 ### Common Tools Available via npm
 
 - **gh** - GitHub CLI for repository operations
-- **jq** - JSON processor for parsing API responses
 - **http-server** - Simple static file server
 - **nodemon** - Auto-restart utility for development
 - **typescript** - TypeScript compiler
 - **eslint** - JavaScript/TypeScript linter
+
+### Common Tools Installed via System Package Managers
+
+- **jq** - JSON processor for parsing API responses (install via `apt`, `brew`, or download precompiled binaries)
 
 ### Example: Auto-install pattern
 
