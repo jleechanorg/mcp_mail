@@ -6,3 +6,7 @@
 # Temporary files
 *.tmp
 .lock
+
+# Test artifacts
+.gitattributes
+projects/
