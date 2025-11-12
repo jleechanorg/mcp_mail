@@ -2472,6 +2472,7 @@ CORE_TOOLS = {
     "reply_message",
     "fetch_inbox",
     "mark_message_read",
+    "search_mailbox",
 }
 
 # Extended tools (~16k tokens): Advanced features available via meta-tools
@@ -4291,9 +4292,10 @@ def build_mcp_server() -> FastMCP:
                 recipient_alias = aliased(Agent)
 
                 # Fetch agent filter object if specified (for later filtering)
+                # Use global agent lookup since agent names are globally unique
                 agent_filter_obj = None
                 if agent_filter:
-                    agent_filter_obj = await _get_agent(project, agent_filter)
+                    agent_filter_obj = await _get_agent_by_name(agent_filter)
 
                 messages_stmt = (
                     select(
