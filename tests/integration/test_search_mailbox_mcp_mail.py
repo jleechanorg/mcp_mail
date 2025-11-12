@@ -23,7 +23,8 @@ from mcp_agent_mail.db import ensure_schema, reset_database_state
 def extract_results(result):
     """Helper to extract results from fastmcp CallToolResult."""
     if hasattr(result, "content") and result.content and len(result.content) > 0 and hasattr(result.content[0], "text"):
-        return json.loads(result.content[0].text)
+        data = json.loads(result.content[0].text)
+        return data.get("result", [])
     return []
 
 

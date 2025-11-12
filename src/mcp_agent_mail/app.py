@@ -4377,7 +4377,13 @@ def build_mcp_server() -> FastMCP:
                     f"Found {len(results)} messages matching query '{query}' "
                     f"({sum(1 for r in results if r['in_global_inbox'])} in global inbox)"
                 )
-                return results
+
+                try:
+                    from fastmcp.tools.tool import ToolResult  # type: ignore
+
+                    return ToolResult(structured_content={"result": results})
+                except Exception:
+                    return results
 
         except Exception as exc:
             _rich_error_panel("search_mailbox", {"error": str(exc)})
