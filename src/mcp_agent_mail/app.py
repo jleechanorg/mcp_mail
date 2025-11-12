@@ -1976,7 +1976,7 @@ async def _find_mentions_in_global_inbox(
             if since_dt:
                 stmt = stmt.where(Message.created_ts > since_dt)
 
-        # Apply limit after all WHERE clauses to ensure correct SQL query structure
+        # Apply limit after all filters for clarity and maintainability
         stmt = stmt.limit(limit)
 
         # Execute with agent name as parameter (escaped for FTS5)
@@ -2027,7 +2027,7 @@ async def _list_inbox_basic(
             since_dt = _parse_iso(since_ts)
             if since_dt:
                 stmt = stmt.where(Message.created_ts > since_dt)
-        # Apply limit after all WHERE clauses to ensure correct SQL query structure
+        # Apply limit after all filters for clarity and maintainability
         stmt = stmt.limit(limit)
         result = await session.execute(stmt)
         rows = result.all()
@@ -2058,7 +2058,7 @@ async def _list_outbox(
             since_dt = _parse_iso(since_ts)
             if since_dt:
                 stmt = stmt.where(Message.created_ts > since_dt)
-        # Apply limit after all WHERE clauses to ensure correct SQL query structure
+        # Apply limit after all filters for clarity and maintainability
         stmt = stmt.limit(limit)
         result = await session.execute(stmt)
         message_rows = result.scalars().all()

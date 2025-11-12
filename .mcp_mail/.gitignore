@@ -7,6 +7,7 @@
 *.tmp
 .lock
 
-# Test artifacts
+# Test artifacts (runtime generated files, not project configuration)
+# Note: This .gitattributes is a test artifact, not the project's Git configuration
 .gitattributes
 projects/
