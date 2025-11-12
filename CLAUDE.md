@@ -79,6 +79,66 @@ Example GitHub Actions workflow:
 
 **Note**: The token is already configured and ready to use. No additional setup is required.
 
+## Installing Required Tools
+
+If you encounter missing tools or commands during your work, install them using npm when possible:
+
+### GitHub CLI (gh)
+
+If `gh` is not available, install it via npm:
+
+```bash
+npm install -g gh
+```
+
+Verify installation:
+```bash
+gh --version
+```
+
+### General Tool Installation Pattern
+
+For any missing tool/command, agents should:
+
+1. **Check if the tool exists**:
+   ```bash
+   command -v <tool-name> || which <tool-name>
+   ```
+
+2. **Install via npm if available**:
+   ```bash
+   npm install -g <tool-name>
+   ```
+
+3. **Verify the installation**:
+   ```bash
+   <tool-name> --version
+   ```
+
+### Common Tools Available via npm
+
+- **gh** - GitHub CLI for repository operations
+- **jq** - JSON processor for parsing API responses
+- **http-server** - Simple static file server
+- **nodemon** - Auto-restart utility for development
+- **typescript** - TypeScript compiler
+- **eslint** - JavaScript/TypeScript linter
+
+### Example: Auto-install pattern
+
+```bash
+# Check and install gh if missing
+if ! command -v gh &> /dev/null; then
+    echo "Installing gh CLI..."
+    npm install -g gh
+fi
+
+# Use the tool
+gh pr list
+```
+
+**Note**: Always verify tool availability before use and install dependencies proactively to avoid workflow interruptions.
+
 ## PR Responsibility Model
 
 When working on pull requests, understand that **PRs own all regressions versus `origin/main`**, regardless of which commit in the PR introduced them.
