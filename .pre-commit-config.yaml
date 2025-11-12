@@ -48,13 +48,13 @@ repos:
         pass_filenames: false  # Check all files
         stages: [pre-commit]
 
-      # Full codebase ruff check (runs on merge commits and manual runs)
+      # Full codebase ruff check (runs on every commit including merges)
       - id: ruff-check-all-strict
         name: Ruff check all files (strict - catches merge issues)
         entry: bash -c 'uv run ruff check --output-format=github'
         language: system
         pass_filenames: false  # Always check all files
-        stages: [pre-commit, merge-commit, manual]
+        stages: [pre-commit, post-merge, manual]
         verbose: true
 
       # Run fast unit tests (not integration tests to keep it fast)
