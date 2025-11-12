@@ -62,12 +62,12 @@ Custom slash commands are available in the git submodule at `claude-commands/.cl
 
 **These are markdown instruction files for Claude to read and execute**, not standalone scripts.
 
-**Method 1: Read and Execute (Primary Method)**
+### Method 1: Read and Execute (Primary Method)
 
 When the user requests a command (e.g., "run /list" or "use /status"), Claude agents should:
 
 1. Read the command file:
-   ```
+   ```markdown
    Read: claude-commands/.claude/commands/<command-name>.md
    ```
 
@@ -81,7 +81,7 @@ Example workflow:
 - Claude follows the execution instructions in that file
 - Result: The command's workflow is executed
 
-**Method 2: Direct Slash Command (If Available)**
+### Method 2: Direct Slash Command (If Available)
 
 If the environment supports dynamic slash command discovery:
 
@@ -89,7 +89,7 @@ If the environment supports dynamic slash command discovery:
 /command-name [args]
 ```
 
-**Method 3: Discover Available Commands**
+### Method 3: Discover Available Commands
 
 Use the helper script to see what commands are available:
 
@@ -164,7 +164,7 @@ curl -sL https://github.com/cli/cli/releases/download/v2.40.1/gh_2.40.1_linux_am
 - Latest version from GitHub releases
 - Works immediately with GITHUB_TOKEN environment variable
 
-**Alternative: npm installation**
+#### Alternative: npm installation
 
 If you prefer npm or need a globally installed version:
 
@@ -195,12 +195,14 @@ For any missing tool/command, agents should:
 
 ### Common Tools Available via npm
 
-- **gh** - GitHub CLI for repository operations
-- **jq** - JSON processor for parsing API responses
 - **http-server** - Simple static file server
 - **nodemon** - Auto-restart utility for development
 - **typescript** - TypeScript compiler
 - **eslint** - JavaScript/TypeScript linter
+
+### Common Tools Installed via System Package Managers
+
+- **jq** - JSON processor for parsing API responses (install via `apt`, `brew`, or download precompiled binaries)
 
 ### Example: Auto-install pattern
 
