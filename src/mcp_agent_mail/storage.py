@@ -53,8 +53,8 @@ class AsyncFileLock:
         self,
         path: Path,
         *,
-        timeout_seconds: float = 60.0,
-        stale_timeout_seconds: float = 180.0,
+        timeout_seconds: float = 120.0,  # Increased from 60 to 120 seconds
+        stale_timeout_seconds: float = 300.0,  # Increased from 180 to 300 seconds
     ) -> None:
         self._path = Path(path)
         self._lock = SoftFileLock(str(self._path))
@@ -199,7 +199,7 @@ class AsyncFileLock:
 
 
 @asynccontextmanager
-async def archive_write_lock(archive: ProjectArchive, *, timeout_seconds: float = 60.0):
+async def archive_write_lock(archive: ProjectArchive, *, timeout_seconds: float = 120.0):
     """Context manager for safely mutating archive surfaces."""
 
     lock = AsyncFileLock(archive.lock_path, timeout_seconds=timeout_seconds)

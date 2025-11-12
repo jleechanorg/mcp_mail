@@ -741,16 +741,15 @@ send_message(
 
 **MCP Agent Mail** is a sophisticated multi-agent coordination platform that bridges the gap between autonomous agents and human oversight. Its strengths are:
 
-✅ **Async-first design** - Non-blocking, scalable messaging  
-✅ **Git-backed auditing** - Human-readable history + blame  
-✅ **Lazy loading** - 60% token savings for simple workflows  
-✅ **Flexible deployment** - Containerized, PyPI package, or local dev  
-✅ **Production-grade** - Type-safe, tested, secured  
-✅ **Agent-agnostic** - Works with any MCP-compatible tool (Claude Code, Codex, etc.)  
+✅ **Async-first design** - Non-blocking, scalable messaging
+✅ **Git-backed auditing** - Human-readable history + blame
+✅ **Lazy loading** - 60% token savings for simple workflows
+✅ **Flexible deployment** - Containerized, PyPI package, or local dev
+✅ **Production-grade** - Type-safe, tested, secured
+✅ **Agent-agnostic** - Works with any MCP-compatible tool (Claude Code, Codex, etc.)
 
 The codebase is well-structured, thoroughly tested, and actively maintained. It's suitable for:
 - Multi-repo backend/frontend coordination
 - Microservice development with multiple specialized agents
 - Research projects requiring agent collaboration
 - Enterprise deployment with audit requirements
-
