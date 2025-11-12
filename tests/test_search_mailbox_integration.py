@@ -412,7 +412,9 @@ async def test_search_across_long_conversation_history(isolated_env):
 
         # Should find authentication message
         assert len(results) >= 1, "Should find at least 1 authentication message"
-        assert any("authentication" in msg["subject"].lower() or "authentication" in msg["body_md"].lower() for msg in results)
+        assert any(
+            "authentication" in msg["subject"].lower() or "authentication" in msg["body_md"].lower() for msg in results
+        )
 
 
 @pytest.mark.asyncio
@@ -519,8 +521,5 @@ async def test_search_respects_agent_filter_in_multi_agent_project(isolated_env)
 
         for msg in bob_results:
             assert (
-                msg["from"] == "Bob" or
-                "Bob" in msg["to"] or
-                "Bob" in msg.get("cc", []) or
-                "Bob" in msg.get("bcc", [])
+                msg["from"] == "Bob" or "Bob" in msg["to"] or "Bob" in msg.get("cc", []) or "Bob" in msg.get("bcc", [])
             ), "Bob should be involved in all filtered results"

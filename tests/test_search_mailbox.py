@@ -464,6 +464,4 @@ async def test_search_mailbox_limit(isolated_env):
 
         results = _extract_result(search_result)
         assert len(results) == 5, "Should return only 5 results due to limit"
-        assert all(
-            "body_md" not in msg for msg in results
-        ), "Bodies should be omitted when include_bodies=False"
+        assert all("body_md" not in msg for msg in results), "Bodies should be omitted when include_bodies=False"

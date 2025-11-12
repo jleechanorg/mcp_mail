@@ -137,12 +137,16 @@ def update_message_metadata(repo_path: Path, msg_id: str, metadata: dict) -> boo
 
 def mark_message_deleted(repo_path: Path, msg_id: str) -> bool:
     """Mark a message as deleted by adding a metadata flag."""
-    return update_message_metadata(repo_path, msg_id, {"deleted": True, "deleted_at": datetime.now(timezone.utc).isoformat()})
+    return update_message_metadata(
+        repo_path, msg_id, {"deleted": True, "deleted_at": datetime.now(timezone.utc).isoformat()}
+    )
 
 
 def archive_message(repo_path: Path, msg_id: str) -> bool:
     """Archive a message by moving it to an archive section."""
-    return update_message_metadata(repo_path, msg_id, {"archived": True, "archived_at": datetime.now(timezone.utc).isoformat()})
+    return update_message_metadata(
+        repo_path, msg_id, {"archived": True, "archived_at": datetime.now(timezone.utc).isoformat()}
+    )
 
 
 # === CREATE Tests ===
@@ -345,8 +349,12 @@ async def test_read_messages_by_thread(mcp_mail_repo):
     """Test reading messages filtered by thread."""
     root_id = write_message(mcp_mail_repo, {"to": {"agent": "recipient"}, "subject": "Root", "body": "Root message"})
 
-    write_message(mcp_mail_repo, {"to": {"agent": "sender"}, "subject": "Reply 1", "body": "First reply", "threadId": root_id})
-    write_message(mcp_mail_repo, {"to": {"agent": "recipient"}, "subject": "Reply 2", "body": "Second reply", "threadId": root_id})
+    write_message(
+        mcp_mail_repo, {"to": {"agent": "sender"}, "subject": "Reply 1", "body": "First reply", "threadId": root_id}
+    )
+    write_message(
+        mcp_mail_repo, {"to": {"agent": "recipient"}, "subject": "Reply 2", "body": "Second reply", "threadId": root_id}
+    )
     write_message(mcp_mail_repo, {"to": {"agent": "other"}, "subject": "Unrelated", "body": "Different thread"})
 
     messages = read_messages(mcp_mail_repo)
@@ -419,7 +427,9 @@ async def test_update_message_metadata(mcp_mail_repo):
     )
 
     # Update metadata
-    success = update_message_metadata(mcp_mail_repo, msg_id, {"read": True, "read_at": datetime.now(timezone.utc).isoformat()})
+    success = update_message_metadata(
+        mcp_mail_repo, msg_id, {"read": True, "read_at": datetime.now(timezone.utc).isoformat()}
+    )
     assert success
 
     # Verify update
@@ -527,9 +537,13 @@ async def test_archive_message(mcp_mail_repo):
 async def test_filter_active_messages(mcp_mail_repo):
     """Test filtering out deleted and archived messages."""
     # Create various messages
-    active_id = write_message(mcp_mail_repo, {"to": {"agent": "recipient"}, "subject": "Active", "body": "Active message"})
+    active_id = write_message(
+        mcp_mail_repo, {"to": {"agent": "recipient"}, "subject": "Active", "body": "Active message"}
+    )
     deleted_id = write_message(mcp_mail_repo, {"to": {"agent": "recipient"}, "subject": "Deleted", "body": "To delete"})
-    archived_id = write_message(mcp_mail_repo, {"to": {"agent": "recipient"}, "subject": "Archived", "body": "To archive"})
+    archived_id = write_message(
+        mcp_mail_repo, {"to": {"agent": "recipient"}, "subject": "Archived", "body": "To archive"}
+    )
 
     # Mark as deleted and archived
     mark_message_deleted(mcp_mail_repo, deleted_id)
@@ -538,9 +552,7 @@ async def test_filter_active_messages(mcp_mail_repo):
     # Filter active messages (not deleted, not archived)
     messages = read_messages(mcp_mail_repo)
     active_messages = [
-        m for m in messages
-        if not m.get("metadata", {}).get("deleted")
-        and not m.get("metadata", {}).get("archived")
+        m for m in messages if not m.get("metadata", {}).get("deleted") and not m.get("metadata", {}).get("archived")
     ]
 
     assert len(active_messages) == 1

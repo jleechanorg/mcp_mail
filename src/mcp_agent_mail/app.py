@@ -4224,15 +4224,18 @@ def build_mcp_server() -> FastMCP:
         if get_settings().tools_log_enabled:
             try:
                 import importlib as _imp
+
                 _rc = _imp.import_module("rich.console")
                 _rp = _imp.import_module("rich.panel")
                 Console = _rc.Console
                 Panel = _rp.Panel
-                Console().print(Panel.fit(
-                    f"project={project_key}\nquery={query}\nagent_filter={agent_filter}\nlimit={limit}",
-                    title="tool: search_mailbox",
-                    border_style="green"
-                ))
+                Console().print(
+                    Panel.fit(
+                        f"project={project_key}\nquery={query}\nagent_filter={agent_filter}\nlimit={limit}",
+                        title="tool: search_mailbox",
+                        border_style="green",
+                    )
+                )
             except Exception:
                 # Logging with rich is best-effort; skip failures to avoid interfering with tool behavior.
                 pass
@@ -4269,9 +4272,7 @@ def build_mcp_server() -> FastMCP:
                         {"project_id": project.id, "query": fts_query, "limit": fts_limit},
                     )
                 except SQLAlchemyError as exc:
-                    await ctx.error(
-                        "Invalid search query. Please check your search syntax and try again."
-                    )
+                    await ctx.error("Invalid search query. Please check your search syntax and try again.")
                     logger.warning("FTS5 query error for %r: %s", query, exc)
                     return []
 
@@ -4300,7 +4301,7 @@ def build_mcp_server() -> FastMCP:
                         sender_alias.name.label("sender_name"),
                         MessageRecipient.kind,
                         recipient_alias.name.label("recipient_name"),
-                        recipient_alias.id.label("recipient_id")
+                        recipient_alias.id.label("recipient_id"),
                     )
                     .join(sender_alias, Message.sender_id == sender_alias.id)
                     .join(MessageRecipient, MessageRecipient.message_id == Message.id)
@@ -4353,9 +4354,9 @@ def build_mcp_server() -> FastMCP:
                         # Check if agent is involved (sender or in any recipient list)
                         is_sender = msg["from"] == agent_filter_obj.name
                         is_recipient = (
-                            agent_filter_obj.name in msg["to"] or
-                            agent_filter_obj.name in msg.get("cc", []) or
-                            agent_filter_obj.name in msg.get("bcc", [])
+                            agent_filter_obj.name in msg["to"]
+                            or agent_filter_obj.name in msg.get("cc", [])
+                            or agent_filter_obj.name in msg.get("bcc", [])
                         )
                         if is_sender or is_recipient:
                             filtered_results.append(msg)
