@@ -795,10 +795,10 @@ mcp = FastMCP.from_openapi(
     route_maps=[
         # Rule 1: GET requests with path params (e.g., /users/{id}) become ResourceTemplates
         RouteMap(methods=["GET"], pattern=r".*\{.*\}.*", mcp_type=MCPType.RESOURCE_TEMPLATE),
-        
+
         # Rule 2: All other GET requests become Resources
         RouteMap(methods=["GET"], mcp_type=MCPType.RESOURCE),
-        
+
         # Rule 3: Exclude all admin endpoints
         RouteMap(pattern=r"^/admin/.*", mcp_type=MCPType.EXCLUDE),
     ]
@@ -892,10 +892,10 @@ from fastmcp.server.auth import BearerAuthProvider
 auth_provider = BearerAuthProvider(
     # Use a JWKS URI for key rotation in production
     jwks_uri="https://my-auth-server.com/.well-known/jwks.json",
-    
+
     # Or a static public key for simpler setups
     # public_key="-----BEGIN PUBLIC KEY-----...",
-    
+
     # Validate claims
     issuer="https://my-auth-server.com/",
     audience="my-mcp-service-audience"
@@ -914,7 +914,7 @@ from fastmcp.server.dependencies import get_access_token, AccessToken
 def get_user_info() -> dict:
     # This will fail if the request is not authenticated
     token: AccessToken = get_access_token()
-    
+
     return {
         "user_id": token.client_id, # 'sub' or 'client_id' claim
         "scopes": token.scopes,
@@ -1196,7 +1196,7 @@ mcp = FastMCP()
 def inspect_request() -> dict:
     # Safely get headers
     headers = get_http_headers()
-    
+
     # Get the full request object (will raise error on non-HTTP transport)
     try:
         request: Request = get_http_request()
@@ -1416,7 +1416,7 @@ import asyncio
 async def main():
     # Configure the FastMCP client to connect to your server (local or remote)
     mcp_client = Client("my_dice_server.py") # or "https://..."
-    
+
     genai.configure(api_key="YOUR_GEMINI_API_KEY")
     model = genai.GenerativeModel('gemini-pro')
 
@@ -1509,14 +1509,14 @@ sequenceDiagram
     Client->>TransportLayer: JSON-RPC Request `{"jsonrpc": "2.0", "method": "tools/call", ...}`
     TransportLayer->>FastMCPServer: Delivers parsed MCP Message
     FastMCPServer->>MiddlewareChain: `process_request(message)`
-    
+
     MiddlewareChain->>MiddlewareChain: Middleware 1 (`on_message`, `on_request`, `on_call_tool`)
     MiddlewareChain->>MiddlewareChain: ...
     MiddlewareChain->>MiddlewareChain: Middleware N (`on_message`, `on_request`, `on_call_tool`)
-    
+
     MiddlewareChain->>ToolManager: `_mcp_call_tool(name, args)`
     ToolManager->>ToolManager: Look up tool by name (local, mounted, proxy)
-    
+
     alt Tool Found
         ToolManager->>ContextInjection: Prepare Context object
         ContextInjection->>PydanticValidation: Validate/coerce client args against tool signature
@@ -1528,11 +1528,11 @@ sequenceDiagram
     else Tool Not Found
         ToolManager-->>MiddlewareChain: Raise `ToolError("Unknown tool")`
     end
-    
+
     MiddlewareChain->>MiddlewareChain: Middleware N (post-processing)
     MiddlewareChain->>MiddlewareChain: ...
     MiddlewareChain->>MiddlewareChain: Middleware 1 (post-processing)
-    
+
     MiddlewareChain-->>FastMCPServer: Final `ToolResult` or `McpError`
     FastMCPServer->>TransportLayer: Serialize to JSON-RPC Response
     TransportLayer-->>Client: JSON-RPC Response `{"jsonrpc": "2.0", "result": ..., "id": ...}`
@@ -1604,7 +1604,7 @@ def create_crm_lead(lead_data: CreateLeadRequest) -> LeadCreationResponse:
         next_action = "Add to nurturing campaign."
 
     new_lead_id = uuid.uuid4()
-    
+
     return LeadCreationResponse(
         lead_id=new_lead_id,
         full_name=f"{lead_data.first_name} {lead_data.last_name}",
@@ -1693,7 +1693,7 @@ class JwtAuthorizationMiddleware(Middleware):
     async def on_request(self, context: MiddlewareContext, call_next):
         # This hook runs for all requests that expect a response.
         # It's a good place for authentication.
-        
+
         headers = get_http_headers()
         token = self.get_token_from_headers(headers)
 
@@ -1705,7 +1705,7 @@ class JwtAuthorizationMiddleware(Middleware):
             # Attach the decoded token payload to the context for downstream use.
             # Note: This requires a custom context subclass or careful state management.
             # For this example, we'll just validate and proceed.
-            
+
             # Example: check if token has a required scope for all operations
             if "mcp:access" not in payload.get("scope", []):
                 raise McpError.from_code(ErrorCodes.INVALID_REQUEST, "Missing required 'mcp:access' scope.")
@@ -1714,7 +1714,7 @@ class JwtAuthorizationMiddleware(Middleware):
             raise McpError.from_code(ErrorCodes.INVALID_REQUEST, "Token has expired.")
         except jwt.InvalidTokenError as e:
             raise McpError.from_code(ErrorCodes.INVALID_REQUEST, f"Invalid token: {e}")
-        
+
         return await call_next(context)
 
     async def on_call_tool(self, context: MiddlewareContext, call_next):
@@ -1729,13 +1729,13 @@ class JwtAuthorizationMiddleware(Middleware):
                     headers = get_http_headers()
                     token = self.get_token_from_headers(headers)
                     payload = jwt.decode(token, PUBLIC_KEY, algorithms=[JWT_ALGORITHM], options={"verify_signature": False})
-                    
+
                     if required_scope not in payload.get("scope", []):
                         raise McpError.from_code(ErrorCodes.INVALID_REQUEST, f"Tool requires scope: '{required_scope}'")
             except Exception:
                 # Let the call proceed; if the tool doesn't exist, it will fail naturally.
                 pass
-        
+
         return await call_next(context)
 
 mcp = FastMCP(name="Auth Middleware Demo")
@@ -1775,7 +1775,7 @@ class CachingMiddleware(Middleware):
     async def on_read_resource(self, context: MiddlewareContext, call_next):
         # Caching is most effective for read-only resource operations.
         resource_uri = context.message.uri
-        
+
         # Check if the resource is marked as cacheable via a tag
         is_cacheable = False
         if context.fastmcp_context:
@@ -1786,7 +1786,7 @@ class CachingMiddleware(Middleware):
                     is_cacheable = True
             except Exception:
                 pass # Resource not found, let it fail normally
-        
+
         if not is_cacheable:
             return await call_next(context)
 
@@ -1795,16 +1795,16 @@ class CachingMiddleware(Middleware):
         if cached_result is not None:
             print(f"Cache HIT for resource: {resource_uri}")
             return cached_result
-        
+
         print(f"Cache MISS for resource: {resource_uri}")
         # If not in cache, proceed with the actual call
         result = await call_next(context)
-        
+
         # Store the successful result in the cache
         # We check for errors to avoid caching failure responses
         if not isinstance(result, McpError):
             self.cache.set(resource_uri, result)
-            
+
         return result
 
 mcp = FastMCP(name="Caching Middleware Demo")
@@ -1869,7 +1869,7 @@ async def setup_and_run():
     # The proxy will use an in-memory client to connect to our simulated remote server.
     # In a real scenario, this would be a URL e.g., ProxyClient("http://legacy.api/mcp").
     remote_proxy = FastMCP.as_proxy(
-        ProxyClient(remote_legacy_server), 
+        ProxyClient(remote_legacy_server),
         name="LegacyProxy"
     )
 
@@ -2180,7 +2180,7 @@ class RbacMiddleware(Middleware):
         auth_header = headers.get("authorization", "")
         if not auth_header.lower().startswith("bearer "):
             raise McpError.from_code(ErrorCodes.INVALID_REQUEST, "Missing Bearer token.")
-        
+
         token = auth_header[7:]
         try:
             payload = jwt.decode(token, PUBLIC_KEY, algorithms=["RS256"])
@@ -2195,7 +2195,7 @@ class RbacMiddleware(Middleware):
 
         try:
             tool = await context.fastmcp_context.fastmcp.get_tool(context.message.name)
-            
+
             # Tools can be tagged with a comma-separated list of required roles
             required_roles_str = tool.tags.get("roles")
             if not required_roles_str:
@@ -2203,13 +2203,13 @@ class RbacMiddleware(Middleware):
                 return await call_next(context)
 
             required_roles = set(role.strip() for role in required_roles_str.split(','))
-            
+
             # Get user roles from the JWT 'sub' claim
             claims = self.get_claims(context)
             user_id = claims.get("sub")
             if not user_id:
                 raise McpError.from_code(ErrorCodes.INVALID_REQUEST, "Token missing 'sub' claim.")
-            
+
             user_roles = set(USER_ROLES.get(user_id, []))
 
             # Check for intersection
@@ -2221,7 +2221,7 @@ class RbacMiddleware(Middleware):
         except Exception:
             # If tool doesn't exist, etc., let it fail normally downstream
             pass
-        
+
         return await call_next(context)
 
 mcp = FastMCP(name="RBAC Demo")
@@ -2291,13 +2291,13 @@ Gunicorn acts as a process manager that can spawn multiple Uvicorn worker proces
     ```python
     # my_production_server.py
     from fastmcp import FastMCP
-    
+
     mcp = FastMCP(...)
     # ... tool definitions ...
-    
+
     # Expose the ASGI app object for Gunicorn
     app = mcp.http_app()
-    
+
     # The if __name__ == "__main__" block is for local dev, not production
     if __name__ == "__main__":
         mcp.run(transport="http")
@@ -2339,7 +2339,7 @@ class RedisCachingMiddleware(Middleware):
 
     async def on_read_resource(self, context: MiddlewareContext, call_next):
         uri = context.message.uri
-        
+
         # Check for a 'cacheable' tag on the resource
         is_cacheable = False
         if context.fastmcp_context:
@@ -2359,15 +2359,15 @@ class RedisCachingMiddleware(Middleware):
             # The result is stored as JSON, we need to deserialize it.
             # NOTE: This is a simplified example. A real implementation would need to
             # handle the complex structure of MCP responses.
-            return json.loads(cached_val) 
-        
+            return json.loads(cached_val)
+
         print(f"Redis Cache MISS for: {uri}")
         result = await call_next(context)
-        
+
         # Store in Redis
         # NOTE: This is a simplified serialization.
         await self.redis.set(uri, json.dumps(result), ex=self.ttl)
-        
+
         return result
 
 # --- Server Setup ---
@@ -2559,7 +2559,7 @@ mcp = FastMCP.from_openapi(
 # The generated 'getUserById' tool has a cryptic 'uid' parameter. Let's fix that.
 try:
     get_user_tool = mcp.get_tool("getUserById")
-    
+
     # Create a more user-friendly version of the tool
     transformed_get_user_tool = Tool.from_tool(
         get_user_tool,
@@ -2572,7 +2572,7 @@ try:
             )
         }
     )
-    
+
     # Add the new tool and disable the original
     mcp.add_tool(transformed_get_user_tool)
     get_user_tool.disable()
@@ -2686,7 +2686,7 @@ def get_user_with_orders(user_id: int) -> dict:
     # This demonstrates that the main server can interact with its mounted components.
     user_data = user_service.get_tool("get_user").fn(user_id=user_id)
     order_data = order_service.get_resource("orders://user/{user_id}").fn(user_id=user_id)
-    
+
     return {"user": user_data, "orders": order_data}
 
 # Expose for ASGI deployment
@@ -2743,10 +2743,10 @@ def admin_tool(mcp_instance: FastMCP):
     def decorator(fn):
         # Use the standard @mcp.tool decorator internally
         tool_obj = mcp_instance.tool(fn)
-        
+
         # Add the custom tag
         tool_obj.tags.add("admin")
-        
+
         return tool_obj
     return decorator
 

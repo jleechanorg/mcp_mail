@@ -1,14 +1,15 @@
 #!/bin/bash
-# Setup git hooks for the repository
+# Setup git hooks for the repository using pre-commit framework
 
 set -e
 
 # Colors for output
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-echo -e "${YELLOW}Setting up git hooks...${NC}"
+echo -e "${YELLOW}Setting up git hooks with pre-commit framework...${NC}"
 
 # Get the repository root
 REPO_ROOT="$(git rev-parse --show-toplevel)"
@@ -19,21 +20,40 @@ if [ ! -d "$REPO_ROOT/.git" ]; then
     exit 1
 fi
 
-# Create hooks directory if it doesn't exist
-mkdir -p "$REPO_ROOT/.git/hooks"
-
-# Install pre-commit hook
-if [ -f "$REPO_ROOT/.githooks/pre-commit" ]; then
-    cp "$REPO_ROOT/.githooks/pre-commit" "$REPO_ROOT/.git/hooks/pre-commit"
-    chmod +x "$REPO_ROOT/.git/hooks/pre-commit"
-    echo -e "${GREEN}✓ Installed pre-commit hook${NC}"
+# Check if pre-commit is installed
+if ! command -v pre-commit &> /dev/null; then
+    echo -e "${YELLOW}pre-commit not found. Installing via uv...${NC}"
+    uv tool install pre-commit
+    echo -e "${GREEN}✓ Installed pre-commit framework${NC}"
 else
-    echo "Warning: .githooks/pre-commit not found"
+    echo -e "${BLUE}pre-commit is already installed${NC}"
 fi
 
+# Install pre-commit hooks
+echo -e "${YELLOW}Installing pre-commit hooks...${NC}"
+cd "$REPO_ROOT"
+pre-commit install
+pre-commit install --hook-type pre-push
+
+echo -e "${GREEN}✓ Pre-commit hooks installed successfully${NC}"
+echo ""
 echo -e "${GREEN}Git hooks setup complete!${NC}"
 echo ""
 echo "The following hooks are now active:"
-echo "  - pre-commit: Runs ruff and type checks before each commit"
+echo "  ${BLUE}pre-commit:${NC}"
+echo "    • Ruff linter (auto-fix enabled)"
+echo "    • Trailing whitespace fixer"
+echo "    • End-of-file fixer"
+echo "    • YAML/JSON syntax checks"
+echo "    • Large file detection"
+echo "    • Merge conflict detection"
+echo "    • Type checking with ty"
+echo "    • Fast unit tests"
 echo ""
-echo "To skip hooks for a specific commit, use: git commit --no-verify"
+echo "  ${BLUE}pre-push:${NC}"
+echo "    • Integration tests"
+echo ""
+echo "To skip hooks for a specific commit: ${YELLOW}git commit --no-verify${NC}"
+echo "To run hooks manually: ${YELLOW}pre-commit run --all-files${NC}"
+echo ""
+echo "Configuration is in ${BLUE}.pre-commit-config.yaml${NC}"

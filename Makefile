@@ -25,5 +25,3 @@ guard-uninstall:
 
 claims:
 	$(CLI) claims list --active-only $(ACTIVE) $(PROJECT)
-
-

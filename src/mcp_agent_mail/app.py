@@ -23,15 +23,6 @@ from urllib.parse import parse_qsl
 from fastmcp import Context, FastMCP
 from git import Repo
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
-
-try:
-    from pathspec import PathSpec  # type: ignore[import-not-found]
-    from pathspec.patterns.gitwildmatch import GitWildMatchPattern  # type: ignore[import-not-found]
-except Exception:  # pragma: no cover - optional dependency fallback
-    PathSpec = None  # type: ignore[assignment]
-    GitWildMatchPattern = None  # type: ignore[assignment]
-import contextlib
-
 from sqlalchemy import asc, delete, desc, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, NoResultFound
 from sqlalchemy.orm import aliased
@@ -41,14 +32,7 @@ from .config import Settings, get_settings
 from .db import ensure_schema, get_session, init_engine
 from .guard import install_guard as install_guard_script, uninstall_guard as uninstall_guard_script
 from .llm import complete_system_user
-from .models import (
-    Agent,
-    FileReservation,
-    Message,
-    MessageRecipient,
-    Project,
-    ProjectSiblingSuggestion,
-)
+from .models import Agent, FileReservation, Message, MessageRecipient, Project, ProjectSiblingSuggestion
 from .storage import (
     ProjectArchive,
     archive_write_lock,
@@ -77,7 +61,6 @@ CLUSTER_MESSAGING = "messaging"
 CLUSTER_SEARCH = "search"
 CLUSTER_FILE_RESERVATIONS = "file_reservations"
 CLUSTER_MACROS = "workflow_macros"
-CLUSTER_BUILD_SLOTS = "build_slots"
 
 
 # Global inbox configuration
@@ -392,7 +375,7 @@ def _split_slug_and_query(raw_value: str) -> tuple[str, dict[str, str]]:
     slug, _, query_string = raw_value.partition("?")
     if not query_string:
         return slug, {}
-    params = cast(dict[str, str], dict(parse_qsl(query_string, keep_blank_values=True)))
+    params = dict(parse_qsl(query_string, keep_blank_values=True))
     return slug, params
 
 
@@ -783,7 +766,7 @@ def _canonical_project_pair(a_id: int, b_id: int) -> tuple[int, int]:
 
 
 @asynccontextmanager
-async def _archive_write_lock(archive: ProjectArchive, *, timeout_seconds: float = 60.0):
+async def _archive_write_lock(archive: ProjectArchive, *, timeout_seconds: float = 120.0):
     try:
         async with archive_write_lock(archive, timeout_seconds=timeout_seconds):
             yield
@@ -1925,39 +1908,19 @@ async def _list_inbox(
     messages = await _list_inbox_basic(agent, limit, urgent_only, include_bodies, since_ts)
     message_ids_in_inbox = {msg["id"] for msg in messages}
 
-    # Scan global inbox for messages mentioning this agent
+    # Scan global inbox for messages mentioning this agent using FTS5 (much faster than regex)
     try:
         global_inbox_agent = await _get_agent_by_name(global_inbox_name)
-        global_inbox_messages = await _list_inbox_basic(
-            global_inbox_agent,
-            limit=100,  # Scan more messages to find mentions
-            urgent_only=False,
-            include_bodies=True,  # Need bodies to check for mentions
+        # Use FTS5-based mention search - only fetches messages that actually mention the agent
+        # This is significantly faster than the old approach which loaded 100 messages with bodies
+        mentioned_messages = await _find_mentions_in_global_inbox(
+            agent_name=agent.name,
+            global_inbox_agent=global_inbox_agent,
+            exclude_message_ids=message_ids_in_inbox,
+            include_bodies=include_bodies,
             since_ts=since_ts,
+            limit=30,  # Reduced from 100 - FTS5 query is precise, doesn't need to over-fetch
         )
-
-        # Filter for messages that mention the agent (word-boundary aware, case-insensitive)
-        import re
-
-        # Use word boundaries to avoid false positives (e.g., "Al" matching "Alice")
-        agent_name_pattern = re.compile(r"\b" + re.escape(agent.name) + r"\b", re.IGNORECASE)
-        mentioned_messages = []
-        for msg in global_inbox_messages:
-            # Skip if already in regular inbox
-            if msg["id"] in message_ids_in_inbox:
-                continue
-
-            # Check if agent name appears as a complete word in subject or body
-            subject = msg.get("subject", "")
-            body = msg.get("body_md", "")
-
-            if agent_name_pattern.search(subject) or agent_name_pattern.search(body):
-                # Mark as from global inbox mention scan
-                msg["source"] = "global_inbox_mention"
-                # Don't include body unless requested
-                if not include_bodies:
-                    msg.pop("body_md", None)
-                mentioned_messages.append(msg)
 
         # Merge with regular inbox, respecting the limit
         messages.extend(mentioned_messages)
@@ -1966,6 +1929,70 @@ async def _list_inbox(
     except Exception:
         # If global inbox doesn't exist or there's an error, just return regular inbox
         pass
+
+    return messages
+
+
+async def _find_mentions_in_global_inbox(
+    agent_name: str,
+    global_inbox_agent: Agent,
+    exclude_message_ids: set[str],
+    include_bodies: bool,
+    since_ts: Optional[str],
+    limit: int = 30,
+) -> list[dict[str, Any]]:
+    """Use FTS5 to efficiently find messages mentioning the agent in global inbox.
+
+    This is much faster than loading all messages and doing regex in Python.
+    """
+    if global_inbox_agent.id is None:
+        return []
+
+    await ensure_schema()
+    sender_alias = aliased(Agent)
+
+    async with get_session() as session:
+        # Use FTS5 MATCH query for fast full-text search
+        # FTS5 query: agent_name will match complete tokens (words) due to tokenization
+        # This is similar to word boundary matching but faster
+        stmt = (
+            select(Message, MessageRecipient.kind, sender_alias.name)
+            .join(MessageRecipient, MessageRecipient.message_id == Message.id)
+            .join(sender_alias, Message.sender_id == sender_alias.id)
+            .join(
+                # Join with FTS5 virtual table
+                text("fts_messages ON messages.id = fts_messages.rowid")
+            )
+            .where(
+                MessageRecipient.agent_id == global_inbox_agent.id,
+                # FTS5 MATCH query - searches subject and body for the agent name
+                text("fts_messages MATCH :agent_name"),
+            )
+            .order_by(desc(Message.created_ts))
+            .limit(limit)
+        )
+
+        if since_ts:
+            since_dt = _parse_iso(since_ts)
+            if since_dt:
+                stmt = stmt.where(Message.created_ts > since_dt)
+
+        # Execute with agent name as parameter (escaped for FTS5)
+        # FTS5 tokenizes on word boundaries, so this effectively does word matching
+        result = await session.execute(stmt, {"agent_name": f'"{agent_name}"'})
+        rows = result.all()
+
+    messages: list[dict[str, Any]] = []
+    for message, recipient_kind, sender_name in rows:
+        # Skip if already in regular inbox
+        if message.id in exclude_message_ids:
+            continue
+
+        payload = _message_to_dict(message, include_body=include_bodies)
+        payload["from"] = sender_name
+        payload["kind"] = recipient_kind
+        payload["source"] = "global_inbox_mention"
+        messages.append(payload)
 
     return messages
 
@@ -2031,28 +2058,31 @@ async def _list_outbox(
         result = await session.execute(stmt)
         message_rows = result.scalars().all()
 
-        # For each message, collect recipients grouped by kind
-        for msg in message_rows:
-            recs = await session.execute(
-                select(MessageRecipient.kind, Agent.name)
+        # Batch load all recipients for all messages in a single query (avoids N+1)
+        message_ids = [msg.id for msg in message_rows]
+        if message_ids:
+            recipients_result = await session.execute(
+                select(MessageRecipient.message_id, MessageRecipient.kind, Agent.name)
                 .join(Agent, MessageRecipient.agent_id == Agent.id)
-                .where(MessageRecipient.message_id == msg.id)
+                .where(MessageRecipient.message_id.in_(message_ids))
             )
-            to_list: list[str] = []
-            cc_list: list[str] = []
-            bcc_list: list[str] = []
-            for kind, name in recs.all():
-                if kind == "to":
-                    to_list.append(name)
-                elif kind == "cc":
-                    cc_list.append(name)
-                elif kind == "bcc":
-                    bcc_list.append(name)
+            # Group recipients by message_id
+            recipients_by_message: dict[str, dict[str, list[str]]] = {}
+            for msg_id, kind, name in recipients_result.all():
+                if msg_id not in recipients_by_message:
+                    recipients_by_message[msg_id] = {"to": [], "cc": [], "bcc": []}
+                recipients_by_message[msg_id][kind].append(name)
+        else:
+            recipients_by_message = {}
+
+        # Build message payloads with pre-loaded recipients
+        for msg in message_rows:
+            recipients = recipients_by_message.get(msg.id, {"to": [], "cc": [], "bcc": []})
             payload = _message_to_dict(msg, include_body=include_bodies)
             payload["from"] = agent.name
-            payload["to"] = to_list
-            payload["cc"] = cc_list
-            payload["bcc"] = bcc_list
+            payload["to"] = recipients["to"]
+            payload["cc"] = recipients["cc"]
+            payload["bcc"] = recipients["bcc"]
             messages.append(payload)
     return messages
 
@@ -5236,180 +5266,6 @@ def build_mcp_server() -> FastMCP:
                 await write_file_reservation_record(archive, payload)
         await ctx.info(f"Renewed {len(updated)} file_reservation(s) for '{agent.name}'.")
         return {"renewed": len(updated), "file_reservations": updated}
-
-    # --- Build slots (coarse concurrency control) --------------------------------------------
-
-    def _safe_component(value: str) -> str:
-        # Keep it simple and dependency-free: replace common problematic filesystem chars
-        safe = value.strip()
-        for ch in ("/", "\\", ":", "*", "?", '"', "<", ">", "|", " "):
-            safe = safe.replace(ch, "_")
-        return safe or "unknown"
-
-    def _slot_dir(archive: ProjectArchive, slot: str) -> Path:
-        safe = _safe_component(slot)
-        return archive.root / "build_slots" / safe
-
-    def _compute_branch(path: str) -> Optional[str]:
-        try:
-            repo = Repo(path, search_parent_directories=True)
-            try:
-                return repo.active_branch.name
-            except Exception:
-                return repo.git.rev_parse("--abbrev-ref", "HEAD").strip()
-        except Exception:
-            return None
-
-    def _read_active_slots(slot_path: Path, now: datetime) -> list[dict[str, Any]]:
-        results: list[dict[str, Any]] = []
-        if not slot_path.exists():
-            return results
-        for f in slot_path.glob("*.json"):
-            try:
-                data = json.loads(f.read_text(encoding="utf-8"))
-                exp = data.get("expires_ts")
-                if exp:
-                    try:
-                        if datetime.fromisoformat(exp) <= now:
-                            continue
-                    except Exception:
-                        pass
-                results.append(data)
-            except Exception:
-                continue
-        return results
-
-    @mcp.tool(name="acquire_build_slot")
-    @_instrument_tool(
-        "acquire_build_slot",
-        cluster=CLUSTER_BUILD_SLOTS,
-        capabilities={"build"},
-        project_arg="project_key",
-        agent_arg="agent_name",
-    )
-    async def acquire_build_slot(
-        ctx: Context,
-        project_key: str,
-        agent_name: str,
-        slot: str,
-        ttl_seconds: int = 3600,
-        exclusive: bool = True,
-    ) -> dict[str, Any]:
-        """
-        Acquire a build slot (advisory), optionally exclusive. Returns conflicts when another holder is active.
-        """
-        if not settings.worktrees_enabled:
-            await ctx.info("Build slots are disabled (WORKTREES_ENABLED=0).")
-            return {"granted": None, "conflicts": [], "disabled": True}
-        project = await _get_project_by_identifier(project_key)
-        archive = await ensure_archive(settings, project.slug)
-        now = datetime.now(timezone.utc)
-        slot_path = _slot_dir(archive, slot)
-        await asyncio.to_thread(slot_path.mkdir, parents=True, exist_ok=True)
-        active = _read_active_slots(slot_path, now)
-
-        branch = _compute_branch(project.human_key)
-        holder_id = _safe_component(f"{agent_name}__{branch or 'unknown'}")
-        lease_path = slot_path / f"{holder_id}.json"
-
-        conflicts: list[dict[str, Any]] = []
-        if exclusive:
-            for entry in active:
-                if entry.get("agent") == agent_name and entry.get("branch") == branch:
-                    continue
-                if entry.get("exclusive", True):
-                    conflicts.append(entry)
-        payload = {
-            "slot": slot,
-            "agent": agent_name,
-            "branch": branch,
-            "exclusive": exclusive,
-            "acquired_ts": _iso(now),
-            "expires_ts": _iso(now + timedelta(seconds=max(ttl_seconds, 60))),
-        }
-        with contextlib.suppress(Exception):
-            await asyncio.to_thread(lease_path.write_text, json.dumps(payload, indent=2), "utf-8")
-        if conflicts:
-            await ctx.info(f"Build slot conflicts for '{slot}': {len(conflicts)}")
-        return {"granted": payload, "conflicts": conflicts}
-
-    @mcp.tool(name="renew_build_slot")
-    @_instrument_tool(
-        "renew_build_slot",
-        cluster=CLUSTER_BUILD_SLOTS,
-        capabilities={"build"},
-        project_arg="project_key",
-        agent_arg="agent_name",
-    )
-    async def renew_build_slot(
-        ctx: Context,
-        project_key: str,
-        agent_name: str,
-        slot: str,
-        extend_seconds: int = 1800,
-    ) -> dict[str, Any]:
-        """
-        Extend expiry for an existing build slot lease. No-op if missing.
-        """
-        if not settings.worktrees_enabled:
-            await ctx.info("Build slots are disabled (WORKTREES_ENABLED=0).")
-            return {"renewed": False, "expires_ts": None, "disabled": True}
-        project = await _get_project_by_identifier(project_key)
-        archive = await ensure_archive(settings, project.slug)
-        now = datetime.now(timezone.utc)
-        slot_path = _slot_dir(archive, slot)
-        branch = _compute_branch(project.human_key)
-        holder_id = _safe_component(f"{agent_name}__{branch or 'unknown'}")
-        lease_path = slot_path / f"{holder_id}.json"
-        try:
-            current = json.loads(lease_path.read_text(encoding="utf-8"))
-        except Exception:
-            current = {}
-        new_exp = _iso(now + timedelta(seconds=max(extend_seconds, 60)))
-        current.update({"slot": slot, "agent": agent_name, "branch": branch, "expires_ts": new_exp})
-        with contextlib.suppress(Exception):
-            await asyncio.to_thread(lease_path.write_text, json.dumps(current, indent=2), "utf-8")
-        return {"renewed": True, "expires_ts": new_exp}
-
-    @mcp.tool(name="release_build_slot")
-    @_instrument_tool(
-        "release_build_slot",
-        cluster=CLUSTER_BUILD_SLOTS,
-        capabilities={"build"},
-        project_arg="project_key",
-        agent_arg="agent_name",
-    )
-    async def release_build_slot(
-        ctx: Context,
-        project_key: str,
-        agent_name: str,
-        slot: str,
-    ) -> dict[str, Any]:
-        """
-        Mark an active slot lease as released (non-destructive; keeps JSON with released_ts).
-        """
-        if not settings.worktrees_enabled:
-            await ctx.info("Build slots are disabled (WORKTREES_ENABLED=0).")
-            return {"released": False, "released_at": _iso(datetime.now(timezone.utc)), "disabled": True}
-        project = await _get_project_by_identifier(project_key)
-        archive = await ensure_archive(settings, project.slug)
-        now = datetime.now(timezone.utc)
-        slot_path = _slot_dir(archive, slot)
-        await asyncio.to_thread(slot_path.mkdir, parents=True, exist_ok=True)
-        branch = _compute_branch(project.human_key)
-        holder_id = _safe_component(f"{agent_name}__{branch or 'unknown'}")
-        lease_path = slot_path / f"{holder_id}.json"
-        released = False
-        try:
-            data = {}
-            if lease_path.exists():
-                data = json.loads(lease_path.read_text(encoding="utf-8"))
-            data.update({"released_ts": _iso(now), "expires_ts": _iso(now)})
-            await asyncio.to_thread(lease_path.write_text, json.dumps(data, indent=2), "utf-8")
-            released = True
-        except Exception:
-            released = False
-        return {"released": released, "released_at": _iso(now)}
 
     @mcp.resource("resource://config/environment", mime_type="application/json")
     def environment_resource() -> dict[str, Any]:
