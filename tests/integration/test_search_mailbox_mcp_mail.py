@@ -10,7 +10,6 @@ Tests the search_mailbox tool with the default .mcp_mail/ storage backend to ens
 from __future__ import annotations
 
 import asyncio
-import json
 
 import pytest
 from fastmcp import Client
@@ -22,9 +21,10 @@ from mcp_agent_mail.db import ensure_schema, reset_database_state
 
 def extract_results(result):
     """Helper to extract results from fastmcp CallToolResult."""
-    if hasattr(result, "content") and result.content and len(result.content) > 0 and hasattr(result.content[0], "text"):
-        data = json.loads(result.content[0].text)
-        return data.get("result", [])
+    if hasattr(result, "structured_content") and result.structured_content:
+        return result.structured_content.get("result", result.data if hasattr(result, "data") else [])
+    if hasattr(result, "data"):
+        return result.data
     return []
 
 
