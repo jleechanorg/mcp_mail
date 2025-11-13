@@ -79,6 +79,23 @@ Example GitHub Actions workflow:
 
 **Note**: The token is already configured and ready to use. No additional setup is required.
 
+### Installing gh CLI if not available
+
+If the `gh` CLI is not installed on the system, download and use the precompiled binary directly from GitHub releases:
+
+```bash
+# Download and extract the precompiled binary
+curl -sL https://github.com/cli/cli/releases/download/v2.40.1/gh_2.40.1_linux_amd64.tar.gz | tar -xz -C /tmp
+
+# Use the binary directly from the extracted location
+/tmp/gh_2.40.1_linux_amd64/bin/gh --version
+
+# Authenticate using the existing GitHub token
+/tmp/gh_2.40.1_linux_amd64/bin/gh auth status
+```
+
+The binary can be used directly without installation by referencing the full path `/tmp/gh_2.40.1_linux_amd64/bin/gh`. The `GITHUB_TOKEN` environment variable will be automatically recognized for authentication.
+
 ## PR Responsibility Model
 
 When working on pull requests, understand that **PRs own all regressions versus `origin/main`**, regardless of which commit in the PR introduced them.
