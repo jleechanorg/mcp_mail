@@ -8,7 +8,6 @@ This script contains corrected test implementations:
 """
 
 import asyncio
-import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +19,19 @@ from mcp_agent_mail.app import build_mcp_server
 from fastmcp import Client
 
 PROJECT_KEY = "fixed_manual_test_project"
+MESSAGE_PROCESSING_DELAY = 0.5  # Allow server to index/process newly sent messages
+TIMESTAMP_SEPARATION_DELAY = 1.0  # Ensure clear separation between first and second batches
+
+
+def extract_result_list(result):
+    """Return the result list from either structured_content or data."""
+    if hasattr(result, "structured_content") and result.structured_content:
+        structured = result.structured_content.get("result")
+        if isinstance(structured, list):
+            return structured
+    if hasattr(result, "data") and isinstance(result.data, list):
+        return result.data
+    return []
 
 
 class TestResults:
@@ -98,7 +110,7 @@ async def test_1_2_agent_filter_FIXED(client, results):
                 "body_md": f"Testing content from Bob {i+1}"
             })
 
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(MESSAGE_PROCESSING_DELAY)
 
         # Search with Alice filter
         # CORRECTED EXPECTATION: Alice is involved in 5 messages:
@@ -111,14 +123,7 @@ async def test_1_2_agent_filter_FIXED(client, results):
             "limit": 10
         })
 
-        if hasattr(result, 'structured_content') and result.structured_content:
-            alice_results = result.structured_content.get("result", [])
-        elif hasattr(result, 'data'):
-            alice_results = result.data if isinstance(result.data, list) else []
-        else:
-            alice_results = []
-
-        alice_count = len(alice_results)
+        alice_count = len(extract_result_list(result))
 
         # Search with Bob filter
         # CORRECTED EXPECTATION: Bob is involved in 5 messages:
@@ -131,20 +136,19 @@ async def test_1_2_agent_filter_FIXED(client, results):
             "limit": 10
         })
 
-        if hasattr(result, 'structured_content') and result.structured_content:
-            bob_results = result.structured_content.get("result", [])
-        elif hasattr(result, 'data'):
-            bob_results = result.data if isinstance(result.data, list) else []
-        else:
-            bob_results = []
-
-        bob_count = len(bob_results)
+        bob_count = len(extract_result_list(result))
 
         # CORRECTED VALIDATION: Both should have 5 messages (sender OR recipient)
         if alice_count == 5 and bob_count == 5:
-            results.add_result(test_id, test_name, "PASS",
-                             f"Agent filtering works correctly (Alice: {alice_count}, Bob: {bob_count}) - "
-                             f"returns messages where agent is sender OR recipient")
+            results.add_result(
+                test_id,
+                test_name,
+                "PASS",
+                (
+                    f"Agent filtering works correctly (Alice: {alice_count}, Bob: {bob_count}) - "
+                    f"returns messages where agent is sender OR recipient"
+                )
+            )
         else:
             results.add_result(test_id, test_name, "FAIL",
                              f"Expected 5 for both Alice and Bob, got Alice: {alice_count}, Bob: {bob_count}")
@@ -183,10 +187,10 @@ async def test_2_1_since_ts_FIXED(client, results):
             })
 
         # FIXED: Capture T0 AFTER first batch
-        await asyncio.sleep(1)
+        await asyncio.sleep(TIMESTAMP_SEPARATION_DELAY)
         t0 = datetime.now(timezone.utc)
         print(f"Captured T0: {t0.isoformat()}")
-        await asyncio.sleep(1)
+        await asyncio.sleep(TIMESTAMP_SEPARATION_DELAY)
 
         # Send second batch AFTER T0
         print("Sending second batch (5 messages)...")
@@ -207,7 +211,7 @@ async def test_2_1_since_ts_FIXED(client, results):
             "include_bodies": False
         })
 
-        inbox_no_filter = result.data if hasattr(result, 'data') else []
+        inbox_no_filter = extract_result_list(result)
         print(f"Without filter: {len(inbox_no_filter)} messages")
 
         if len(inbox_no_filter) != 8:
@@ -225,13 +229,19 @@ async def test_2_1_since_ts_FIXED(client, results):
             "include_bodies": False
         })
 
-        inbox_after_t0 = result.data if hasattr(result, 'data') else []
+        inbox_after_t0 = extract_result_list(result)
         print(f"After T0: {len(inbox_after_t0)} messages")
 
         if len(inbox_after_t0) == 5:
-            results.add_result(test_id, test_name, "PASS",
-                             f"since_ts filter works correctly (verifies limit applied AFTER filter): "
-                             f"Got {len(inbox_after_t0)} messages from second batch")
+            results.add_result(
+                test_id,
+                test_name,
+                "PASS",
+                (
+                    "since_ts filter works correctly (verifies limit applied AFTER filter): "
+                    f"Got {len(inbox_after_t0)} messages from second batch"
+                )
+            )
         else:
             results.add_result(test_id, test_name, "FAIL",
                              f"Expected 5 messages after T0 (verifies limit applied AFTER filter), "
