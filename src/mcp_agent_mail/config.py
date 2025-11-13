@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal, cast
 
 from decouple import Config as DecoupleConfig, RepositoryEnv
 
@@ -118,7 +118,7 @@ class SlackSettings:
     # Notification behavior
     notify_on_message: bool  # Send Slack notification when MCP message is created
     notify_on_ack: bool  # Send Slack notification when message is acknowledged
-    notify_mention_format: str  # "real_name" | "display_name" | "agent_name"
+    notify_mention_format: Literal["real_name", "display_name", "agent_name"]
     # Bidirectional sync
     sync_enabled: bool  # Enable bidirectional message sync
     sync_channels: list[str]  # Channel IDs to sync messages from
@@ -300,6 +300,19 @@ def get_settings() -> Settings:
         cost_logging_enabled=_bool(_decouple_config("LLM_COST_LOGGING_ENABLED", default="true"), default=True),
     )
 
+    raw_mention_format = (
+        _decouple_config("SLACK_NOTIFY_MENTION_FORMAT", default="agent_name").strip().lower()
+    )
+    allowed_mention_formats: tuple[Literal["real_name", "display_name", "agent_name"], ...] = (
+        "real_name",
+        "display_name",
+        "agent_name",
+    )
+    mention_format = cast(
+        Literal["real_name", "display_name", "agent_name"],
+        raw_mention_format if raw_mention_format in allowed_mention_formats else "agent_name",
+    )
+
     slack_settings = SlackSettings(
         enabled=_bool(_decouple_config("SLACK_ENABLED", default="false"), default=False),
         bot_token=_decouple_config("SLACK_BOT_TOKEN", default="") or None,
@@ -308,7 +321,7 @@ def get_settings() -> Settings:
         default_channel=_decouple_config("SLACK_DEFAULT_CHANNEL", default="general"),
         notify_on_message=_bool(_decouple_config("SLACK_NOTIFY_ON_MESSAGE", default="true"), default=True),
         notify_on_ack=_bool(_decouple_config("SLACK_NOTIFY_ON_ACK", default="false"), default=False),
-        notify_mention_format=_decouple_config("SLACK_NOTIFY_MENTION_FORMAT", default="agent_name"),
+        notify_mention_format=mention_format,
         sync_enabled=_bool(_decouple_config("SLACK_SYNC_ENABLED", default="false"), default=False),
         sync_channels=_csv("SLACK_SYNC_CHANNELS", default=""),
         sync_thread_replies=_bool(_decouple_config("SLACK_SYNC_THREAD_REPLIES", default="true"), default=True),

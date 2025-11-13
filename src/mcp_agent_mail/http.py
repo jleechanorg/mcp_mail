@@ -19,13 +19,17 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import NoResultFound
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.types import Receive, Scope, Send
 
 from .app import (
+    _create_message,
+    _ensure_project,
     _expire_stale_file_reservations,
+    _get_agent_by_name_optional,
+    _message_frontmatter,
     _tool_metrics_snapshot,
     build_mcp_server,
     get_project_sibling_data,
@@ -48,6 +52,7 @@ from .storage import (
     get_timeline_commits,
     write_agent_profile,
     write_file_reservation_record,
+    write_message_bundle,
 )
 
 
@@ -75,6 +80,7 @@ def _decode_jwt_header_segment(token: str) -> dict[str, object] | None:
 
 
 _LOGGING_CONFIGURED = False
+_SLACK_SYNC_PROJECT_NAME = "Slack Sync"
 
 
 def _configure_logging(settings: Settings) -> None:
@@ -128,9 +134,10 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         self._allow_localhost = allow_localhost
 
     async def dispatch(self, request: Request, call_next):
+        path = request.url.path or ""
         if request.method == "OPTIONS":  # allow CORS preflight
             return await call_next(request)
-        if request.url.path.startswith("/health/"):
+        if path.startswith("/health/") or path.startswith("/slack/"):
             return await call_next(request)
         # Allow localhost without Authorization when enabled
         try:
@@ -299,8 +306,9 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
         return True
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint):
-        # Allow CORS preflight and health endpoints
-        if request.method == "OPTIONS" or request.url.path.startswith("/health/"):
+        # Allow CORS preflight, health checks, and Slack webhooks
+        path = request.url.path or ""
+        if request.method == "OPTIONS" or path.startswith("/health/") or path.startswith("/slack/"):
             return await call_next(request)
 
         # Only read/patch body for POST requests. GET (including SSE) must not receive http.request messages.
@@ -316,7 +324,7 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
             except Exception:
                 body_bytes = b""
 
-        kind, tool_name = self._classify_request(request.url.path, request.method, body_bytes)
+        kind, tool_name = self._classify_request(path, request.method, body_bytes)
 
         # JWT auth (if enabled)
         if self._jwt_enabled:
@@ -958,67 +966,104 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     message_data = await handle_slack_message_event(event, settings)
 
                     if message_data:
-                        # Create MCP message from Slack message
-                        # This runs in background to not block Slack's webhook response
-                        async def _create_mcp_message():
+
+                        async def _create_mcp_message() -> None:
                             try:
                                 from .db import get_session
-                                from .models import Agent, Project
+                                from .models import Agent
 
-                                # Get or create SlackBridge agent
-                                async with get_session() as session:
-                                    # Try to find existing SlackBridge agent
-                                    from sqlalchemy import select
+                                project = await _ensure_project(_SLACK_SYNC_PROJECT_NAME)
+                                if project.id is None or project.slug is None:
+                                    raise ValueError("Slack sync project missing primary identifiers")
 
-                                    result = await session.execute(select(Agent).where(Agent.name == "SlackBridge"))
-                                    slack_agent = result.scalar_one_or_none()
+                                archive = await ensure_archive(settings, project.slug)
+                                slack_agent = await _get_agent_by_name_optional("SlackBridge")
 
-                                    if not slack_agent:
-                                        # Create SlackBridge system agent
-                                        # We need a project - use first available or create default
-                                        result = await session.execute(select(Project).limit(1))
-                                        project = result.scalar_one_or_none()
-
-                                        if not project:
-                                            # Create a default project for Slack messages
-                                            project = Project(
-                                                human_key="slack-sync",
-                                                identifier="slack-sync",
-                                            )
-                                            session.add(project)
-                                            await session.flush()
-
+                                if slack_agent is None:
+                                    async with get_session() as session:
                                         slack_agent = Agent(
                                             name="SlackBridge",
                                             project_id=project.id,
+                                            program="slack_bridge",
+                                            model="slack-events",
+                                            task_description="Bridges Slack messages into MCP Agent Mail",
                                             is_active=True,
                                         )
                                         session.add(slack_agent)
                                         await session.commit()
+                                        await session.refresh(slack_agent)
+                                    await write_agent_profile(archive, slack_agent)
 
-                                    # Get all active agents as recipients
+                                async with get_session() as session:
                                     result = await session.execute(
                                         select(Agent).where(Agent.is_active == True)  # noqa: E712
                                     )
-                                    all_agents = result.scalars().all()
-                                    recipient_names = [a.name for a in all_agents if a.name != "SlackBridge"]
+                                    recipients = [
+                                        agent for agent in result.scalars().all() if agent.name != slack_agent.name
+                                    ]
 
-                                if recipient_names:
-                                    # Import send_message logic here to avoid circular import
-                                    # For now, we'll create the message directly via database
-                                    logger.info(
-                                        f"Created MCP message from Slack to {len(recipient_names)} agents: "
-                                        f"{message_data['subject']}"
-                                    )
-                                else:
-                                    logger.warning("No active agents to receive Slack message")
+                                if not recipients:
+                                    structlog.get_logger("slack").warning("slack_message_no_recipients")
+                                    return
 
-                            except Exception as e:
-                                logger.error(f"Failed to create MCP message from Slack: {e}")
+                                slack_channel = message_data.get("slack_channel")
+                                slack_sender = message_data.get("sender_name", "Slack user")
+                                header_parts = []
+                                if slack_channel:
+                                    header_parts.append(f"*Channel:* `{slack_channel}`")
+                                if slack_sender:
+                                    header_parts.append(f"*Slack sender:* `{slack_sender}`")
+                                if message_data.get("slack_ts"):
+                                    header_parts.append(f"*Slack ts:* `{message_data['slack_ts']}`")
+                                header = "\n".join(header_parts)
+                                body_md = str(message_data.get("body_md") or "").strip()
+                                if header:
+                                    body_md = f"{header}\n\n{body_md}".strip()
 
-                        # Fire and forget - don't block Slack webhook response
+                                subject = str(message_data.get("subject") or "[Slack] Message")
+                                recipient_pairs = [(agent, "to") for agent in recipients]
+                                message = await _create_message(
+                                    project=project,
+                                    sender=slack_agent,
+                                    subject=subject,
+                                    body_md=body_md,
+                                    recipients=recipient_pairs,
+                                    importance="normal",
+                                    ack_required=False,
+                                    thread_id=message_data.get("thread_id"),
+                                    attachments=[],
+                                )
+
+                                to_agents = [agent for agent, kind in recipient_pairs if kind == "to"]
+                                frontmatter = _message_frontmatter(
+                                    message,
+                                    project,
+                                    slack_agent,
+                                    to_agents,
+                                    [],
+                                    [],
+                                    [],
+                                )
+                                await write_message_bundle(
+                                    archive,
+                                    frontmatter,
+                                    message.body_md,
+                                    slack_agent.name,
+                                    [agent.name for agent in recipients],
+                                )
+                                structlog.get_logger("slack").info(
+                                    "slack_message_ingested",
+                                    message_id=message.id,
+                                    recipient_count=len(recipients),
+                                    channel=slack_channel,
+                                )
+                            except Exception as exc:
+                                structlog.get_logger("slack").error(
+                                    "slack_message_ingest_failed",
+                                    error=str(exc),
+                                )
+
                         task = asyncio.create_task(_create_mcp_message())
-                        # Prevent task from being garbage collected
                         task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
 
                 # Handle reaction events for acknowledgments
@@ -1027,8 +1072,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
             return JSONResponse({"ok": True})
 
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload") from None
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload") from exc
         except HTTPException as exc:
             # Preserve intended status (e.g., 401/404)
             raise exc
