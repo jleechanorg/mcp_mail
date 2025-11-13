@@ -21,6 +21,7 @@ from typing import Any, Optional, cast
 from urllib.parse import parse_qsl
 
 from fastmcp import Context, FastMCP
+from fastmcp.tools.tool import ToolResult  # type: ignore
 from git import Repo
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
 from sqlalchemy import asc, delete, desc, func, or_, select, text, update
@@ -4295,7 +4296,16 @@ def build_mcp_server() -> FastMCP:
                 # Use global agent lookup since agent names are globally unique
                 agent_filter_obj = None
                 if agent_filter:
-                    agent_filter_obj = await _get_agent_by_name(agent_filter)
+                    try:
+                        agent_filter_obj = await _get_agent_by_name(agent_filter)
+                    except NoResultFound as exc:  # pragma: no cover - validated via tests
+                        raise ToolExecutionError(
+                            "agent_filter_not_found",
+                            (
+                                f"Agent filter '{agent_filter}' was not found. "
+                                "Verify the agent name via resource://agents/{project.human_key}."
+                            ),
+                        ) from exc
 
                 messages_stmt = (
                     select(
@@ -4308,6 +4318,8 @@ def build_mcp_server() -> FastMCP:
                     .join(sender_alias, Message.sender_id == sender_alias.id)
                     .join(MessageRecipient, MessageRecipient.message_id == Message.id)
                     .join(recipient_alias, MessageRecipient.agent_id == recipient_alias.id)
+                    # Always fetch the full recipient lists even when agent_filter is provided so we can
+                    # apply filtering after assembling the complete message payload.
                     .where(
                         cast(Any, Message.id).in_(message_ids),
                         Message.project_id == project.id,
@@ -4378,12 +4390,7 @@ def build_mcp_server() -> FastMCP:
                     f"({sum(1 for r in results if r['in_global_inbox'])} in global inbox)"
                 )
 
-                try:
-                    from fastmcp.tools.tool import ToolResult  # type: ignore
-
-                    return ToolResult(structured_content={"result": results})
-                except Exception:
-                    return results
+                return ToolResult(structured_content={"result": results})
 
         except Exception as exc:
             _rich_error_panel("search_mailbox", {"error": str(exc)})
