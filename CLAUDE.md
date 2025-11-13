@@ -44,73 +44,17 @@ With the server running, Claude agents can call `ensure_project`, `register_agen
 
 ## Slash Commands
 
-Custom slash commands are available in the git submodule at `claude-commands/.claude/commands/`. Claude Code agents should look for slash command definitions in this directory in addition to the standard `.claude/commands/` location.
+Custom slash commands are in the `claude-commands` submodule. These are markdown instruction files for Claude to read and execute.
 
-### Setup
-
-1. **Initialize the submodule** (first time only):
-   ```bash
-   git submodule update --init --recursive
-   ```
-
-2. **Create symlink for command discovery**:
-   ```bash
-   ln -s ../claude-commands/.claude/commands .claude/commands
-   ```
-
-### Using Commands
-
-**These are markdown instruction files for Claude to read and execute**, not standalone scripts.
-
-### Method 1: Read and Execute (Primary Method)
-
-When the user requests a command (e.g., "run /list" or "use /status"), Claude agents should:
-
-1. Read the command file:
-   ```markdown
-   Read: claude-commands/.claude/commands/<command-name>.md
-   ```
-
-2. Parse the instructions in the markdown file
-
-3. Execute the steps described in the command
-
-Example workflow:
-- User says: "run /list"
-- Claude reads: `claude-commands/.claude/commands/list.md`
-- Claude follows the execution instructions in that file
-- Result: The command's workflow is executed
-
-### Method 2: Direct Slash Command (If Available)
-
-If the environment supports dynamic slash command discovery:
-
+Setup (first time):
 ```bash
-/command-name [args]
+git submodule update --init --recursive
+ln -s ../claude-commands/.claude/commands .claude/commands
 ```
 
-### Method 3: Discover Available Commands
+Usage: When user requests a command (e.g., "run /list"), read `claude-commands/.claude/commands/list.md` and execute the instructions.
 
-Use the helper script to see what commands are available:
-
-```bash
-# List all available commands
-./run-claude-command.sh
-```
-
-### Available Commands
-
-The submodule provides 150+ commands including:
-- `/pr` - End-to-end implementation from idea to working PR
-- `/push` - Smart git push with PR creation/update
-- `/status` - Comprehensive PR status dashboard
-- `/fixpr` - Automated PR issue resolution
-- `/copilot` - PR workflow orchestration
-- `/think` - Sequential thinking for complex analysis
-- `/review` - Automated code review
-- And many more...
-
-Run `./run-claude-command.sh` to see the complete list.
+Discover available commands: `./run-claude-command.sh`
 
 ## GitHub Authentication
 
@@ -141,87 +85,14 @@ Example GitHub Actions workflow:
 
 ## Installing Required Tools
 
-If you encounter missing tools or commands during your work, install them using npm when possible:
-
-### GitHub CLI (gh)
-
-If `gh` is not available, use the precompiled binary method (recommended):
-
+If `gh` CLI is missing, download precompiled binary:
 ```bash
-# Download and extract the latest gh CLI binary
 curl -sL https://github.com/cli/cli/releases/download/v2.40.1/gh_2.40.1_linux_amd64.tar.gz | tar -xz -C /tmp
-
-# Verify installation
 /tmp/gh_2.40.1_linux_amd64/bin/gh --version
-
-# Check authentication (uses GITHUB_TOKEN automatically)
 /tmp/gh_2.40.1_linux_amd64/bin/gh auth status
 ```
 
-**Benefits of precompiled binary:**
-- Fast installation (no package dependencies)
-- No deprecation warnings
-- Latest version from GitHub releases
-- Works immediately with GITHUB_TOKEN environment variable
-
-#### Alternative: npm installation
-
-If you prefer npm or need a globally installed version:
-
-```bash
-npm install -g gh
-```
-
-**Note**: The npm package may be older and install with deprecation warnings, but works for basic operations.
-
-### General Tool Installation Pattern
-
-For any missing tool/command, agents should:
-
-1. **Check if the tool exists**:
-   ```bash
-   command -v <tool-name> || which <tool-name>
-   ```
-
-2. **Install via npm if available**:
-   ```bash
-   npm install -g <tool-name>
-   ```
-
-3. **Verify the installation**:
-   ```bash
-   <tool-name> --version
-   ```
-
-### Common Tools Available via npm
-
-- **http-server** - Simple static file server
-- **nodemon** - Auto-restart utility for development
-- **typescript** - TypeScript compiler
-- **eslint** - JavaScript/TypeScript linter
-
-### Common Tools Installed via System Package Managers
-
-- **jq** - JSON processor for parsing API responses (install via `apt`, `brew`, or download precompiled binaries)
-
-### Example: Auto-install pattern
-
-```bash
-# Check and install gh if missing (using precompiled binary)
-if ! command -v gh &> /dev/null && [ ! -f /tmp/gh_2.40.1_linux_amd64/bin/gh ]; then
-    echo "Installing gh CLI from GitHub releases..."
-    curl -sL https://github.com/cli/cli/releases/download/v2.40.1/gh_2.40.1_linux_amd64.tar.gz | tar -xz -C /tmp
-fi
-
-# Use the tool (either system gh or downloaded binary)
-if command -v gh &> /dev/null; then
-    gh pr list
-else
-    /tmp/gh_2.40.1_linux_amd64/bin/gh pr list
-fi
-```
-
-**Note**: Always verify tool availability before use and install dependencies proactively to avoid workflow interruptions.
+Alternative npm installation: `npm install -g gh` (may have deprecation warnings)
 
 ## PR Responsibility Model
 
