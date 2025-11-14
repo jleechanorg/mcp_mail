@@ -1466,6 +1466,20 @@ def guard_install(
     project_slug = slugify(project)
 
     async def _run() -> Path:
+        # Validate project exists in database (unless explicitly bypassed for tests)
+        bypass_validation = os.environ.get("AGENT_MAIL_GUARD_INSTALL_SKIP_VALIDATION", "").strip().lower() in {"1", "true"}
+        if not bypass_validation:
+            await ensure_schema(settings)
+            async with get_session() as session:
+                existing_project = (await session.execute(
+                    select(Project).where(Project.slug == project_slug)
+                )).scalar_one_or_none()
+                if existing_project is None:
+                    raise ValueError(
+                        f"Project '{project}' (slug: {project_slug}) not found in database. "
+                        f"Create the project first using ensure_project or register_agent."
+                    )
+
         hook_path = await install_guard_script(settings, project_slug, repo_path)
         if prepush:
             try:
