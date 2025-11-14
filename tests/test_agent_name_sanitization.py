@@ -8,9 +8,10 @@ This test suite verifies that:
 3. Tests should use the returned name for subsequent operations
 """
 
-import pytest
 import sys
 from pathlib import Path
+
+import pytest
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -69,13 +70,16 @@ class TestAgentNameSanitization:
         assert result is not None
         assert len(result) == 128
 
-    @pytest.mark.parametrize("input_name,expected", [
-        ("Alice_abc123", "Aliceabc123"),
-        ("Bob-xyz789", "Bobxyz789"),
-        ("Test Agent 456", "TestAgent456"),
-        ("user@domain.com", "userdomaincom"),
-        ("CamelCase123", "CamelCase123"),
-    ])
+    @pytest.mark.parametrize(
+        "input_name,expected",
+        [
+            ("Alice_abc123", "Aliceabc123"),
+            ("Bob-xyz789", "Bobxyz789"),
+            ("Test Agent 456", "TestAgent456"),
+            ("user@domain.com", "userdomaincom"),
+            ("CamelCase123", "CamelCase123"),
+        ],
+    )
     def test_sanitize_examples(self, input_name, expected):
         """Parametrized tests for various input patterns."""
         assert sanitize_agent_name(input_name) == expected
@@ -87,50 +91,61 @@ class TestAgentRegistrationIntegration:
 
     async def test_register_agent_returns_sanitized_name(self, isolated_env):
         """register_agent should return the sanitized version of the provided name."""
-        from mcp_agent_mail.app import build_mcp_server
         from fastmcp import Client
+
+        from mcp_agent_mail.app import build_mcp_server
 
         mcp = build_mcp_server()
         async with Client(mcp) as client:
             # Register with underscore in name
-            result = await client.call_tool("register_agent", {
-                "project_key": "test_project",
-                "program": "test-cli",
-                "model": "test-model",
-                "name": "Alice_abc123"  # Has underscore
-            })
+            result = await client.call_tool(
+                "register_agent",
+                {
+                    "project_key": "test_project",
+                    "program": "test-cli",
+                    "model": "test-model",
+                    "name": "Alice_abc123",  # Has underscore
+                },
+            )
 
             # Should return sanitized name without underscore
-            agent_data = result.data if hasattr(result, 'data') else result
+            agent_data = result.data if hasattr(result, "data") else result
             assert agent_data["name"] == "Aliceabc123"  # No underscore!
 
     async def test_use_returned_agent_name(self, isolated_env):
         """Tests should use the returned agent name for subsequent operations."""
-        from mcp_agent_mail.app import build_mcp_server
         from fastmcp import Client
+
+        from mcp_agent_mail.app import build_mcp_server
 
         mcp = build_mcp_server()
         async with Client(mcp) as client:
             # Register agent
-            result = await client.call_tool("register_agent", {
-                "project_key": "test_project",
-                "program": "test-cli",
-                "model": "test-model",
-                "name": "Alice_abc123"  # Has underscore
-            })
+            result = await client.call_tool(
+                "register_agent",
+                {
+                    "project_key": "test_project",
+                    "program": "test-cli",
+                    "model": "test-model",
+                    "name": "Alice_abc123",  # Has underscore
+                },
+            )
 
             # Extract the RETURNED (sanitized) name
-            agent_data = result.data if hasattr(result, 'data') else result
+            agent_data = result.data if hasattr(result, "data") else result
             sanitized_name = agent_data["name"]  # "Aliceabc123" (no underscore)
 
             # Use sanitized name for send_message - should work!
-            result = await client.call_tool("send_message", {
-                "project_key": "test_project",
-                "sender_name": sanitized_name,  # Use returned name, not original
-                "to": [sanitized_name],
-                "subject": "Test",
-                "body_md": "Should work now"
-            })
+            result = await client.call_tool(
+                "send_message",
+                {
+                    "project_key": "test_project",
+                    "sender_name": sanitized_name,  # Use returned name, not original
+                    "to": [sanitized_name],
+                    "subject": "Test",
+                    "body_md": "Should work now",
+                },
+            )
 
             # Should succeed without error
             assert result is not None

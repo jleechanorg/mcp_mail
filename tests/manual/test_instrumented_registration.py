@@ -29,27 +29,29 @@ os.environ["APP_ENVIRONMENT"] = "test"
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
-from mcp_agent_mail.app import build_mcp_server
-from mcp_agent_mail.db import reset_database_state
-from mcp_agent_mail.config import clear_settings_cache
 from fastmcp import Client
+
+from mcp_agent_mail.app import build_mcp_server
+from mcp_agent_mail.config import clear_settings_cache
+from mcp_agent_mail.db import reset_database_state
 
 # Enable detailed Python logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s.%(msecs)03d [%(levelname)s] %(name)s: %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+    format="%(asctime)s.%(msecs)03d [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 
 # Generate unique project key
 PROJECT_KEY = f"test_instrumented_{uuid.uuid4().hex[:8]}"
 
+
 def log(msg: str):
     """Log with high-precision timestamp."""
-    timestamp = datetime.now(timezone.utc).isoformat(timespec='microseconds')
-    print(f"\n{'='*80}")
+    timestamp = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    print(f"\n{'=' * 80}")
     print(f"[{timestamp}] {msg}")
-    print(f"{'='*80}\n")
+    print(f"{'=' * 80}\n")
 
 
 async def test_agent_registration_bug():
@@ -77,12 +79,10 @@ async def test_agent_registration_bug():
         t0 = datetime.now(timezone.utc)
 
         try:
-            result = await client.call_tool("register_agent", {
-                "project_key": PROJECT_KEY,
-                "program": "test-cli",
-                "model": "test-model",
-                "name": agent_name
-            })
+            result = await client.call_tool(
+                "register_agent",
+                {"project_key": PROJECT_KEY, "program": "test-cli", "model": "test-model", "name": agent_name},
+            )
 
             t1 = datetime.now(timezone.utc)
             elapsed = (t1 - t0).total_seconds() * 1000
@@ -90,15 +90,15 @@ async def test_agent_registration_bug():
             log(f"register_agent SUCCEEDED in {elapsed:.2f}ms")
 
             # Extract agent details from result
-            if hasattr(result, 'data'):
+            if hasattr(result, "data"):
                 agent_data = result.data
-            elif hasattr(result, 'structured_content'):
+            elif hasattr(result, "structured_content"):
                 agent_data = result.structured_content
             else:
                 agent_data = result
 
-            agent_id = agent_data.get('id', 'UNKNOWN')
-            agent_name_returned = agent_data.get('name', 'UNKNOWN')
+            agent_id = agent_data.get("id", "UNKNOWN")
+            agent_name_returned = agent_data.get("name", "UNKNOWN")
 
             log(f"Agent created: ID={agent_id}, Name={agent_name_returned}")
             log(f"Full agent data: {agent_data}")
@@ -117,13 +117,16 @@ async def test_agent_registration_bug():
         log(f"Time since registration: {time_since_registration:.2f}ms")
 
         try:
-            result = await client.call_tool("send_message", {
-                "project_key": PROJECT_KEY,
-                "sender_name": agent_name,
-                "to": [agent_name],
-                "subject": "Test message",
-                "body_md": "Testing if agent can be found"
-            })
+            result = await client.call_tool(
+                "send_message",
+                {
+                    "project_key": PROJECT_KEY,
+                    "sender_name": agent_name,
+                    "to": [agent_name],
+                    "subject": "Test message",
+                    "body_md": "Testing if agent can be found",
+                },
+            )
 
             t3 = datetime.now(timezone.utc)
             elapsed = (t3 - t2).total_seconds() * 1000
@@ -137,20 +140,25 @@ async def test_agent_registration_bug():
 
             log(f"send_message FAILED in {elapsed:.2f}ms")
             log(f"❌ BUG REPRODUCED - Error: {e}")
-            log(f"Agent '{agent_name}' (ID={agent_id}) was not found {time_since_registration:.2f}ms after registration")
+            log(
+                f"Agent '{agent_name}' (ID={agent_id}) was not found {time_since_registration:.2f}ms after registration"
+            )
 
             # Try again after a longer delay
             log("Waiting 1 second and retrying...")
             await asyncio.sleep(1.0)
 
             try:
-                result = await client.call_tool("send_message", {
-                    "project_key": PROJECT_KEY,
-                    "sender_name": agent_name,
-                    "to": [agent_name],
-                    "subject": "Test message (retry)",
-                    "body_md": "Testing if agent can be found after delay"
-                })
+                result = await client.call_tool(
+                    "send_message",
+                    {
+                        "project_key": PROJECT_KEY,
+                        "sender_name": agent_name,
+                        "to": [agent_name],
+                        "subject": "Test message (retry)",
+                        "body_md": "Testing if agent can be found after delay",
+                    },
+                )
                 log("✅ RETRY SUCCEEDED - Agent found after 1 second delay")
                 log("This suggests a timing/transaction issue, not a permanent bug")
             except Exception as e2:
@@ -162,21 +170,22 @@ async def test_agent_registration_bug():
 
 async def main():
     """Run the instrumented test."""
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("INSTRUMENTED TEST FOR AGENT REGISTRATION BUG (mcp_agent_mail-7rj)")
-    print("="*80)
+    print("=" * 80)
     print("\nThis test will show:")
     print("- All SQL queries executed by SQLAlchemy (via DATABASE_ECHO=true)")
     print("- Precise timestamps for each operation")
     print("- Agent IDs and names")
     print("- Transaction timing")
-    print("\n" + "="*80 + "\n")
+    print("\n" + "=" * 80 + "\n")
 
     try:
         await test_agent_registration_bug()
     except Exception as e:
         log(f"FATAL ERROR: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 

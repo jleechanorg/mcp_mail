@@ -1462,7 +1462,7 @@ def guard_install(
 
     # Use slug directly without database lookup (works for tests and standalone use)
     project_slug = slugify(project)
-    
+
     async def _run() -> Path:
         hook_path = await install_guard_script(settings, project_slug, repo_path)
         if prepush:
@@ -1764,7 +1764,6 @@ def mail_status(
     Print routing diagnostics: gate state, configured identity mode, normalized remote (if any),
     and the slug that would be used for this path.
     """
-    settings = get_settings()
     p = project_path.expanduser().resolve()
     gate = False
     mode = "dir"
@@ -1838,7 +1837,6 @@ def guard_status(
     """
     Print guard status: gate/mode, resolved hooks directory, and presence of hooks.
     """
-    settings = get_settings()
     p = repo.expanduser().resolve()
     gate = False
     mode = "dir"
