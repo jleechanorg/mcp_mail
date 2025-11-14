@@ -2075,7 +2075,7 @@ async def _list_outbox(
             recipients_result = await session.execute(
                 select(MessageRecipient.message_id, MessageRecipient.kind, Agent.name)
                 .join(Agent, MessageRecipient.agent_id == Agent.id)
-                .where(MessageRecipient.message_id.in_(message_ids))
+                .where(cast(Any, MessageRecipient.message_id).in_(message_ids))
             )
             # Group recipients by message_id
             recipients_by_message: dict[str, dict[str, list[str]]] = {}
@@ -4192,7 +4192,7 @@ def build_mcp_server() -> FastMCP:
         agent_filter: Optional[str] = None,
         limit: int = 20,
         include_bodies: bool = True,
-    ) -> list[dict[str, Any]]:
+    ) -> ToolResult:
         """
         Search through mailboxes for messages matching a query.
 
@@ -4301,13 +4301,13 @@ def build_mcp_server() -> FastMCP:
                 except SQLAlchemyError as exc:
                     await ctx.error("Invalid search query. Please check your search syntax and try again.")
                     logger.warning("FTS5 query error for %r: %s", query, exc)
-                    return []
+                    return ToolResult(structured_content={"result": []})
 
                 fts_rows = fts_result.fetchall()
 
                 if not fts_rows:
                     await ctx.info(f"No messages found matching query: {query}")
-                    return []
+                    return ToolResult(structured_content={"result": []})
 
                 message_ids = list(dict.fromkeys(row[0] for row in fts_rows))
                 relevance_map = {row[0]: (row[1], row[2], row[3]) for row in fts_rows}

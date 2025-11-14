@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from mcp_agent_mail.config import get_settings
+from mcp_agent_mail.config import Settings, get_settings
 from mcp_agent_mail.storage import AsyncFileLock, ensure_archive
 from mcp_agent_mail.utils import safe_filesystem_component, slugify
 
@@ -66,8 +66,8 @@ async def acquire_build_slot(
     """
     settings = get_settings()
 
-    # Check if build slots are enabled via environment variable
-    if os.environ.get("WORKTREES_ENABLED", "0") == "0":
+    # Check if build slots are enabled via settings (backed by python-decouple)
+    if not _worktrees_enabled(settings):
         return {"disabled": True}
 
     # Enforce minimum TTL
@@ -174,10 +174,10 @@ async def renew_build_slot(
                 "disabled": bool (if WORKTREES_ENABLED=0),
             }
     """
-    if os.environ.get("WORKTREES_ENABLED", "0") == "0":
+    settings = get_settings()
+    if not _worktrees_enabled(settings):
         return {"disabled": True}
 
-    settings = get_settings()
     slug = slugify(project_key)
     archive = await ensure_archive(settings, slug)
 
@@ -243,10 +243,10 @@ async def release_build_slot(
                 "disabled": bool (if WORKTREES_ENABLED=0),
             }
     """
-    if os.environ.get("WORKTREES_ENABLED", "0") == "0":
+    settings = get_settings()
+    if not _worktrees_enabled(settings):
         return {"disabled": True}
 
-    settings = get_settings()
     slug = slugify(project_key)
     archive = await ensure_archive(settings, slug)
 
@@ -283,3 +283,12 @@ async def release_build_slot(
             "released": True,
             "released_ts": released_ts,
         }
+
+
+def _worktrees_enabled(settings: Settings | None = None) -> bool:
+    """Return True when worktree-aware coordination is enabled."""
+    try:
+        config = settings or get_settings()
+    except Exception:
+        return False
+    return bool(getattr(config, "worktrees_enabled", False))
