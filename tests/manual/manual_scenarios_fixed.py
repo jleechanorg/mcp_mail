@@ -30,28 +30,6 @@ from mcp_agent_mail.db import reset_database_state
 # Generate unique project key per run to avoid test pollution
 PROJECT_KEY = f"test_manual_{uuid.uuid4().hex[:8]}"
 
-# Timing constants for deterministic manual tests
-MESSAGE_PROCESSING_DELAY = 0.5  # Allow inbox/search indices to update
-TIMESTAMP_SEPARATION_DELAY = 1.0  # Ensure since_ts checkpoints differ
-
-
-def _extract_result_list(result) -> list:
-    """Best-effort extraction for MCP tool responses."""
-
-    if hasattr(result, "structured_content") and result.structured_content:
-        payload = result.structured_content.get("result")
-        if isinstance(payload, list):
-            return payload
-    if hasattr(result, "data"):
-        data = result.data
-        if isinstance(data, list):
-            return data
-        if isinstance(data, dict):
-            maybe_result = data.get("result")
-            if isinstance(maybe_result, list):
-                return maybe_result
-    return []
-
 
 class TestResults:
     """Track test results."""
@@ -61,14 +39,16 @@ class TestResults:
         self.start_time = datetime.now(timezone.utc)
 
     def add_result(self, test_id, name, status, details=None, error=None):
-        self.tests.append({
-            "test_id": test_id,
-            "name": name,
-            "status": status,
-            "details": details,
-            "error": str(error) if error else None,
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        })
+        self.tests.append(
+            {
+                "test_id": test_id,
+                "name": name,
+                "status": status,
+                "details": details,
+                "error": str(error) if error else None,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
 
         emoji = "✅" if status == "PASS" else "❌" if status == "FAIL" else "⏭️"
         print(f"\n{emoji} {test_id}: {name} - {status}")
@@ -100,60 +80,80 @@ async def test_1_2_agent_filter_FIXED(client, results):
         # Non-alphanumeric characters (including underscores) are stripped.
         # We intentionally use underscores here to exercise the sanitizer, then capture
         # the returned canonical name for use in subsequent operations.
-        alice_result = await client.call_tool("register_agent", {
-            "project_key": PROJECT_KEY,
-            "program": "test-cli",
-            "model": "test-model",
-            "name": f"Alice_{uuid.uuid4().hex[:6]}"  # Will be sanitized to "Aliceabc123"
-        })
+        alice_result = await client.call_tool(
+            "register_agent",
+            {
+                "project_key": PROJECT_KEY,
+                "program": "test-cli",
+                "model": "test-model",
+                "name": f"Alice_{uuid.uuid4().hex[:6]}",  # Will be sanitized to "Aliceabc123"
+            },
+        )
         # CRITICAL: Use the returned name (sanitized), not the input name
-        alice_name = alice_result.data.get("name") if hasattr(alice_result, 'data') else alice_result.get("name")
+        alice_name = alice_result.data.get("name") if hasattr(alice_result, "data") else alice_result.get("name")
 
-        bob_result = await client.call_tool("register_agent", {
-            "project_key": PROJECT_KEY,
-            "program": "test-cli",
-            "model": "test-model",
-            "name": f"Bob_{uuid.uuid4().hex[:6]}"  # Will be sanitized to "Bobdef456"
-        })
+        bob_result = await client.call_tool(
+            "register_agent",
+            {
+                "project_key": PROJECT_KEY,
+                "program": "test-cli",
+                "model": "test-model",
+                "name": f"Bob_{uuid.uuid4().hex[:6]}",  # Will be sanitized to "Bobdef456"
+            },
+        )
         # CRITICAL: Use the returned name (sanitized), not the input name
-        bob_name = bob_result.data.get("name") if hasattr(bob_result, 'data') else bob_result.get("name")
+        bob_name = bob_result.data.get("name") if hasattr(bob_result, "data") else bob_result.get("name")
 
         print(f"Registered agents: {alice_name}, {bob_name}")
 
         # Alice sends 3 messages to Bob
         for i in range(3):
-            await client.call_tool("send_message", {
-                "project_key": PROJECT_KEY,
-                "sender_name": alice_name,  # Use returned (sanitized) name
-                "to": [bob_name],  # Use returned (sanitized) name
-                "subject": f"Alice testing message {i+1}",
-                "body_md": f"Testing content from Alice {i+1}"
-            })
+            await client.call_tool(
+                "send_message",
+                {
+                    "project_key": PROJECT_KEY,
+                    "sender_name": alice_name,  # Use returned (sanitized) name
+                    "to": [bob_name],  # Use returned (sanitized) name
+                    "subject": f"Alice testing message {i + 1}",
+                    "body_md": f"Testing content from Alice {i + 1}",
+                },
+            )
 
         # Bob sends 2 messages to Alice
         for i in range(2):
-            await client.call_tool("send_message", {
-                "project_key": PROJECT_KEY,
-                "sender_name": bob_name,  # Use returned (sanitized) name
-                "to": [alice_name],  # Use returned (sanitized) name
-                "subject": f"Bob testing message {i+1}",
-                "body_md": f"Testing content from Bob {i+1}"
-            })
+            await client.call_tool(
+                "send_message",
+                {
+                    "project_key": PROJECT_KEY,
+                    "sender_name": bob_name,  # Use returned (sanitized) name
+                    "to": [alice_name],  # Use returned (sanitized) name
+                    "subject": f"Bob testing message {i + 1}",
+                    "body_md": f"Testing content from Bob {i + 1}",
+                },
+            )
 
-        await asyncio.sleep(MESSAGE_PROCESSING_DELAY)
+        await asyncio.sleep(0.5)
 
         # Search with Alice filter
         # CORRECTED EXPECTATION: Alice is involved in 5 messages:
         # - 3 messages she sent (Alice is sender)
         # - 2 messages she received (Alice is recipient)
-        result = await client.call_tool("search_mailbox", {
-            "project_key": PROJECT_KEY,
-            "query": "testing",
-            "agent_filter": alice_name,  # Use returned (sanitized) name
-            "limit": 10
-        })
+        result = await client.call_tool(
+            "search_mailbox",
+            {
+                "project_key": PROJECT_KEY,
+                "query": "testing",
+                "agent_filter": alice_name,  # Use returned (sanitized) name
+                "limit": 10,
+            },
+        )
 
-        alice_results = _extract_result_list(result)
+        if hasattr(result, "structured_content") and result.structured_content:
+            alice_results = result.structured_content.get("result", [])
+        elif hasattr(result, "data"):
+            alice_results = result.data if isinstance(result.data, list) else []
+        else:
+            alice_results = []
 
         alice_count = len(alice_results)
 
@@ -161,14 +161,22 @@ async def test_1_2_agent_filter_FIXED(client, results):
         # CORRECTED EXPECTATION: Bob is involved in 5 messages:
         # - 2 messages he sent (Bob is sender)
         # - 3 messages he received (Bob is recipient)
-        result = await client.call_tool("search_mailbox", {
-            "project_key": PROJECT_KEY,
-            "query": "testing",
-            "agent_filter": bob_name,  # Use returned (sanitized) name
-            "limit": 10
-        })
+        result = await client.call_tool(
+            "search_mailbox",
+            {
+                "project_key": PROJECT_KEY,
+                "query": "testing",
+                "agent_filter": bob_name,  # Use returned (sanitized) name
+                "limit": 10,
+            },
+        )
 
-        bob_results = _extract_result_list(result)
+        if hasattr(result, "structured_content") and result.structured_content:
+            bob_results = result.structured_content.get("result", [])
+        elif hasattr(result, "data"):
+            bob_results = result.data if isinstance(result.data, list) else []
+        else:
+            bob_results = []
 
         bob_count = len(bob_results)
 
@@ -178,14 +186,16 @@ async def test_1_2_agent_filter_FIXED(client, results):
                 test_id,
                 test_name,
                 "PASS",
-                (
-                    f"Agent filtering works correctly (Alice: {alice_count}, Bob: {bob_count}) - "
-                    f"returns messages where agent is sender OR recipient"
-                ),
+                f"Agent filtering works correctly (Alice: {alice_count}, Bob: {bob_count}) - "
+                f"returns messages where agent is sender OR recipient",
             )
         else:
-            results.add_result(test_id, test_name, "FAIL",
-                             f"Expected 5 for both Alice and Bob, got Alice: {alice_count}, Bob: {bob_count}")
+            results.add_result(
+                test_id,
+                test_name,
+                "FAIL",
+                f"Expected 5 for both Alice and Bob, got Alice: {alice_count}, Bob: {bob_count}",
+            )
 
     except Exception as e:
         results.add_result(test_id, test_name, "FAIL", error=e)
@@ -205,71 +215,87 @@ async def test_2_1_since_ts_FIXED(client, results):
         # Register agent with unique name
         # NOTE: Agent names are normalized via sanitize_agent_name() (src/mcp_agent_mail/utils.py)
         # We intentionally use underscores to exercise the sanitizer.
-        tester_result = await client.call_tool("register_agent", {
-            "project_key": PROJECT_KEY,
-            "program": "test-cli",
-            "model": "test-model",
-            "name": f"InboxTester_{uuid.uuid4().hex[:6]}"  # Will be sanitized to "InboxTesterghi789"
-        })
+        tester_result = await client.call_tool(
+            "register_agent",
+            {
+                "project_key": PROJECT_KEY,
+                "program": "test-cli",
+                "model": "test-model",
+                "name": f"InboxTester_{uuid.uuid4().hex[:6]}",  # Will be sanitized to "InboxTesterghi789"
+            },
+        )
         # CRITICAL: Use the returned name (sanitized), not the input name
-        tester_name = tester_result.data.get("name") if hasattr(tester_result, 'data') else tester_result.get("name")
+        tester_name = tester_result.data.get("name") if hasattr(tester_result, "data") else tester_result.get("name")
         print(f"Registered agent: {tester_name}")
 
         # FIXED: Send first batch BEFORE capturing T0
         print("Sending first batch (10 messages)...")
         for i in range(10):
-            await client.call_tool("send_message", {
-                "project_key": PROJECT_KEY,
-                "sender_name": tester_name,  # Use returned (sanitized) name
-                "to": [tester_name],  # Use returned (sanitized) name
-                "subject": f"T0 Message {i+1}",
-                "body_md": f"Content at T0 - message {i+1}"
-            })
+            await client.call_tool(
+                "send_message",
+                {
+                    "project_key": PROJECT_KEY,
+                    "sender_name": tester_name,  # Use returned (sanitized) name
+                    "to": [tester_name],  # Use returned (sanitized) name
+                    "subject": f"T0 Message {i + 1}",
+                    "body_md": f"Content at T0 - message {i + 1}",
+                },
+            )
 
         # FIXED: Capture T0 AFTER first batch
-        await asyncio.sleep(TIMESTAMP_SEPARATION_DELAY)
+        await asyncio.sleep(1)
         t0 = datetime.now(timezone.utc)
         print(f"Captured T0: {t0.isoformat()}")
-        await asyncio.sleep(TIMESTAMP_SEPARATION_DELAY)
+        await asyncio.sleep(1)
 
         # Send second batch AFTER T0
         print("Sending second batch (5 messages)...")
         for i in range(5):
-            await client.call_tool("send_message", {
-                "project_key": PROJECT_KEY,
-                "sender_name": tester_name,  # Use returned (sanitized) name
-                "to": [tester_name],  # Use returned (sanitized) name
-                "subject": f"T1 Message {i+1}",
-                "body_md": f"Content at T1 - message {i+1}"
-            })
+            await client.call_tool(
+                "send_message",
+                {
+                    "project_key": PROJECT_KEY,
+                    "sender_name": tester_name,  # Use returned (sanitized) name
+                    "to": [tester_name],  # Use returned (sanitized) name
+                    "subject": f"T1 Message {i + 1}",
+                    "body_md": f"Content at T1 - message {i + 1}",
+                },
+            )
 
         # Test 1: Fetch without since_ts, limit 8
-        result = await client.call_tool("fetch_inbox", {
-            "project_key": PROJECT_KEY,
-            "agent_name": tester_name,  # Use returned (sanitized) name
-            "limit": 8,
-            "include_bodies": False
-        })
+        result = await client.call_tool(
+            "fetch_inbox",
+            {
+                "project_key": PROJECT_KEY,
+                "agent_name": tester_name,  # Use returned (sanitized) name
+                "limit": 8,
+                "include_bodies": False,
+            },
+        )
 
-        inbox_no_filter = _extract_result_list(result)
+        inbox_no_filter = result.data if (hasattr(result, "data") and isinstance(result.data, list)) else []
         print(f"Without filter: {len(inbox_no_filter)} messages")
 
         if len(inbox_no_filter) != 8:
-            results.add_result(test_id, test_name, "FAIL",
-                             f"Expected 8 messages without filter, got {len(inbox_no_filter)}")
+            results.add_result(
+                test_id, test_name, "FAIL", f"Expected 8 messages without filter, got {len(inbox_no_filter)}"
+            )
             return
 
         # Test 2: Fetch with since_ts=T0, limit 8
         # Should get only the 5 messages from second batch (created after T0)
-        result = await client.call_tool("fetch_inbox", {
-            "project_key": PROJECT_KEY,
-            "agent_name": tester_name,  # Use returned (sanitized) name
-            "since_ts": t0.isoformat(),
-            "limit": 8,
-            "include_bodies": False
-        })
+        result = await client.call_tool(
+            "fetch_inbox",
+            {
+                "project_key": PROJECT_KEY,
+                "agent_name": tester_name,  # Use returned (sanitized) name
+                "since_ts": t0.isoformat(),
+                "limit": 8,
+                "include_bodies": False,
+            },
+        )
 
-        inbox_after_t0 = _extract_result_list(result)
+        inbox_after_t0 = result.data if (hasattr(result, "data") and isinstance(result.data, list)) else []
         print(f"After T0: {len(inbox_after_t0)} messages")
 
         if len(inbox_after_t0) == 5:
@@ -277,15 +303,16 @@ async def test_2_1_since_ts_FIXED(client, results):
                 test_id,
                 test_name,
                 "PASS",
-                (
-                    "since_ts filter works correctly (verifies limit applied AFTER filter): "
-                    f"Got {len(inbox_after_t0)} messages from second batch"
-                ),
+                f"since_ts filter works correctly (verifies limit applied AFTER filter): "
+                f"Got {len(inbox_after_t0)} messages from second batch",
             )
         else:
-            results.add_result(test_id, test_name, "FAIL",
-                             f"Expected 5 messages after T0 (verifies limit applied AFTER filter), "
-                             f"got {len(inbox_after_t0)}")
+            results.add_result(
+                test_id,
+                test_name,
+                "FAIL",
+                f"Expected 5 messages after T0 (verifies limit applied AFTER filter), got {len(inbox_after_t0)}",
+            )
 
     except Exception as e:
         results.add_result(test_id, test_name, "FAIL", error=e)
@@ -319,11 +346,10 @@ async def main():
     print(f"Total:   {summary['total']}")
     print(f"Passed:  {summary['passed']} ✅")
     print(f"Failed:  {summary['failed']} ❌")
-    print(f"Success: {summary['passed']}/{summary['total']} = "
-          f"{(summary['passed']/summary['total']*100):.1f}%")
+    print(f"Success: {summary['passed']}/{summary['total']} = {(summary['passed'] / summary['total'] * 100):.1f}%")
     print(f"{'=' * 70}\n")
 
-    sys.exit(0 if summary['failed'] == 0 else 1)
+    sys.exit(0 if summary["failed"] == 0 else 1)
 
 
 if __name__ == "__main__":

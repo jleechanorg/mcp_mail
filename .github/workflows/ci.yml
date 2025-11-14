@@ -139,7 +139,7 @@ jobs:
             ci-test-${{ runner.os }}-
       - name: Sync dependencies
         run: uv sync --dev
-      - name: Run all passing tests (53 test files, excluding 4 flaky tests)
+      - name: Run all passing tests (54 test files, excluding 3 flaky LLM tests)
         run: |
           set -euo pipefail
           tests=("tests/test_reply_and_threads.py" \
@@ -162,6 +162,7 @@ jobs:
                  "tests/test_guard_integration.py" \
                  "tests/test_guard_tools.py" \
                  "tests/test_http_auth_rate_limit.py" \
+                 "tests/test_http_logging_and_errors.py" \
                  "tests/test_http_negative_jwt.py" \
                  "tests/test_http_redis_rate_limit.py" \
                  "tests/test_http_transport.py" \
