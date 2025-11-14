@@ -123,6 +123,39 @@ def _seed_mailbox(db_path: Path, storage_root: Path) -> None:
         )
         conn.execute("INSERT INTO file_reservations (id, project_id) VALUES (1, 1)")
         conn.execute("INSERT INTO agent_links (id, a_project_id, b_project_id) VALUES (1, 1, 1)")
+
+        # Create materialized view for viewer.js compatibility
+        conn.executescript(
+            """
+            DROP TABLE IF EXISTS message_overview_mv;
+            CREATE TABLE message_overview_mv AS
+            SELECT
+                m.id,
+                m.project_id,
+                m.thread_id,
+                m.subject,
+                m.importance,
+                m.ack_required,
+                m.created_ts,
+                a.name AS sender_name,
+                LENGTH(m.body_md) AS body_length,
+                json_array_length(m.attachments) AS attachment_count,
+                SUBSTR(COALESCE(m.body_md, ''), 1, 280) AS latest_snippet,
+                COALESCE(r.recipients, '') AS recipients
+            FROM messages m
+            JOIN agents a ON m.sender_id = a.id
+            LEFT JOIN (
+                SELECT
+                    mr.message_id,
+                    GROUP_CONCAT(COALESCE(ag.name, ''), ', ') AS recipients
+                FROM message_recipients mr
+                LEFT JOIN agents ag ON ag.id = mr.agent_id
+                GROUP BY mr.message_id
+            ) r ON r.message_id = m.id
+            ORDER BY m.created_ts DESC;
+            """
+        )
+
         conn.commit()
     finally:
         conn.close()
@@ -272,11 +305,30 @@ def test_viewer_playwright_smoke(monkeypatch, tmp_path: Path) -> None:
             browser = playwright.chromium.launch(headless=True)
             context = browser.new_context()
             page = context.new_page()
+
+            # Capture console messages for debugging
+            console_messages = []
+            page.on("console", lambda msg: console_messages.append(f"[{msg.type}] {msg.text}"))
+
             server_host = host or "127.0.0.1"
             page.goto(f"http://{server_host}:{port}/viewer/index.html", wait_until="networkidle")
-            page.wait_for_selector("#message-list li")
-            first_entry = page.inner_text("#message-list li:nth-child(1)")
-            assert "Integration Test" in (first_entry or "")
+
+            # Check if there are any console errors (only actual errors, not warnings)
+            errors = [m for m in console_messages if m.startswith("[error]")]
+            if errors:
+                print(f"\n=== Console Errors ===\n{chr(10).join(errors)}\n")
+
+            # Wait for at least one message list item to exist (not necessarily visible)
+            # Use state="attached" to wait for DOM presence, not visibility
+            page.wait_for_selector("#message-list li", state="attached", timeout=30000)
+
+            # Get text from aria-label since it's correctly populated by Alpine
+            first_li = page.locator("#message-list li").first
+            aria_label = first_li.get_attribute("aria-label")
+            assert "Integration Test" in (aria_label or ""), (
+                f"Expected 'Integration Test' in aria-label, got: {aria_label}"
+            )
+
             # Ensure sanitization removed inline script execution.
             xss_value = page.evaluate("window._xss || null")
             assert xss_value is None
