@@ -736,9 +736,28 @@ def scrub_snapshot(
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
 
-        # Agent names (BlueMountain, GreenCastle, etc.) are already meaningless pseudonyms by design
-        # No need to further pseudonymize them
+        # Pseudonymize agent names for privacy
         agents_total = conn.execute("SELECT COUNT(*) FROM agents").fetchone()[0]
+        agents_pseudonymized = 0
+
+        if export_salt:
+            # Generate pseudonyms for all agents
+            agent_rows = conn.execute("SELECT id, name FROM agents").fetchall()
+            for agent in agent_rows:
+                agent_id = agent["id"]
+                original_name = agent["name"]
+
+                # Hash the agent name with salt to create consistent pseudonym
+                hash_input = f"{original_name}{export_salt.hex()}".encode("utf-8")
+                name_hash = hashlib.sha256(hash_input).hexdigest()
+                pseudonym = f"{PSEUDONYM_PREFIX}{name_hash[:PSEUDONYM_LENGTH]}"
+
+                # Update agent name in database
+                conn.execute("UPDATE agents SET name = ? WHERE id = ?", (pseudonym, agent_id))
+                agents_pseudonymized += 1
+        else:
+            # No salt provided - skip pseudonymization
+            agents_pseudonymized = 0
 
         ack_cursor = conn.execute("UPDATE messages SET ack_required = 0")
         ack_flags_cleared = ack_cursor.rowcount or 0
@@ -805,11 +824,13 @@ def scrub_snapshot(
     finally:
         conn.close()
 
+    pseudonym_salt_hex = export_salt.hex() if export_salt else ""
+
     return ScrubSummary(
         preset=preset_key,
-        pseudonym_salt="",  # No longer used - agent names already meaningless
+        pseudonym_salt=pseudonym_salt_hex,
         agents_total=agents_total,
-        agents_pseudonymized=0,  # No longer pseudonymizing - agent names already meaningless
+        agents_pseudonymized=agents_pseudonymized,
         ack_flags_cleared=ack_flags_cleared,
         recipients_cleared=recipients_cleared,
         file_reservations_removed=file_res_removed,
@@ -923,16 +944,23 @@ def build_materialized_views(snapshot_path: Path) -> None:
     """
     conn = sqlite3.connect(str(snapshot_path))
     try:
+        # Check if thread_id column exists in messages table
+        has_thread_id = _column_exists(conn, "messages", "thread_id")
+
+        # Build thread_id expression based on column existence
+        # Fallback to synthetic thread_id using message ID if column doesn't exist
+        thread_id_expr = "m.thread_id" if has_thread_id else "printf('msg:%d', m.id)"
+
         # Message overview materialized view
         # Denormalizes messages with sender names for efficient list rendering
         conn.executescript(
-            """
+            f"""
             DROP TABLE IF EXISTS message_overview_mv;
             CREATE TABLE message_overview_mv AS
             SELECT
                 m.id,
                 m.project_id,
-                m.thread_id,
+                {thread_id_expr} AS thread_id,
                 m.subject,
                 m.importance,
                 m.ack_required,
@@ -965,13 +993,13 @@ def build_materialized_views(snapshot_path: Path) -> None:
         # Attachments by message materialized view
         # Flattens JSON attachments array for easier filtering and counting
         conn.executescript(
-            """
+            f"""
             DROP TABLE IF EXISTS attachments_by_message_mv;
             CREATE TABLE attachments_by_message_mv AS
             SELECT
                 m.id AS message_id,
                 m.project_id,
-                m.thread_id,
+                {thread_id_expr} AS thread_id,
                 m.created_ts,
                 json_extract(value, '$.type') AS attachment_type,
                 json_extract(value, '$.media_type') AS media_type,
@@ -1065,6 +1093,9 @@ def create_performance_indexes(snapshot_path: Path) -> None:
               ON messages(sender_lower);
             """
         )
+
+        # Run ANALYZE to update query optimizer statistics
+        conn.execute("ANALYZE")
 
         conn.commit()
     finally:
