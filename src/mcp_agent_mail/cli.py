@@ -65,6 +65,8 @@ def _env_flag(name: str, default: bool = False) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "t", "yes", "y"}
+
+
 DEFAULT_ENV_PATH = Path(".env")
 app = typer.Typer(help="Developer utilities for the MCP Agent Mail service.")
 
