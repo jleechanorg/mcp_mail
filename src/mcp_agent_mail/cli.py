@@ -58,6 +58,13 @@ from .utils import safe_filesystem_component, slugify
 warnings.filterwarnings("ignore", category=UserWarning, module="bleach")
 
 console = Console()
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "t", "yes", "y"}
 DEFAULT_ENV_PATH = Path(".env")
 app = typer.Typer(help="Developer utilities for the MCP Agent Mail service.")
 
@@ -1759,9 +1766,9 @@ def mail_status(
     and the slug that would be used for this path.
     """
     p = project_path.expanduser().resolve()
-    gate = False
-    mode = "dir"
-    remote_name = "origin"
+    gate = _env_flag("WORKTREES_ENABLED", False)
+    mode = (os.environ.get("PROJECT_IDENTITY_MODE") or "dir").strip() or "dir"
+    remote_name = (os.environ.get("PROJECT_IDENTITY_REMOTE") or "origin").strip() or "origin"
 
     def _norm_remote(url: Optional[str]) -> Optional[str]:
         if not url:
@@ -1832,8 +1839,8 @@ def guard_status(
     Print guard status: gate/mode, resolved hooks directory, and presence of hooks.
     """
     p = repo.expanduser().resolve()
-    gate = False
-    mode = "dir"
+    gate = _env_flag("WORKTREES_ENABLED", False)
+    mode = (os.environ.get("PROJECT_IDENTITY_MODE") or "dir").strip() or "dir"
     guard_mode = (os.environ.get("AGENT_MAIL_GUARD_MODE", "block") or "block").strip().lower()
 
     def _git(cwd: Path, *args: str) -> str | None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from filelock import FileLock, Timeout
@@ -87,14 +88,13 @@ async def acquire_build_slot(
                     except Exception:
                         continue
 
-            # Check for conflicts (exclusive slots or our own exclusive request)
+            same_holder = data.get("agent") == agent_name and _normalize_branch(data.get("branch")) == branch
+            if same_holder:
+                existing_payload = data
+                continue
 
-            # Don\'t conflict with our own slot
-
-            if (exclusive or data.get("exclusive", True)) and data.get("agent") != agent_name:
+            if (exclusive or data.get("exclusive", True)):
                 conflicts.append(data)
-        except Exception:
-            continue
 
             acquired_ts = now.isoformat()
             expires_ts = (now + timedelta(seconds=ttl_seconds)).isoformat()
