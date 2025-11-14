@@ -911,6 +911,9 @@ def finalize_snapshot_for_export(snapshot_path: Path) -> None:
     """
     conn = sqlite3.connect(str(snapshot_path))
     try:
+        # Checkpoint WAL log before switching modes to ensure all changes are in main file
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
         # Convert to DELETE mode for single-file simplicity (no -wal/-shm files)
         conn.execute("PRAGMA journal_mode=DELETE")
 
@@ -931,6 +934,14 @@ def finalize_snapshot_for_export(snapshot_path: Path) -> None:
         conn.commit()
     finally:
         conn.close()
+
+    # Ensure WAL and SHM files are removed after closing connection
+    wal_file = Path(f"{snapshot_path}-wal")
+    shm_file = Path(f"{snapshot_path}-shm")
+    if wal_file.exists():
+        wal_file.unlink()
+    if shm_file.exists():
+        shm_file.unlink()
 
 
 def build_materialized_views(snapshot_path: Path) -> None:
@@ -1205,7 +1216,11 @@ def create_snapshot_context(
 
     create_sqlite_snapshot(source_database, snapshot_path)
     scope = apply_project_scope(snapshot_path, project_filters)
-    scrub_summary = scrub_snapshot(snapshot_path, preset=scrub_preset)
+
+    # Generate a random salt for pseudonymization
+    export_salt = os.urandom(32)
+    scrub_summary = scrub_snapshot(snapshot_path, preset=scrub_preset, export_salt=export_salt)
+
     fts_enabled = build_search_indexes(snapshot_path)
     build_materialized_views(snapshot_path)
     create_performance_indexes(snapshot_path)
@@ -1327,20 +1342,27 @@ def bundle_attachments(
                     continue
 
                 if size >= detach_threshold:
-                    media_record["mode"] = "external"
-                    media_record["note"] = "Attachment exceeds detach threshold; not bundled."
+                    # Large files are "detached" into a separate bundles directory
+                    rel_path = Path("attachments") / "bundles" / f"{sha256}{ext}"
+                    dest_path = output_dir / rel_path
+                    dest_path.parent.mkdir(parents=True, exist_ok=True)
+                    if not dest_path.exists():
+                        dest_path.write_bytes(data)
+                        bytes_copied += size
+                    bundles[sha256] = rel_path
+                    media_record["mode"] = "detached"
+                    media_record["bundle_path"] = rel_path.as_posix()
                     manifest_items.append(media_record)
                     updated_list.append(
                         {
-                            "type": "external",
+                            "type": "file",
                             "media_type": media_type,
                             "bytes": size,
                             "sha256": sha256,
-                            "original_path": original_path,
-                            "note": "Requires manual hosting (exceeds bundle threshold).",
+                            "path": rel_path.as_posix(),
                         }
                     )
-                    externalized_count += 1
+                    copied_count += 1
                     changed = True
                     continue
 
