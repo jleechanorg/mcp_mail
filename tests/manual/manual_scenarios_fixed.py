@@ -30,6 +30,28 @@ from mcp_agent_mail.db import reset_database_state
 # Generate unique project key per run to avoid test pollution
 PROJECT_KEY = f"test_manual_{uuid.uuid4().hex[:8]}"
 
+# Timing constants for deterministic manual tests
+MESSAGE_PROCESSING_DELAY = 0.5  # Allow inbox/search indices to update
+TIMESTAMP_SEPARATION_DELAY = 1.0  # Ensure since_ts checkpoints differ
+
+
+def _extract_result_list(result) -> list:
+    """Best-effort extraction for MCP tool responses."""
+
+    if hasattr(result, "structured_content") and result.structured_content:
+        payload = result.structured_content.get("result")
+        if isinstance(payload, list):
+            return payload
+    if hasattr(result, "data"):
+        data = result.data
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            maybe_result = data.get("result")
+            if isinstance(maybe_result, list):
+                return maybe_result
+    return []
+
 
 class TestResults:
     """Track test results."""
@@ -132,7 +154,7 @@ async def test_1_2_agent_filter_FIXED(client, results):
                 },
             )
 
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(MESSAGE_PROCESSING_DELAY)
 
         # Search with Alice filter
         # CORRECTED EXPECTATION: Alice is involved in 5 messages:
@@ -243,10 +265,10 @@ async def test_2_1_since_ts_FIXED(client, results):
             )
 
         # FIXED: Capture T0 AFTER first batch
-        await asyncio.sleep(1)
+        await asyncio.sleep(TIMESTAMP_SEPARATION_DELAY)
         t0 = datetime.now(timezone.utc)
         print(f"Captured T0: {t0.isoformat()}")
-        await asyncio.sleep(1)
+        await asyncio.sleep(TIMESTAMP_SEPARATION_DELAY)
 
         # Send second batch AFTER T0
         print("Sending second batch (5 messages)...")
