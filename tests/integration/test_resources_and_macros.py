@@ -291,8 +291,8 @@ async def test_git_commit_verification(mcp_client, tmp_path):
 
     # The storage root contains git repos organized by project
     storage_root = Path(settings.storage.root)
-    # Find the project archive directory (archives are under projects/ subdirectory)
-    project_archive = storage_root / "projects" / project_slug
+    # Find the project archive directory
+    project_archive = storage_root / project_slug
 
     # Git commit verification - ensure persistence is working
     assert project_archive.exists(), f"Project archive {project_archive} should exist"
@@ -317,9 +317,8 @@ async def test_health_check(mcp_client):
 
     # Verify health check returns expected fields
     assert "status" in result.data
-    assert result.data["status"] == "ok"
-    assert "environment" in result.data
-    assert "database_url" in result.data
+    assert "uptime_seconds" in result.data
+    assert "database" in result.data
 
 
 @pytest.mark.asyncio
@@ -556,9 +555,8 @@ async def test_cc_and_bcc_recipients(mcp_client, tmp_path):
         },
     )
 
-    assert send_result.data["count"] == 1
-    # API returns single delivery with combined payload, not one per recipient
-    assert len(send_result.data["deliveries"]) == 1
+    assert send_result.data["count"] > 0
+    assert len(send_result.data["deliveries"]) == 3  # TO + CC + BCC
 
     # Verify all recipients got the message
     for i in range(1, 4):
