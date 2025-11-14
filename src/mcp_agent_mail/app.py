@@ -7323,19 +7323,22 @@ def build_mcp_server() -> FastMCP:
     _EXTENDED_TOOL_REGISTRY.update(
         {
             "acknowledge_message": acknowledge_message,
+            "acquire_build_slot": acquire_build_slot,
             "create_agent_identity": create_agent_identity,
             "delete_agent": delete_agent,
-            "search_messages": search_messages,
             "file_reservation_paths": file_reservation_paths,
-            "release_file_reservations": release_file_reservations_tool,
             "force_release_file_reservation": force_release_file_reservation,
+            "install_precommit_guard": install_precommit_guard,
+            "macro_file_reservation_cycle": macro_file_reservation_cycle,
+            "macro_prepare_thread": macro_prepare_thread,
+            "macro_start_session": macro_start_session,
+            "release_build_slot": release_build_slot,
+            "release_file_reservations": release_file_reservations_tool,
+            "renew_build_slot": renew_build_slot,
             "renew_file_reservations": renew_file_reservations,
+            "search_messages": search_messages,
             "summarize_thread": summarize_thread,
             "summarize_threads": summarize_threads,
-            "macro_start_session": macro_start_session,
-            "macro_prepare_thread": macro_prepare_thread,
-            "macro_file_reservation_cycle": macro_file_reservation_cycle,
-            "install_precommit_guard": install_precommit_guard,
             "uninstall_precommit_guard": uninstall_precommit_guard,
         }
     )
