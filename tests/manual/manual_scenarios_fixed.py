@@ -295,7 +295,7 @@ async def test_2_1_since_ts_FIXED(client, results):
             },
         )
 
-        inbox_no_filter = result.data if hasattr(result, "data") else []
+        inbox_no_filter = result.data if (hasattr(result, "data") and isinstance(result.data, list)) else []
         print(f"Without filter: {len(inbox_no_filter)} messages")
 
         if len(inbox_no_filter) != 8:
@@ -317,7 +317,7 @@ async def test_2_1_since_ts_FIXED(client, results):
             },
         )
 
-        inbox_after_t0 = result.data if hasattr(result, "data") else []
+        inbox_after_t0 = result.data if (hasattr(result, "data") and isinstance(result.data, list)) else []
         print(f"After T0: {len(inbox_after_t0)} messages")
 
         if len(inbox_after_t0) == 5:
