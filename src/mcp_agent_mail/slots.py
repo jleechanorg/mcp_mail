@@ -7,17 +7,36 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from filelock import FileLock, Timeout
+
 from mcp_agent_mail.config import get_settings
 from mcp_agent_mail.storage import ensure_archive
-from mcp_agent_mail.utils import slugify
+from mcp_agent_mail.utils import safe_filesystem_component, slugify
+
+LOCK_TIMEOUT_SECONDS = 30
+MIN_TTL_SECONDS = 60
 
 
-def _safe_component(value: str) -> str:
-    """Sanitize a string for use as a filesystem component."""
-    s = value.strip()
-    for ch in ("/", "\\", ":", "*", "?", '"', "<", ">", "|", " "):
-        s = s.replace(ch, "_")
-    return s or "unknown"
+def _normalize_branch(value: str | None) -> str:
+    branch = (value or "main").strip()
+    return branch or "main"
+
+
+def _slot_directory(root: Path, slot: str, create: bool = True) -> Path | None:
+    directory = root / "build_slots" / safe_filesystem_component(slot)
+    if directory.exists() or create:
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
+    return None
+
+
+def _lease_path(slot_dir: Path, agent_name: str, branch: str) -> Path:
+    holder = safe_filesystem_component(f"{agent_name}__{branch}")
+    return slot_dir / f"{holder}.json"
+
+
+def _slot_lock(slot_dir: Path) -> FileLock:
+    return FileLock(str(slot_dir / ".lock"), timeout=LOCK_TIMEOUT_SECONDS)
 
 
 async def acquire_build_slot(
@@ -27,72 +46,46 @@ async def acquire_build_slot(
     ttl_seconds: int = 3600,
     exclusive: bool = True,
 ) -> dict[str, Any]:
-    """
-    Acquire a build slot for coordinating parallel build operations.
+    """Acquire a build slot for coordinating parallel build operations."""
 
-    Parameters
-    ----------
-    project_key : str
-        Project identifier
-    agent_name : str
-        Agent requesting the slot
-    slot : str
-        Slot name (e.g., "frontend-build", "test-runner")
-    ttl_seconds : int
-        Time-to-live in seconds (minimum 60)
-    exclusive : bool
-        Whether this is an exclusive lock
-
-    Returns
-    -------
-    dict
-        {
-            "granted": bool,
-            "slot": str,
-            "agent": str,
-            "acquired_ts": str (ISO8601),
-            "expires_ts": str (ISO8601),
-            "conflicts": list[dict],
-            "disabled": bool (if WORKTREES_ENABLED=0)
-        }
-    """
     settings = get_settings()
 
-    # Check if build slots are enabled via environment variable
     if os.environ.get("WORKTREES_ENABLED", "0") == "0":
         return {"disabled": True}
 
-    # Enforce minimum TTL
-    ttl_seconds = max(60, ttl_seconds)
+    agent_name = (agent_name or "").strip()
+    slot = (slot or "").strip()
+    if not agent_name:
+        return {"granted": False, "error": "agent_name is required"}
+    if not slot:
+        return {"granted": False, "error": "slot is required"}
 
-    # Resolve project archive
+    ttl_seconds = max(MIN_TTL_SECONDS, ttl_seconds)
+
     slug = slugify(project_key)
     archive = await ensure_archive(settings, slug)
+    slot_dir = _slot_directory(archive.root, slot)
 
-    # Create slot directory
-    slot_dir = archive.root / "build_slots" / _safe_component(slot)
-    slot_dir.mkdir(parents=True, exist_ok=True)
+    branch = _normalize_branch(os.environ.get("BRANCH"))
 
-    # Read active slots (non-expired)
-    now = datetime.now(timezone.utc)
-    conflicts: list[dict[str, Any]] = []
+    try:
+        with _slot_lock(slot_dir):
+            now = datetime.now(timezone.utc)
+            conflicts: list[dict[str, Any]] = []
 
-    for f in slot_dir.glob("*.json"):
-        try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-
-            # Skip expired slots
-            exp = data.get("expires_ts")
-            if exp:
+            for lease_file in slot_dir.glob("*.json"):
                 try:
-                    if datetime.fromisoformat(exp) <= now:
-                        continue
+                    data = json.loads(lease_file.read_text(encoding="utf-8"))
                 except Exception:
-                    pass
+                    continue
 
-            # Skip released slots
-            if data.get("released_ts"):
-                continue
+                exp = data.get("expires_ts")
+                if exp:
+                    try:
+                        if datetime.fromisoformat(exp) <= now:
+                            continue
+                    except Exception:
+                        continue
 
             # Check for conflicts (exclusive slots or our own exclusive request)
 
@@ -103,33 +96,33 @@ async def acquire_build_slot(
         except Exception:
             continue
 
-    # Create lease file
-    branch = os.environ.get("BRANCH", "main")
-    holder = _safe_component(f"{agent_name}__{branch}")
-    lease_path = slot_dir / f"{holder}.json"
+            acquired_ts = now.isoformat()
+            expires_ts = (now + timedelta(seconds=ttl_seconds)).isoformat()
+            payload = {
+                "slot": slot,
+                "agent": agent_name,
+                "branch": branch,
+                "exclusive": exclusive,
+                "acquired_ts": acquired_ts,
+                "expires_ts": expires_ts,
+            }
 
-    acquired_ts = now.isoformat()
-    expires_ts = (now + timedelta(seconds=ttl_seconds)).isoformat()
+            lease_path = _lease_path(slot_dir, agent_name, branch)
+            lease_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
-    payload = {
-        "slot": slot,
-        "agent": agent_name,
-        "branch": branch,
-        "exclusive": exclusive,
-        "acquired_ts": acquired_ts,
-        "expires_ts": expires_ts,
-    }
-
-    lease_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
-    return {
-        "granted": True,
-        "slot": slot,
-        "agent": agent_name,
-        "acquired_ts": acquired_ts,
-        "expires_ts": expires_ts,
-        "conflicts": conflicts,
-    }
+            return {
+                "granted": True,
+                "slot": slot,
+                "agent": agent_name,
+                "acquired_ts": acquired_ts,
+                "expires_ts": expires_ts,
+                "exclusive": exclusive,
+                "conflicts": conflicts,
+            }
+    except Timeout:
+        return {"granted": False, "error": "Timed out while acquiring slot lock"}
+    except OSError as exc:
+        return {"granted": False, "error": str(exc)}
 
 
 async def renew_build_slot(
@@ -138,62 +131,56 @@ async def renew_build_slot(
     slot: str,
     extend_seconds: int = 1800,
 ) -> dict[str, Any]:
-    """
-    Renew an existing build slot by extending its expiration.
+    """Renew an existing build slot by extending its expiration."""
 
-    Parameters
-    ----------
-    project_key : str
-        Project identifier
-    agent_name : str
-        Agent name
-    slot : str
-        Slot name
-    extend_seconds : int
-        Seconds to extend the expiration
-
-    Returns
-    -------
-    dict
-        {
-            "renewed": bool,
-            "expires_ts": str (ISO8601),
-        }
-    """
     settings = get_settings()
 
-    # Resolve project archive
+    if os.environ.get("WORKTREES_ENABLED", "0") == "0":
+        return {"disabled": True}
+
+    agent_name = (agent_name or "").strip()
+    slot = (slot or "").strip()
+    if not agent_name:
+        return {"renewed": False, "error": "agent_name is required"}
+    if not slot:
+        return {"renewed": False, "error": "slot is required"}
+
     slug = slugify(project_key)
     archive = await ensure_archive(settings, slug)
-
-    # Find slot file
-    slot_dir = archive.root / "build_slots" / _safe_component(slot)
-    if not slot_dir.exists():
+    slot_dir = _slot_directory(archive.root, slot, create=False)
+    if slot_dir is None or not slot_dir.exists():
         return {"renewed": False, "error": "Slot not found"}
 
-    branch = os.environ.get("BRANCH", "main")
-    holder = _safe_component(f"{agent_name}__{branch}")
-    lease_path = slot_dir / f"{holder}.json"
-
+    branch = _normalize_branch(os.environ.get("BRANCH"))
+    lease_path = _lease_path(slot_dir, agent_name, branch)
     if not lease_path.exists():
         return {"renewed": False, "error": "Lease not found"}
 
-    # Update expiration
     try:
-        data = json.loads(lease_path.read_text(encoding="utf-8"))
-        # Renew from now, not from old expiry
-        now = datetime.now(timezone.utc)
-        new_expires = now + timedelta(seconds=extend_seconds)
-        data["expires_ts"] = new_expires.isoformat()
+        with _slot_lock(slot_dir):
+            data = json.loads(lease_path.read_text(encoding="utf-8"))
+            owner_branch = _normalize_branch(data.get("branch"))
+            owner_agent = data.get("agent")
+            if owner_agent != agent_name or owner_branch != branch:
+                return {
+                    "renewed": False,
+                    "error": f"Lease owned by {owner_agent}@{owner_branch}",
+                }
 
-        lease_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            now = datetime.now(timezone.utc)
+            new_expires = now + timedelta(seconds=extend_seconds)
+            data["expires_ts"] = new_expires.isoformat()
 
-        return {
-            "renewed": True,
-            "expires_ts": new_expires.isoformat(),
-        }
-    except Exception as e:
-        return {"renewed": False, "error": str(e)}
+            lease_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+            return {
+                "renewed": True,
+                "expires_ts": new_expires.isoformat(),
+            }
+    except Timeout:
+        return {"renewed": False, "error": "Timed out while acquiring slot lock"}
+    except Exception as exc:
+        return {"renewed": False, "error": str(exc)}
 
 
 async def release_build_slot(
@@ -201,55 +188,52 @@ async def release_build_slot(
     agent_name: str,
     slot: str,
 ) -> dict[str, Any]:
-    """
-    Release a build slot.
+    """Release a build slot."""
 
-    Parameters
-    ----------
-    project_key : str
-        Project identifier
-    agent_name : str
-        Agent name
-    slot : str
-        Slot name
-
-    Returns
-    -------
-    dict
-        {
-            "released": bool,
-            "released_at": str (ISO8601),
-        }
-    """
     settings = get_settings()
 
-    # Resolve project archive
+    if os.environ.get("WORKTREES_ENABLED", "0") == "0":
+        return {"disabled": True}
+
+    agent_name = (agent_name or "").strip()
+    slot = (slot or "").strip()
+    if not agent_name:
+        return {"released": False, "error": "agent_name is required"}
+    if not slot:
+        return {"released": False, "error": "slot is required"}
+
     slug = slugify(project_key)
     archive = await ensure_archive(settings, slug)
-
-    # Find slot file
-    slot_dir = archive.root / "build_slots" / _safe_component(slot)
-    if not slot_dir.exists():
+    slot_dir = _slot_directory(archive.root, slot, create=False)
+    if slot_dir is None or not slot_dir.exists():
         return {"released": False, "error": "Slot not found"}
 
-    branch = os.environ.get("BRANCH", "main")
-    holder = _safe_component(f"{agent_name}__{branch}")
-    lease_path = slot_dir / f"{holder}.json"
-
+    branch = _normalize_branch(os.environ.get("BRANCH"))
+    lease_path = _lease_path(slot_dir, agent_name, branch)
     if not lease_path.exists():
         return {"released": False, "error": "Lease not found"}
 
-    # Mark as released
     try:
-        data = json.loads(lease_path.read_text(encoding="utf-8"))
-        released_ts = datetime.now(timezone.utc).isoformat()
-        data["released_ts"] = released_ts
+        with _slot_lock(slot_dir):
+            data = json.loads(lease_path.read_text(encoding="utf-8"))
+            owner_branch = _normalize_branch(data.get("branch"))
+            owner_agent = data.get("agent")
+            if owner_agent != agent_name or owner_branch != branch:
+                return {
+                    "released": False,
+                    "error": f"Lease owned by {owner_agent}@{owner_branch}",
+                }
 
-        lease_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            released_ts = datetime.now(timezone.utc).isoformat()
+            data["released_ts"] = released_ts
 
-        return {
-            "released": True,
-            "released_at": released_ts,
-        }
-    except Exception as e:
-        return {"released": False, "error": str(e)}
+            lease_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+            return {
+                "released": True,
+                "released_ts": released_ts,
+            }
+    except Timeout:
+        return {"released": False, "error": "Timed out while acquiring slot lock"}
+    except Exception as exc:
+        return {"released": False, "error": str(exc)}

@@ -52,7 +52,7 @@ from .share import (
     summarize_snapshot,
 )
 from .storage import ensure_archive
-from .utils import slugify
+from .utils import safe_filesystem_component, slugify
 
 # Suppress annoying bleach CSS sanitizer warning from dependencies
 warnings.filterwarnings("ignore", category=UserWarning, module="bleach")
@@ -1633,15 +1633,9 @@ def am_run(
     guard_mode = (os.environ.get("AGENT_MAIL_GUARD_MODE", "block") or "block").strip().lower()
     worktrees_enabled = False
 
-    def _safe_component(value: str) -> str:
-        s = value.strip()
-        for ch in ("/", "\\\\", ":", "*", "?", '"', "<", ">", "|", " "):
-            s = s.replace(ch, "_")
-        return s or "unknown"
-
     async def _ensure_slot_paths() -> Path:
         archive = await ensure_archive(settings, slug)
-        slot_dir = archive.root / "build_slots" / _safe_component(slot)
+        slot_dir = archive.root / "build_slots" / safe_filesystem_component(slot)
         slot_dir.mkdir(parents=True, exist_ok=True)
         return slot_dir
 
@@ -1664,7 +1658,7 @@ def am_run(
         return results
 
     def _lease_path(slot_dir: Path) -> Path:
-        holder = _safe_component(f"{agent_name}__{branch or 'unknown'}")
+        holder = safe_filesystem_component(f"{agent_name}__{branch or 'unknown'}")
         return slot_dir / f"{holder}.json"
 
     env = os.environ.copy()

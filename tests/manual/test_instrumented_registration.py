@@ -108,6 +108,7 @@ async def test_agent_registration_bug():
             return
 
         # Small delay to ensure transaction completes
+        # Allow the transaction commit to settle before verifying state
         await asyncio.sleep(0.1)
 
         # Step 2: Try to send message using the registered agent
@@ -146,6 +147,7 @@ async def test_agent_registration_bug():
 
             # Try again after a longer delay
             log("Waiting 1 second and retrying...")
+            # Longer pause to observe whether eventual consistency resolves the issue
             await asyncio.sleep(1.0)
 
             try:

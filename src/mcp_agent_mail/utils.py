@@ -36,6 +36,7 @@ NOUNS: Iterable[str] = (
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 _AGENT_NAME_RE = re.compile(r"[^A-Za-z0-9]+")
+_INVALID_FS_CHARS = ("/", "\\", ":", "*", "?", '"', "<", ">", "|", " ")
 
 
 def slugify(value: str) -> str:
@@ -58,6 +59,15 @@ def sanitize_agent_name(value: str) -> Optional[str]:
     if not cleaned:
         return None
     return cleaned[:128]
+
+
+def safe_filesystem_component(value: str) -> str:
+    """Sanitize a string for use as a filesystem component."""
+
+    component = value.strip()
+    for ch in _INVALID_FS_CHARS:
+        component = component.replace(ch, "_")
+    return component or "unknown"
 
 
 def validate_agent_name_format(name: str) -> bool:

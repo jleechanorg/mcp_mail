@@ -176,7 +176,7 @@ async def test_release_build_slot(isolated_env, tmp_path: Path):
 
         data = result.data
         assert data["released"] is True
-        assert data["released_at"] is not None
+        assert data["released_ts"] is not None
 
         # Verify slot file was marked as released
         slot_dir = archive.root / "build_slots" / "deploy"

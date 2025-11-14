@@ -435,7 +435,7 @@ for i in range(5):
 - Test script: `/tmp/mcp_mail_test_20251113/run_manual_tests.py`
 
 ### Test Logs
-```
+```text
 ======================================================================
 TEST EXECUTION COMPLETE
 ======================================================================
@@ -460,19 +460,24 @@ Success: 60.0%
 
 ### Deployment Recommendation
 
-**✅ APPROVED FOR DEPLOYMENT**
+**⚠️ Scoped approval only**
 
-All code changes are functioning correctly. The manual test "failures" were due to incorrect test expectations and timing, not actual bugs in the implementation.
+Based on the corrected manual scenarios executed on 2025-11-13:
 
-**Action Items**:
+- ✅ Approved for: `search_mailbox`, `since_ts` filtering, and `force_reclaim` behavior as exercised in the manual scripts
+- ⚠️ Not approved: build slots, agent registration stability, CLI tooling, resources/macros, and any feature not explicitly validated here
+- 🔴 Blocking issues: `mcp_agent_mail-7rj`, `mcp_agent_mail-rop`, `mcp_agent_mail-k2d`, `mcp_agent_mail-2mm` must be resolved before declaring full production readiness
+
+**See also**: `roadmap/http_server_test_results_2025-11-13.md` for the complementary HTTP evidence (also scoped to search_mailbox + since_ts) and the PR description for the global "NOT APPROVED FOR FULL SYSTEM DEPLOYMENT" banner.
+
+### Action Items
 1. Update test plan expectations for agent filter behavior
 2. Fix test timing for since_ts validation
-3. Re-run manual tests with corrected expectations (optional)
+3. Re-run manual + HTTP tests after blockers above are resolved
 
 **Next Steps**:
-- Merge to main branch
-- Deploy to production
-- Monitor for any edge cases in production usage
+- Keep these manual tests alongside automated runs for targeted verification
+- Focus engineering effort on the open blockers before attempting a full deployment
 
 ---
 
@@ -486,7 +491,7 @@ All code changes are functioning correctly. The manual test "failures" were due 
 ## Appendix: Environment Information
 
 ### Test Environment
-```
+```yaml
 Platform: darwin (macOS)
 OS Version: Darwin 24.5.0
 Python: 3.13.7
@@ -495,14 +500,14 @@ uv: latest
 ```
 
 ### Database
-```
+```yaml
 Type: SQLite + aiosqlite
 FTS5: Enabled ✅
 Location: .mcp_mail/storage.sqlite3
 ```
 
 ### Git Status
-```
+```yaml
 Branch: dev1763066046
 Commit: 3c28767
 Status: Clean (no uncommitted changes)
