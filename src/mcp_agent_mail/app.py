@@ -4736,11 +4736,7 @@ def build_mcp_server() -> FastMCP:
 
     @mcp.tool(name="acquire_build_slot")
     @_instrument_tool(
-        "acquire_build_slot",
-        cluster=CLUSTER_SETUP,
-        capabilities={"coordination"},
-        project_arg="project_key",
-        agent_arg="agent_name",
+        "acquire_build_slot", cluster=CLUSTER_SETUP, capabilities={"coordination"}, project_arg="project_key"
     )
     async def acquire_build_slot(
         ctx: Context,
@@ -4785,11 +4781,7 @@ def build_mcp_server() -> FastMCP:
 
     @mcp.tool(name="renew_build_slot")
     @_instrument_tool(
-        "renew_build_slot",
-        cluster=CLUSTER_SETUP,
-        capabilities={"coordination"},
-        project_arg="project_key",
-        agent_arg="agent_name",
+        "renew_build_slot", cluster=CLUSTER_SETUP, capabilities={"coordination"}, project_arg="project_key"
     )
     async def renew_build_slot(
         ctx: Context,
@@ -4827,11 +4819,7 @@ def build_mcp_server() -> FastMCP:
 
     @mcp.tool(name="release_build_slot")
     @_instrument_tool(
-        "release_build_slot",
-        cluster=CLUSTER_SETUP,
-        capabilities={"coordination"},
-        project_arg="project_key",
-        agent_arg="agent_name",
+        "release_build_slot", cluster=CLUSTER_SETUP, capabilities={"coordination"}, project_arg="project_key"
     )
     async def release_build_slot(
         ctx: Context,
@@ -4856,7 +4844,8 @@ def build_mcp_server() -> FastMCP:
         dict
             {
                 "released": bool,
-                "released_ts": str (ISO8601),
+                "released_at": str (ISO8601),
+                "disabled": bool (if WORKTREES_ENABLED=0)
             }
         """
         result = await release_slot_impl(project_key, agent_name, slot)
