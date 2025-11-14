@@ -2503,6 +2503,9 @@ EXTENDED_TOOLS = {
     "macro_file_reservation_cycle",
     "install_precommit_guard",
     "uninstall_precommit_guard",
+    "acquire_build_slot",
+    "renew_build_slot",
+    "release_build_slot",
 }
 
 # Tool metadata for discovery
@@ -2529,6 +2532,18 @@ EXTENDED_TOOL_METADATA = {
     "renew_file_reservations": {
         "category": "file_reservations",
         "description": "Extend expiry for active reservations",
+    },
+    "acquire_build_slot": {
+        "category": "coordination",
+        "description": "Acquire exclusive build slot for parallel operations",
+    },
+    "renew_build_slot": {
+        "category": "coordination",
+        "description": "Extend build slot expiration",
+    },
+    "release_build_slot": {
+        "category": "coordination",
+        "description": "Release build slot",
     },
     "summarize_thread": {
         "category": "search",
@@ -4795,6 +4810,7 @@ def build_mcp_server() -> FastMCP:
             {
                 "renewed": bool,
                 "expires_ts": str (ISO8601),
+                "disabled": bool (if WORKTREES_ENABLED=0)
             }
         """
         result = await renew_slot_impl(project_key, agent_name, slot, extend_seconds)
@@ -4829,6 +4845,7 @@ def build_mcp_server() -> FastMCP:
             {
                 "released": bool,
                 "released_at": str (ISO8601),
+                "disabled": bool (if WORKTREES_ENABLED=0)
             }
         """
         result = await release_slot_impl(project_key, agent_name, slot)
@@ -5738,6 +5755,48 @@ def build_mcp_server() -> FastMCP:
                         "required_capabilities": ["repository"],
                         "usage_examples": [
                             {"hint": "Cleanup", "sample": "uninstall_precommit_guard(code_repo_path='~/repo')"}
+                        ],
+                    },
+                    {
+                        "name": "acquire_build_slot",
+                        "summary": "Acquire exclusive build slot for coordinating parallel build operations.",
+                        "use_when": "Before starting builds/tests that need exclusive access to resources.",
+                        "related": ["renew_build_slot", "release_build_slot"],
+                        "expected_frequency": "Once per build/test cycle.",
+                        "required_capabilities": ["coordination"],
+                        "usage_examples": [
+                            {
+                                "hint": "Acquire slot",
+                                "sample": "acquire_build_slot(project_key='backend', agent_name='BuildAgent', slot='frontend-build')",
+                            }
+                        ],
+                    },
+                    {
+                        "name": "renew_build_slot",
+                        "summary": "Extend expiration of an active build slot.",
+                        "use_when": "When build operations are taking longer than expected TTL.",
+                        "related": ["acquire_build_slot", "release_build_slot"],
+                        "expected_frequency": "As needed during long-running builds.",
+                        "required_capabilities": ["coordination"],
+                        "usage_examples": [
+                            {
+                                "hint": "Renew slot",
+                                "sample": "renew_build_slot(project_key='backend', agent_name='BuildAgent', slot='frontend-build', extend_seconds=1800)",
+                            }
+                        ],
+                    },
+                    {
+                        "name": "release_build_slot",
+                        "summary": "Release an acquired build slot.",
+                        "use_when": "After completing build operations or on error/cleanup.",
+                        "related": ["acquire_build_slot", "renew_build_slot"],
+                        "expected_frequency": "Once per build/test cycle.",
+                        "required_capabilities": ["coordination"],
+                        "usage_examples": [
+                            {
+                                "hint": "Release slot",
+                                "sample": "release_build_slot(project_key='backend', agent_name='BuildAgent', slot='frontend-build')",
+                            }
                         ],
                     },
                 ],
