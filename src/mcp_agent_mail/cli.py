@@ -60,13 +60,6 @@ warnings.filterwarnings("ignore", category=UserWarning, module="bleach")
 console = Console()
 
 
-def _env_flag(name: str, default: bool = False) -> bool:
-    value = os.environ.get(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "t", "yes", "y"}
-
-
 DEFAULT_ENV_PATH = Path(".env")
 app = typer.Typer(help="Developer utilities for the MCP Agent Mail service.")
 
@@ -1640,7 +1633,7 @@ def am_run(
             branch = "unknown"
     settings = get_settings()
     guard_mode = (os.environ.get("AGENT_MAIL_GUARD_MODE", "block") or "block").strip().lower()
-    worktrees_enabled = False
+    worktrees_enabled = bool(getattr(settings, "worktrees_enabled", False))
 
     async def _ensure_slot_paths() -> Path:
         archive = await ensure_archive(settings, slug)
@@ -1767,10 +1760,11 @@ def mail_status(
     Print routing diagnostics: gate state, configured identity mode, normalized remote (if any),
     and the slug that would be used for this path.
     """
+    settings = get_settings()
     p = project_path.expanduser().resolve()
-    gate = _env_flag("WORKTREES_ENABLED", False)
-    mode = (os.environ.get("PROJECT_IDENTITY_MODE") or "dir").strip() or "dir"
-    remote_name = (os.environ.get("PROJECT_IDENTITY_REMOTE") or "origin").strip() or "origin"
+    gate = bool(getattr(settings, "worktrees_enabled", False))
+    mode = (getattr(settings, "project_identity_mode", "dir") or "dir").strip() or "dir"
+    remote_name = (getattr(settings, "project_identity_remote", "origin") or "origin").strip() or "origin"
 
     def _norm_remote(url: Optional[str]) -> Optional[str]:
         if not url:
@@ -1816,10 +1810,8 @@ def mail_status(
     except Exception:
         normalized_remote = None
 
-    # Compute a candidate slug using the same logic as the server helper (summarized)
-    from mcp_agent_mail.app import _compute_project_slug as _compute_slug  # type: ignore
-
-    slug_value = _compute_slug(str(p))
+    # Compute a candidate slug using the same normalization as the server helper
+    slug_value = slugify(str(p))
 
     table = Table(title="Mail routing status", show_lines=False)
     table.add_column("Field")
@@ -1840,9 +1832,10 @@ def guard_status(
     """
     Print guard status: gate/mode, resolved hooks directory, and presence of hooks.
     """
+    settings = get_settings()
     p = repo.expanduser().resolve()
-    gate = _env_flag("WORKTREES_ENABLED", False)
-    mode = (os.environ.get("PROJECT_IDENTITY_MODE") or "dir").strip() or "dir"
+    gate = bool(getattr(settings, "worktrees_enabled", False))
+    mode = (getattr(settings, "project_identity_mode", "dir") or "dir").strip() or "dir"
     guard_mode = (os.environ.get("AGENT_MAIL_GUARD_MODE", "block") or "block").strip().lower()
 
     def _git(cwd: Path, *args: str) -> str | None:
