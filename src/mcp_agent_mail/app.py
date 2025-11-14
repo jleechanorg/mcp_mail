@@ -4844,7 +4844,7 @@ def build_mcp_server() -> FastMCP:
         dict
             {
                 "released": bool,
-                "released_at": str (ISO8601),
+                "released_ts": str (ISO8601),
                 "disabled": bool (if WORKTREES_ENABLED=0)
             }
         """
