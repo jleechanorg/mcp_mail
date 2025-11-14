@@ -1,8 +1,8 @@
 """Integration tests for CLI commands added in Tier 1 and Tier 2."""
 
 from __future__ import annotations
-import asyncio
 
+import asyncio
 import subprocess
 from pathlib import Path
 
@@ -167,7 +167,6 @@ async def test_am_run_with_agent_flag(isolated_env, tmp_path: Path, monkeypatch)
     """Test am-run with explicit agent name."""
     settings = get_settings()
     await ensure_archive(settings, "test-project")
-
 
     repo_path = tmp_path / "repo"
     repo_path.mkdir()

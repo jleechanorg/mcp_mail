@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 
 from mcp_agent_mail.config import get_settings
@@ -96,10 +95,11 @@ async def acquire_build_slot(
                 continue
 
             # Check for conflicts (exclusive slots or our own exclusive request)
-            if exclusive or data.get("exclusive", True):
-                # Don't conflict with our own slot
-                if not (data.get("agent") == agent_name):
-                    conflicts.append(data)
+
+            # Don\'t conflict with our own slot
+
+            if (exclusive or data.get("exclusive", True)) and data.get("agent") != agent_name:
+                conflicts.append(data)
         except Exception:
             continue
 

@@ -9,7 +9,6 @@ These tests validate:
 
 from __future__ import annotations
 
-import base64
 import subprocess
 from pathlib import Path
 
@@ -315,6 +314,7 @@ async def test_health_check(mcp_client):
     assert "environment" in result.data
     assert "database_url" in result.data
 
+
 @pytest.mark.asyncio
 async def test_mark_message_read(mcp_client, tmp_path):
     """Test marking messages as read."""
@@ -463,7 +463,9 @@ async def test_delete_agent(mcp_client, tmp_path):
     except Exception as e:
         # Exception with "not registered" or "NoResultFound" is acceptable for deleted agent
         error_msg = str(e)
-        assert "not registered" in error_msg or "NoResultFound" in error_msg,             f"Expected 'not registered' or 'NoResultFound' in error, got: {error_msg}"
+        assert "not registered" in error_msg or "NoResultFound" in error_msg, (
+            f"Expected 'not registered' or 'NoResultFound' in error, got: {error_msg}"
+        )
 
 
 @pytest.mark.asyncio
