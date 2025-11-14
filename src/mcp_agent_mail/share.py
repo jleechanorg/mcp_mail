@@ -960,6 +960,9 @@ def build_materialized_views(snapshot_path: Path) -> None:
 
         # Build thread_id expression based on column existence
         # Fallback to synthetic thread_id using message ID if column doesn't exist
+        #
+        # SAFETY: thread_id_expr is a static SQL expression (either "m.thread_id" or "printf('msg:%d', m.id)")
+        # and never contains user input. f-string interpolation is safe here for SQL construction.
         thread_id_expr = "m.thread_id" if has_thread_id else "printf('msg:%d', m.id)"
 
         # Message overview materialized view
@@ -1086,14 +1089,28 @@ def create_performance_indexes(snapshot_path: Path) -> None:
             """
         )
 
-        conn.executescript(
+        # Check if thread_id column exists before creating index
+        has_thread_id = _column_exists(conn, "messages", "thread_id")
+
+        # Create base indexes
+        conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_messages_created_ts
-              ON messages(created_ts DESC);
+              ON messages(created_ts DESC)
+            """
+        )
 
-            CREATE INDEX IF NOT EXISTS idx_messages_thread
-              ON messages(thread_id, created_ts DESC);
+        # Only create thread_id index if column exists
+        if has_thread_id:
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_messages_thread
+                  ON messages(thread_id, created_ts DESC)
+                """
+            )
 
+        conn.executescript(
+            """
             CREATE INDEX IF NOT EXISTS idx_messages_sender
               ON messages(sender_id, created_ts DESC);
 
@@ -1104,9 +1121,6 @@ def create_performance_indexes(snapshot_path: Path) -> None:
               ON messages(sender_lower);
             """
         )
-
-        # Run ANALYZE to update query optimizer statistics
-        conn.execute("ANALYZE")
 
         conn.commit()
     finally:
@@ -1250,6 +1264,10 @@ def bundle_attachments(
     manifest_items: list[dict[str, Any]] = []
     inline_count = 0
     copied_count = 0
+    # NOTE: externalized_count remains 0 with detached bundles feature.
+    # Large files >= detach_threshold are now copied to attachments/bundles/
+    # and counted in copied_count, rather than being marked as external.
+    # This variable is kept for backward compatibility in manifest stats.
     externalized_count = 0
     missing_count = 0
     bytes_copied = 0
