@@ -93,7 +93,7 @@ async def acquire_build_slot(
                 existing_payload = data
                 continue
 
-            if (exclusive or data.get("exclusive", True)):
+            if exclusive or data.get("exclusive", True):
                 conflicts.append(data)
 
             acquired_ts = now.isoformat()
