@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -14,17 +15,21 @@ from mcp_agent_mail.config import get_settings
 from mcp_agent_mail.storage import ensure_archive
 
 
+def _set_worktrees(monkeypatch: pytest.MonkeyPatch, enabled: bool) -> None:
+    """Patch slots.get_settings() to control the WORKTREES gate."""
+    settings = get_settings()
+    fake_settings = replace(settings, worktrees_enabled=enabled)
+    monkeypatch.setattr("mcp_agent_mail.slots.get_settings", lambda: fake_settings)
+
+
 @pytest.mark.asyncio
-async def test_acquire_build_slot_basic(isolated_env, tmp_path: Path):
+async def test_acquire_build_slot_basic(monkeypatch, isolated_env, tmp_path: Path):
     """Test basic build slot acquisition."""
     server = build_mcp_server()
     settings = get_settings()
     archive = await ensure_archive(settings, "testproject")
 
-    # Enable worktrees for build slots
-    import os
-
-    os.environ["WORKTREES_ENABLED"] = "1"
+    _set_worktrees(monkeypatch, True)
 
     async with Client(server) as client:
         result = await client.call_tool(
@@ -57,15 +62,13 @@ async def test_acquire_build_slot_basic(isolated_env, tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_acquire_build_slot_conflict(isolated_env, tmp_path: Path):
+async def test_acquire_build_slot_conflict(monkeypatch, isolated_env, tmp_path: Path):
     """Test build slot conflict detection with multiple agents."""
     server = build_mcp_server()
     settings = get_settings()
     archive = await ensure_archive(settings, "testproject")
 
-    import os
-
-    os.environ["WORKTREES_ENABLED"] = "1"
+    _set_worktrees(monkeypatch, True)
 
     async with Client(server) as client:
         # First agent acquires slot
@@ -107,15 +110,13 @@ async def test_acquire_build_slot_conflict(isolated_env, tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_renew_build_slot(isolated_env, tmp_path: Path):
+async def test_renew_build_slot(monkeypatch, isolated_env, tmp_path: Path):
     """Test build slot renewal."""
     server = build_mcp_server()
     settings = get_settings()
     await ensure_archive(settings, "testproject")
 
-    import os
-
-    os.environ["WORKTREES_ENABLED"] = "1"
+    _set_worktrees(monkeypatch, True)
 
     async with Client(server) as client:
         # Acquire slot
@@ -150,15 +151,13 @@ async def test_renew_build_slot(isolated_env, tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_release_build_slot(isolated_env, tmp_path: Path):
+async def test_release_build_slot(monkeypatch, isolated_env, tmp_path: Path):
     """Test build slot release."""
     server = build_mcp_server()
     settings = get_settings()
     archive = await ensure_archive(settings, "testproject")
 
-    import os
-
-    os.environ["WORKTREES_ENABLED"] = "1"
+    _set_worktrees(monkeypatch, True)
 
     async with Client(server) as client:
         # Acquire slot
@@ -192,15 +191,13 @@ async def test_release_build_slot(isolated_env, tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_build_slot_expiry(isolated_env, tmp_path: Path):
+async def test_build_slot_expiry(monkeypatch, isolated_env, tmp_path: Path):
     """Test that expired slots are not reported as conflicts."""
     server = build_mcp_server()
     settings = get_settings()
     archive = await ensure_archive(settings, "testproject")
 
-    import os
-
-    os.environ["WORKTREES_ENABLED"] = "1"
+    _set_worktrees(monkeypatch, True)
 
     # Manually create an expired slot
     slot_dir = archive.root / "build_slots" / "expired-slot"
@@ -239,15 +236,13 @@ async def test_build_slot_expiry(isolated_env, tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_build_slot_disabled_gate(isolated_env, tmp_path: Path):
+async def test_build_slot_disabled_gate(monkeypatch, isolated_env, tmp_path: Path):
     """Test that build slots respect WORKTREES_ENABLED gate."""
     server = build_mcp_server()
     settings = get_settings()
     await ensure_archive(settings, "testproject")
 
-    import os
-
-    os.environ["WORKTREES_ENABLED"] = "0"
+    _set_worktrees(monkeypatch, False)
 
     async with Client(server) as client:
         # Try to acquire slot with gate disabled
@@ -268,15 +263,13 @@ async def test_build_slot_disabled_gate(isolated_env, tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_build_slot_non_exclusive(isolated_env, tmp_path: Path):
+async def test_build_slot_non_exclusive(monkeypatch, isolated_env, tmp_path: Path):
     """Test non-exclusive build slots allow multiple holders."""
     server = build_mcp_server()
     settings = get_settings()
     await ensure_archive(settings, "testproject")
 
-    import os
-
-    os.environ["WORKTREES_ENABLED"] = "1"
+    _set_worktrees(monkeypatch, True)
 
     async with Client(server) as client:
         # First agent acquires non-exclusive slot
@@ -313,15 +306,13 @@ async def test_build_slot_non_exclusive(isolated_env, tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_build_slot_ttl_validation(isolated_env, tmp_path: Path):
+async def test_build_slot_ttl_validation(monkeypatch, isolated_env, tmp_path: Path):
     """Test TTL validation (minimum 60 seconds)."""
     server = build_mcp_server()
     settings = get_settings()
     await ensure_archive(settings, "testproject")
 
-    import os
-
-    os.environ["WORKTREES_ENABLED"] = "1"
+    _set_worktrees(monkeypatch, True)
 
     async with Client(server) as client:
         # Try to acquire slot with very short TTL
@@ -345,3 +336,34 @@ async def test_build_slot_ttl_validation(isolated_env, tmp_path: Path):
         acquired_dt = datetime.fromisoformat(data["acquired_ts"])
         actual_ttl = (expires_dt - acquired_dt).total_seconds()
         assert actual_ttl >= 60
+
+
+@pytest.mark.asyncio
+async def test_build_slot_gate_respects_settings(monkeypatch, isolated_env, tmp_path: Path):
+    """Build slot tools should follow settings gate even when env vars are unset."""
+    server = build_mcp_server()
+    real_settings = get_settings()
+    archive = await ensure_archive(real_settings, "testproject")
+
+    # Ensure the raw environment does not expose the gate flag
+    monkeypatch.delenv("WORKTREES_ENABLED", raising=False)
+
+    # Pretend the settings object enables the gate (the server uses python-decouple)
+    fake_settings = replace(real_settings, worktrees_enabled=True)
+    monkeypatch.setattr("mcp_agent_mail.slots.get_settings", lambda: fake_settings)
+
+    async with Client(server) as client:
+        result = await client.call_tool(
+            "acquire_build_slot",
+            {
+                "project_key": "testproject",
+                "agent_name": "SettingsAgent",
+                "slot": "settings-slot",
+            },
+        )
+
+    # Slot acquisition should succeed because the gate is enabled in settings
+    assert result.data["granted"] is True
+
+    slot_dir = archive.root / "build_slots" / "settings-slot"
+    assert slot_dir.exists(), "slot directory created when settings gate is on"
