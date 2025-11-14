@@ -14,7 +14,6 @@ the returned canonical name for subsequent operations.
 """
 
 import asyncio
-import json
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -23,12 +22,35 @@ from pathlib import Path
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
+from fastmcp import Client
+
 from mcp_agent_mail.app import build_mcp_server
 from mcp_agent_mail.db import reset_database_state
-from fastmcp import Client
 
 # Generate unique project key per run to avoid test pollution
 PROJECT_KEY = f"test_manual_{uuid.uuid4().hex[:8]}"
+
+# Timing constants for deterministic manual tests
+MESSAGE_PROCESSING_DELAY = 0.5  # Allow inbox/search indices to update
+TIMESTAMP_SEPARATION_DELAY = 1.0  # Ensure since_ts checkpoints differ
+
+
+def _extract_result_list(result) -> list:
+    """Best-effort extraction for MCP tool responses."""
+
+    if hasattr(result, "structured_content") and result.structured_content:
+        payload = result.structured_content.get("result")
+        if isinstance(payload, list):
+            return payload
+    if hasattr(result, "data"):
+        data = result.data
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            maybe_result = data.get("result")
+            if isinstance(maybe_result, list):
+                return maybe_result
+    return []
 
 
 class TestResults:
@@ -118,7 +140,7 @@ async def test_1_2_agent_filter_FIXED(client, results):
                 "body_md": f"Testing content from Bob {i+1}"
             })
 
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(MESSAGE_PROCESSING_DELAY)
 
         # Search with Alice filter
         # CORRECTED EXPECTATION: Alice is involved in 5 messages:
@@ -131,12 +153,7 @@ async def test_1_2_agent_filter_FIXED(client, results):
             "limit": 10
         })
 
-        if hasattr(result, 'structured_content') and result.structured_content:
-            alice_results = result.structured_content.get("result", [])
-        elif hasattr(result, 'data'):
-            alice_results = result.data if isinstance(result.data, list) else []
-        else:
-            alice_results = []
+        alice_results = _extract_result_list(result)
 
         alice_count = len(alice_results)
 
@@ -151,20 +168,21 @@ async def test_1_2_agent_filter_FIXED(client, results):
             "limit": 10
         })
 
-        if hasattr(result, 'structured_content') and result.structured_content:
-            bob_results = result.structured_content.get("result", [])
-        elif hasattr(result, 'data'):
-            bob_results = result.data if isinstance(result.data, list) else []
-        else:
-            bob_results = []
+        bob_results = _extract_result_list(result)
 
         bob_count = len(bob_results)
 
         # CORRECTED VALIDATION: Both should have 5 messages (sender OR recipient)
         if alice_count == 5 and bob_count == 5:
-            results.add_result(test_id, test_name, "PASS",
-                             f"Agent filtering works correctly (Alice: {alice_count}, Bob: {bob_count}) - "
-                             f"returns messages where agent is sender OR recipient")
+            results.add_result(
+                test_id,
+                test_name,
+                "PASS",
+                (
+                    f"Agent filtering works correctly (Alice: {alice_count}, Bob: {bob_count}) - "
+                    f"returns messages where agent is sender OR recipient"
+                ),
+            )
         else:
             results.add_result(test_id, test_name, "FAIL",
                              f"Expected 5 for both Alice and Bob, got Alice: {alice_count}, Bob: {bob_count}")
@@ -209,10 +227,10 @@ async def test_2_1_since_ts_FIXED(client, results):
             })
 
         # FIXED: Capture T0 AFTER first batch
-        await asyncio.sleep(1)
+        await asyncio.sleep(TIMESTAMP_SEPARATION_DELAY)
         t0 = datetime.now(timezone.utc)
         print(f"Captured T0: {t0.isoformat()}")
-        await asyncio.sleep(1)
+        await asyncio.sleep(TIMESTAMP_SEPARATION_DELAY)
 
         # Send second batch AFTER T0
         print("Sending second batch (5 messages)...")
@@ -233,7 +251,7 @@ async def test_2_1_since_ts_FIXED(client, results):
             "include_bodies": False
         })
 
-        inbox_no_filter = result.data if hasattr(result, 'data') else []
+        inbox_no_filter = _extract_result_list(result)
         print(f"Without filter: {len(inbox_no_filter)} messages")
 
         if len(inbox_no_filter) != 8:
@@ -251,13 +269,19 @@ async def test_2_1_since_ts_FIXED(client, results):
             "include_bodies": False
         })
 
-        inbox_after_t0 = result.data if hasattr(result, 'data') else []
+        inbox_after_t0 = _extract_result_list(result)
         print(f"After T0: {len(inbox_after_t0)} messages")
 
         if len(inbox_after_t0) == 5:
-            results.add_result(test_id, test_name, "PASS",
-                             f"since_ts filter works correctly (verifies limit applied AFTER filter): "
-                             f"Got {len(inbox_after_t0)} messages from second batch")
+            results.add_result(
+                test_id,
+                test_name,
+                "PASS",
+                (
+                    "since_ts filter works correctly (verifies limit applied AFTER filter): "
+                    f"Got {len(inbox_after_t0)} messages from second batch"
+                ),
+            )
         else:
             results.add_result(test_id, test_name, "FAIL",
                              f"Expected 5 messages after T0 (verifies limit applied AFTER filter), "

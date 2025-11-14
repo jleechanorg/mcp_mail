@@ -34,9 +34,11 @@ from .db import ensure_schema, get_session, init_engine
 from .guard import install_guard as install_guard_script, uninstall_guard as uninstall_guard_script
 from .llm import complete_system_user
 from .models import Agent, FileReservation, Message, MessageRecipient, Project, ProjectSiblingSuggestion
-from .slots import acquire_build_slot as acquire_slot_impl
-from .slots import release_build_slot as release_slot_impl
-from .slots import renew_build_slot as renew_slot_impl
+from .slots import (
+    acquire_build_slot as acquire_slot_impl,
+    release_build_slot as release_slot_impl,
+    renew_build_slot as renew_slot_impl,
+)
 from .storage import (
     ProjectArchive,
     archive_write_lock,
@@ -4718,7 +4720,13 @@ def build_mcp_server() -> FastMCP:
             return items
 
     @mcp.tool(name="acquire_build_slot")
-    @_instrument_tool("acquire_build_slot", cluster=CLUSTER_SETUP, capabilities={"coordination"}, project_arg="project_key")
+    @_instrument_tool(
+        "acquire_build_slot",
+        cluster=CLUSTER_SETUP,
+        capabilities={"coordination"},
+        project_arg="project_key",
+        agent_arg="agent_name",
+    )
     async def acquire_build_slot(
         ctx: Context,
         project_key: str,
@@ -4761,7 +4769,13 @@ def build_mcp_server() -> FastMCP:
         return result
 
     @mcp.tool(name="renew_build_slot")
-    @_instrument_tool("renew_build_slot", cluster=CLUSTER_SETUP, capabilities={"coordination"}, project_arg="project_key")
+    @_instrument_tool(
+        "renew_build_slot",
+        cluster=CLUSTER_SETUP,
+        capabilities={"coordination"},
+        project_arg="project_key",
+        agent_arg="agent_name",
+    )
     async def renew_build_slot(
         ctx: Context,
         project_key: str,
@@ -4796,7 +4810,13 @@ def build_mcp_server() -> FastMCP:
         return result
 
     @mcp.tool(name="release_build_slot")
-    @_instrument_tool("release_build_slot", cluster=CLUSTER_SETUP, capabilities={"coordination"}, project_arg="project_key")
+    @_instrument_tool(
+        "release_build_slot",
+        cluster=CLUSTER_SETUP,
+        capabilities={"coordination"},
+        project_arg="project_key",
+        agent_arg="agent_name",
+    )
     async def release_build_slot(
         ctx: Context,
         project_key: str,
@@ -4820,7 +4840,7 @@ def build_mcp_server() -> FastMCP:
         dict
             {
                 "released": bool,
-                "released_at": str (ISO8601),
+                "released_ts": str (ISO8601),
             }
         """
         result = await release_slot_impl(project_key, agent_name, slot)

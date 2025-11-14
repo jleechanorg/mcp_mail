@@ -29,10 +29,11 @@ os.environ["APP_ENVIRONMENT"] = "test"
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
-from mcp_agent_mail.app import build_mcp_server
-from mcp_agent_mail.db import reset_database_state
-from mcp_agent_mail.config import clear_settings_cache
 from fastmcp import Client
+
+from mcp_agent_mail.app import build_mcp_server
+from mcp_agent_mail.config import clear_settings_cache
+from mcp_agent_mail.db import reset_database_state
 
 # Enable detailed Python logging
 logging.basicConfig(
@@ -108,6 +109,7 @@ async def test_agent_registration_bug():
             return
 
         # Small delay to ensure transaction completes
+        # Allow the transaction commit to settle before verifying state
         await asyncio.sleep(0.1)
 
         # Step 2: Try to send message using the registered agent
@@ -141,6 +143,7 @@ async def test_agent_registration_bug():
 
             # Try again after a longer delay
             log("Waiting 1 second and retrying...")
+            # Longer pause to observe whether eventual consistency resolves the issue
             await asyncio.sleep(1.0)
 
             try:
