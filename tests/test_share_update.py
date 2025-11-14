@@ -385,6 +385,11 @@ def test_fts_search_overview_mv_creation(tmp_path: Path):
                 created_ts TEXT,
                 attachments TEXT
             );
+            CREATE TABLE message_recipients (
+                message_id INTEGER,
+                agent_id INTEGER,
+                kind TEXT
+            );
             """
         )
 
