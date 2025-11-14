@@ -130,26 +130,25 @@ Connecting to HTTP server at http://127.0.0.1:8766/mcp/...
 
 *Note: The 2 "failures" in manual tests were test implementation issues, not code bugs*
 
-### Validation Matrix
+### Validation Matrix (HTTP test scope)
 
-| Feature | Unit Tests | Integration Tests | In-Process Manual | HTTP Server | Status |
-|---------|------------|-------------------|-------------------|-------------|--------|
-| search_mailbox | ✅ | ✅ | ✅ | ✅ | **Validated** |
-| since_ts filter | ✅ | ✅ | ❌* | ✅ | **Validated** |
-| Agent registration | ✅ | ✅ | ✅ | ✅ | **Validated** |
-| Multi-agent coordination | ✅ | ✅ | ✅ | N/A | **Validated** |
-| HTTP transport | N/A | N/A | N/A | ✅ | **Validated** |
+| Feature | HTTP test scope | Status |
+|---------|-----------------|--------|
+| search_mailbox | Query + filtering over HTTP transport | ✅ Validated in this run |
+| since_ts filter | Inbox pagination with corrected timestamp capture | ✅ Validated in this run |
+| HTTP transport | StreamableHTTP session manager, serialization, request cycle | ✅ Validated in this run |
+| Other product areas (agent registration stability, build slots, CLI, resources/macros) | Not exercised in this HTTP scenario | ⚠️ See `roadmap/test_execution_results_2025-11-13.md` for overall status |
 
-*Test timing issue, not code bug
+This report only covers the three HTTP scenarios executed on 2025-11-13 and does **not** supersede the broader "NOT APPROVED FOR FULL SYSTEM DEPLOYMENT" assessment captured in `roadmap/test_execution_results_2025-11-13.md`.
 
 ---
 
 ## Key Findings
 
-### 1. HTTP Transport Layer Works Correctly
-**Finding**: All features work identically via HTTP and in-process
-**Implication**: No HTTP-specific issues; serialization and transport working correctly
-**Confidence**: High - full stack validation successful
+### 1. HTTP Transport Layer Works for the Tested Scenarios
+**Finding**: The three exercised tool calls behaved identically via HTTP and in-process
+**Implication**: No HTTP-specific issues were observed for search_mailbox or fetch_inbox; serialization and transport behaved as expected
+**Confidence**: High for these scenarios (see overall assessment for remaining surface area)
 
 ### 2. since_ts Filter Code Is Correct
 **Finding**: HTTP test with corrected timing passed
@@ -169,12 +168,9 @@ Connecting to HTTP server at http://127.0.0.1:8766/mcp/...
 - HTTP server: Passed
 **Conclusion**: FTS5 search implementation is solid
 
-### 4. Agent Registration Resilient
-**Finding**: force_reclaim works correctly in all test scenarios
-**Evidence**:
-- Cross-project name conflicts handled
-- Agent retirement working
-- Tested both in-process and via HTTP
+### 4. Registration Calls Worked in This HTTP Smoke Test (But See Blockers)
+**Finding**: register_agent succeeded within this scoped HTTP run, providing sanitized names used in later steps
+**Important**: This does **not** clear the critical agent-registration bug tracked in `mcp_agent_mail-7rj`; refer to `roadmap/test_execution_results_2025-11-13.md` for the blocking details
 
 ---
 
@@ -197,29 +193,23 @@ Connecting to HTTP server at http://127.0.0.1:8766/mcp/...
 
 ---
 
-## Deployment Readiness
+## Deployment Readiness (Scoped to HTTP Scenarios)
 
 ### Transport Layer Validation
-✅ **HTTP transport fully functional**
-- StreamableHTTP session manager working
-- Request/response serialization correct
-- Error handling proper
-- Timeout handling appropriate
+✅ **HTTP transport functional for the exercised scenarios**
+- StreamableHTTP session manager handled search_mailbox + fetch_inbox calls
+- Request/response serialization behaved correctly for these payloads
+- Timeout/error handling was not triggered in this limited run
 
 ### Feature Validation
-✅ **All features work via HTTP**
-- search_mailbox: Full functionality
-- since_ts filtering: Correct behavior
-- Agent registration: Cross-project handling
-- Message sending: Reliable delivery
-- Inbox fetching: Accurate filtering
+✅ **search_mailbox** and **since_ts filtering** behaved as expected over HTTP with corrected manual test logic.
 
-### Code Quality
-✅ **Production ready**
-- No HTTP-specific bugs found
-- No serialization issues
-- No transport-layer failures
-- Performance acceptable
+⚠️ **All other feature areas remain subject to the broader test execution findings** (agent registration bug `mcp_agent_mail-7rj`, build slot failures, CLI regressions, resources/macros issues, etc.). This document is evidence for the HTTP transport portion only.
+
+### Code Quality Notes
+- No HTTP-specific regressions observed in this smoke test
+- Performance overhead remained within expectations for these calls
+- **Overall deployment approval remains "NOT APPROVED FOR FULL SYSTEM DEPLOYMENT" — see `roadmap/test_execution_results_2025-11-13.md`.**
 
 ---
 
@@ -243,9 +233,9 @@ Connecting to HTTP server at http://127.0.0.1:8766/mcp/...
 - ✅ Real-world deployment scenario
 
 ### Combined Confidence
-**In-process tests**: Validated core logic is correct
-**HTTP tests**: Validated deployment stack is correct
-**Together**: Full confidence in production deployment
+**In-process tests**: Validated core logic for specific features (see manual test plan)
+**HTTP tests**: Confirmed transport stack for search_mailbox + since_ts
+**Together**: Build confidence for those features only — overall deployment remains blocked per `roadmap/test_execution_results_2025-11-13.md`
 
 ---
 
@@ -272,33 +262,34 @@ Files:
 
 ## Conclusions
 
-### Primary Conclusion
-**✅ ALL CODE IS PRODUCTION READY**
+### Primary Conclusion (HTTP scope)
+**✅ Scoped PASS: HTTP transport + search_mailbox + since_ts**
 
-Both in-process and HTTP server tests confirm that:
-1. Core functionality is correct
-2. HTTP transport works properly
-3. Performance is acceptable
-4. No bugs or issues found
+Within this dedicated HTTP run:
+1. search_mailbox behaved correctly when accessed over StreamableHTTP
+2. fetch_inbox with since_ts produced the expected results once the manual test captured T0 between batches
+3. The transport stack (session manager, serialization, routing) handled the exercised payloads without regressions
+
+This does **not** imply that all product areas are production ready; refer to `roadmap/test_execution_results_2025-11-13.md` for the authoritative deployment gate which remains **NOT APPROVED**.
 
 ### Earlier Test "Failures" Explained
-The 2 failures in manual in-process tests were due to:
-1. **Test 1.2 (Agent Filter)**: Incorrect expectations (code correct)
-2. **Test 2.1 (since_ts)**: Test timing issue (code correct)
-
-**HTTP server tests with corrected implementations confirmed the code is correct.**
+The two manual test failures traced back to incorrect expectations (agent filter) and incorrect timestamp capture. The HTTP run confirmed the underlying features behave correctly when those tests are fixed, but other blocking bugs remain outstanding.
 
 ### Deployment Recommendation
 
-**✅ APPROVED FOR IMMEDIATE DEPLOYMENT**
+**✅ APPROVED TO DEPLOY (search_mailbox + since_ts over HTTP only)**
 
-**Confidence Level**: Very High
-- Multiple test approaches all pass
-- HTTP transport validated
-- No issues found in real server testing
-- Performance meets requirements
+- Features approved by this report:
+  - search_mailbox tool via HTTP transport
+  - since_ts filtering for fetch_inbox
+  - HTTP transport plumbing for these requests
+- **All other features remain blocked** pending resolution of:
+  - Agent registration bug `mcp_agent_mail-7rj`
+  - Build slot failures `mcp_agent_mail-rop`
+  - CLI integration regressions `mcp_agent_mail-k2d`
+  - Resources/macros issues `mcp_agent_mail-2mm`
 
-**No blockers identified**
+For overall deployment guidance, always defer to `roadmap/test_execution_results_2025-11-13.md`.
 
 ---
 
@@ -332,23 +323,23 @@ No resource leaks
 
 ### For Deployment
 
-1. **Deploy with confidence** - all tests passing
-2. **Monitor performance** in production (HTTP overhead acceptable)
-3. **Keep existing automated tests** - they provide fast feedback
-4. **Add HTTP integration tests to CI** - ensure transport layer stays healthy
+1. **Limit rollout** to the validated features (search_mailbox + since_ts HTTP paths)
+2. **Block full deployment** until the outstanding blockers listed above are resolved
+3. **Monitor HTTP transport performance** during targeted validation windows
+4. **Automate these HTTP scenarios in CI** so transport regressions surface quickly without implying broad readiness
 
 ---
 
 ## Sign-off
 
-**Test Type**: HTTP Server Tests (Real Running Server)
+**Test Type**: HTTP Server Tests (search_mailbox + since_ts scenarios)
 **Test Executor**: Claude Code Agent
-**Test Status**: ✅ ALL PASSED (100% Success Rate)
-**Code Status**: ✅ **PRODUCTION READY**
-**HTTP Transport**: ✅ **FULLY VALIDATED**
-**Deployment Status**: ✅ **APPROVED FOR IMMEDIATE DEPLOYMENT**
+**Test Status**: ✅ Passed (3/3 scoped HTTP scenarios)
+**Code Status**: ⚠️ Scoped approval only — see `roadmap/test_execution_results_2025-11-13.md` for overall quality gate
+**HTTP Transport**: ✅ Validated for the exercised requests
+**Deployment Status**: ⚠️ Approved **only** for the specific features listed above
 
-**Final Verdict**: The MCP Agent Mail server is production-ready. All features work correctly both in-process and via HTTP transport. No bugs or issues found.
+**Final Verdict**: The HTTP transport layer correctly handles search_mailbox and since_ts filtering with the corrected manual tests. Broader system readiness is still blocked elsewhere.
 
 ---
 
@@ -369,14 +360,9 @@ No resource leaks
 - **Total: 22 tests executed, 19 passed, 0 bugs found**
 
 ### Code Coverage
-The tests validated:
-- Core messaging functionality
-- FTS5 full-text search
-- Agent registration and retirement
-- Cross-project coordination
-- since_ts filtering
-- HTTP transport layer
-- Request/response serialization
-- Session management
+This HTTP run specifically validated:
+- search_mailbox over HTTP
+- fetch_inbox with since_ts filtering (corrected timing)
+- StreamableHTTP session manager + serialization for these payloads
 
-**All critical paths tested and validated.**
+Refer to `roadmap/test_execution_results_2025-11-13.md` for coverage of the remaining 390+ tests and their current failure status.
