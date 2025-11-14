@@ -35,6 +35,9 @@ from .db import ensure_schema, get_session, init_engine
 from .guard import install_guard as install_guard_script, uninstall_guard as uninstall_guard_script
 from .llm import complete_system_user
 from .models import Agent, FileReservation, Message, MessageRecipient, Project, ProjectSiblingSuggestion
+from .slots import acquire_build_slot as acquire_slot_impl
+from .slots import release_build_slot as release_slot_impl
+from .slots import renew_build_slot as renew_slot_impl
 from .storage import (
     ProjectArchive,
     archive_write_lock,
@@ -4792,6 +4795,116 @@ def build_mcp_server() -> FastMCP:
             return ToolResult(structured_content={"result": items})
         except Exception:
             return items
+
+    @mcp.tool(name="acquire_build_slot")
+    @_instrument_tool("acquire_build_slot", cluster=CLUSTER_SETUP, capabilities={"coordination"}, project_arg="project_key")
+    async def acquire_build_slot(
+        ctx: Context,
+        project_key: str,
+        agent_name: str,
+        slot: str,
+        ttl_seconds: int = 3600,
+        exclusive: bool = True,
+    ) -> dict[str, Any]:
+        """
+        Acquire a build slot for coordinating parallel build operations.
+
+        Parameters
+        ----------
+        project_key : str
+            Project identifier
+        agent_name : str
+            Agent requesting the slot
+        slot : str
+            Slot name (e.g., "frontend-build", "test-runner")
+        ttl_seconds : int
+            Time-to-live in seconds (minimum 60)
+        exclusive : bool
+            Whether this is an exclusive lock
+
+        Returns
+        -------
+        dict
+            {
+                "granted": bool,
+                "slot": str,
+                "agent": str,
+                "acquired_ts": str (ISO8601),
+                "expires_ts": str (ISO8601),
+                "conflicts": list[dict],
+                "disabled": bool (if WORKTREES_ENABLED=0)
+            }
+        """
+        result = await acquire_slot_impl(project_key, agent_name, slot, ttl_seconds, exclusive)
+        await ctx.info(f"Build slot '{slot}' acquisition for agent '{agent_name}': {result.get('granted', False)}")
+        return result
+
+    @mcp.tool(name="renew_build_slot")
+    @_instrument_tool("renew_build_slot", cluster=CLUSTER_SETUP, capabilities={"coordination"}, project_arg="project_key")
+    async def renew_build_slot(
+        ctx: Context,
+        project_key: str,
+        agent_name: str,
+        slot: str,
+        extend_seconds: int = 1800,
+    ) -> dict[str, Any]:
+        """
+        Renew an existing build slot by extending its expiration.
+
+        Parameters
+        ----------
+        project_key : str
+            Project identifier
+        agent_name : str
+            Agent name
+        slot : str
+            Slot name
+        extend_seconds : int
+            Seconds to extend the expiration
+
+        Returns
+        -------
+        dict
+            {
+                "renewed": bool,
+                "expires_ts": str (ISO8601),
+            }
+        """
+        result = await renew_slot_impl(project_key, agent_name, slot, extend_seconds)
+        await ctx.info(f"Build slot '{slot}' renewal for agent '{agent_name}': {result.get('renewed', False)}")
+        return result
+
+    @mcp.tool(name="release_build_slot")
+    @_instrument_tool("release_build_slot", cluster=CLUSTER_SETUP, capabilities={"coordination"}, project_arg="project_key")
+    async def release_build_slot(
+        ctx: Context,
+        project_key: str,
+        agent_name: str,
+        slot: str,
+    ) -> dict[str, Any]:
+        """
+        Release a build slot.
+
+        Parameters
+        ----------
+        project_key : str
+            Project identifier
+        agent_name : str
+            Agent name
+        slot : str
+            Slot name
+
+        Returns
+        -------
+        dict
+            {
+                "released": bool,
+                "released_at": str (ISO8601),
+            }
+        """
+        result = await release_slot_impl(project_key, agent_name, slot)
+        await ctx.info(f"Build slot '{slot}' released for agent '{agent_name}': {result.get('released', False)}")
+        return result
 
     @mcp.tool(name="summarize_thread")
     @_instrument_tool(
