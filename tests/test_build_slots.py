@@ -61,7 +61,7 @@ async def test_acquire_build_slot_conflict(isolated_env, tmp_path: Path):
     """Test build slot conflict detection with multiple agents."""
     server = build_mcp_server()
     settings = get_settings()
-    await ensure_archive(settings, "testproject")
+    archive = await ensure_archive(settings, "testproject")
 
     import os
 
@@ -96,10 +96,14 @@ async def test_acquire_build_slot_conflict(isolated_env, tmp_path: Path):
         )
 
         data2 = result2.data
-        # Still granted (advisory), but should report conflicts
-        assert data2["granted"] is True
+        assert data2["granted"] is False
         assert len(data2["conflicts"]) > 0
         assert any("AgentAlpha" in str(c) for c in data2["conflicts"])
+
+    # Verify no second lease file was written for the conflicting agent
+    slot_dir = archive.root / "build_slots" / "test-runner"
+    slot_files = list(slot_dir.glob("*.json"))
+    assert len(slot_files) == 1
 
 
 @pytest.mark.asyncio
