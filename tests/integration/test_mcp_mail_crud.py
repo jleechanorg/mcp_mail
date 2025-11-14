@@ -456,6 +456,7 @@ async def test_mark_message_as_read(mcp_mail_repo):
     assert success
 
     message = read_message_by_id(mcp_mail_repo, msg_id)
+    assert message is not None
     assert message["metadata"]["read"] is True
 
 
@@ -476,6 +477,7 @@ async def test_add_tags_to_message(mcp_mail_repo):
     assert success
 
     message = read_message_by_id(mcp_mail_repo, msg_id)
+    assert message is not None
     assert "bug" in message["metadata"]["tags"]
     assert "high-priority" in message["metadata"]["tags"]
 

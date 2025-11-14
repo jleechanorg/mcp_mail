@@ -163,6 +163,10 @@ class Settings:
     messaging_auto_register_recipients: bool
     # Tool exposure mode: "extended" (all 27 tools, ~25k tokens) | "core" (8 core + 2 meta tools, ~10k tokens)
     tools_mode: str
+    # Worktree + guard configuration
+    worktrees_enabled: bool
+    project_identity_mode: str
+    project_identity_remote: str
 
 
 def _bool(value: str, *, default: bool) -> bool:
@@ -347,6 +351,9 @@ def get_settings() -> Settings:
             _decouple_config("MESSAGING_AUTO_REGISTER_RECIPIENTS", default="true"), default=True
         ),
         tools_mode=_tools_mode(_decouple_config("MCP_TOOLS_MODE", default="")),
+        worktrees_enabled=_bool(_decouple_config("WORKTREES_ENABLED", default="0"), default=False),
+        project_identity_mode=_decouple_config("PROJECT_IDENTITY_MODE", default="dir") or "dir",
+        project_identity_remote=_decouple_config("PROJECT_IDENTITY_REMOTE", default="origin") or "origin",
     )
 
 
