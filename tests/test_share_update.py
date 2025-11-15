@@ -438,3 +438,95 @@ def test_fts_search_overview_mv_creation(tmp_path: Path):
 
     finally:
         conn.close()
+
+
+def _create_old_schema_snapshot(snapshot_path: Path, num_messages: int = 5) -> None:
+    """Create a snapshot database with OLD schema (no thread_id column)."""
+    conn = sqlite3.connect(str(snapshot_path))
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE projects (id INTEGER PRIMARY KEY, slug TEXT, human_key TEXT);
+            CREATE TABLE agents (
+                id INTEGER PRIMARY KEY,
+                project_id INTEGER,
+                name TEXT,
+                is_active INTEGER DEFAULT 1
+            );
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY,
+                project_id INTEGER,
+                sender_id INTEGER,
+                subject TEXT,
+                body_md TEXT,
+                importance TEXT,
+                ack_required INTEGER,
+                created_ts TEXT,
+                attachments TEXT
+            );
+            CREATE TABLE message_recipients (
+                message_id INTEGER,
+                agent_id INTEGER,
+                kind TEXT
+            );
+            CREATE TABLE file_reservations (id INTEGER PRIMARY KEY, project_id INTEGER);
+            CREATE TABLE agent_links (id INTEGER PRIMARY KEY, a_project_id INTEGER, b_project_id INTEGER);
+            CREATE TABLE project_sibling_suggestions (id INTEGER PRIMARY KEY, project_a_id INTEGER, project_b_id INTEGER);
+            """
+        )
+
+        # Insert test data
+        conn.execute("INSERT INTO projects (id, slug, human_key) VALUES (1, 'test-proj', 'Test Project')")
+        conn.execute("INSERT INTO agents (id, project_id, name) VALUES (1, 1, 'TestAgent')")
+
+        for i in range(1, num_messages + 1):
+            conn.execute(
+                """
+                INSERT INTO messages (
+                    id, project_id, sender_id, subject, body_md,
+                    importance, ack_required, created_ts, attachments
+                )
+                VALUES (?, 1, 1, ?, ?, 'normal', 0, ?, '[]')
+                """,
+                (i, f"Subject {i}", f"Body {i}", f"2025-01-{i:02d}T00:00:00Z"),
+            )
+
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_performance_indexes_old_schema_without_thread_id(tmp_path: Path):
+    """Test that create_performance_indexes works on old schemas without thread_id column.
+
+    This is a regression test for PR #40 schema compatibility.
+    Old databases don't have the thread_id column, so we must skip creating
+    indexes on it to avoid sqlite3.OperationalError.
+    """
+    snapshot = tmp_path / "old_schema.sqlite3"
+    _create_old_schema_snapshot(snapshot)
+
+    # This should NOT crash even though messages table has no thread_id column
+    create_performance_indexes(snapshot)
+
+    conn = sqlite3.connect(str(snapshot))
+    try:
+        # Verify basic indexes were created
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_messages_created_ts'")
+        assert cursor.fetchone() is not None, "Basic timestamp index should be created"
+
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_messages_subject_lower'")
+        assert cursor.fetchone() is not None, "Subject lowercase index should be created"
+
+        # Verify thread_id index was NOT created (since column doesn't exist)
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_messages_thread'")
+        result = cursor.fetchone()
+        assert result is None, "Thread index should NOT be created on old schema without thread_id column"
+
+        # Verify lowercase columns were populated
+        cursor = conn.execute("SELECT COUNT(*) FROM messages WHERE subject_lower IS NOT NULL")
+        count = cursor.fetchone()[0]
+        assert count > 0, "Lowercase columns should be populated"
+
+    finally:
+        conn.close()

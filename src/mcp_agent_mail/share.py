@@ -747,6 +747,10 @@ def scrub_snapshot(
                 agent_id = agent["id"]
                 original_name = agent["name"]
 
+                # Skip agents with NULL names
+                if original_name is None:
+                    continue
+
                 # Hash the agent name with salt to create consistent pseudonym
                 hash_input = f"{original_name}{export_salt.hex()}".encode("utf-8")
                 name_hash = hashlib.sha256(hash_input).hexdigest()
@@ -1225,14 +1229,16 @@ def create_snapshot_context(
     snapshot_path: Path,
     project_filters: Sequence[str],
     scrub_preset: str,
+    export_salt: Optional[bytes] = None,
 ) -> SnapshotContext:
     """Materialize and prepare a snapshot for export."""
 
     create_sqlite_snapshot(source_database, snapshot_path)
     scope = apply_project_scope(snapshot_path, project_filters)
 
-    # Generate a random salt for pseudonymization
-    export_salt = os.urandom(32)
+    # Use provided salt or generate a random one for pseudonymization
+    if export_salt is None:
+        export_salt = os.urandom(32)
     scrub_summary = scrub_snapshot(snapshot_path, preset=scrub_preset, export_salt=export_salt)
 
     fts_enabled = build_search_indexes(snapshot_path)
@@ -1264,11 +1270,6 @@ def bundle_attachments(
     manifest_items: list[dict[str, Any]] = []
     inline_count = 0
     copied_count = 0
-    # NOTE: externalized_count remains 0 with detached bundles feature.
-    # Large files >= detach_threshold are now copied to attachments/bundles/
-    # and counted in copied_count, rather than being marked as external.
-    # This variable is kept for backward compatibility in manifest stats.
-    externalized_count = 0
     missing_count = 0
     bytes_copied = 0
 
@@ -1422,7 +1423,6 @@ def bundle_attachments(
         "stats": {
             "inline": inline_count,
             "copied": copied_count,
-            "externalized": externalized_count,
             "missing": missing_count,
             "bytes_copied": bytes_copied,
         },
