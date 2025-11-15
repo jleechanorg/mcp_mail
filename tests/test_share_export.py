@@ -234,8 +234,10 @@ def test_bundle_attachments_handles_modes(tmp_path: Path) -> None:
     assert (tmp_path / "out" / path_value).is_file()
     # Large file is now detached to bundles/ instead of marked as external
     assert attachments[2]["type"] == "file"
-    assert attachments[2]["path"].startswith("attachments/bundles/")
-    assert (tmp_path / "out" / attachments[2]["path"]).is_file()
+    bundle_path_value = attachments[2]["path"]
+    assert isinstance(bundle_path_value, str)
+    assert bundle_path_value.startswith("attachments/bundles/")
+    assert (tmp_path / "out" / bundle_path_value).is_file()
     assert attachments[3]["type"] == "missing"
 
     inline_data = attachments[0]["data_uri"]
