@@ -30,6 +30,10 @@ from mcp_agent_mail.db import reset_database_state
 # Generate unique project key per run to avoid test pollution
 PROJECT_KEY = f"test_manual_{uuid.uuid4().hex[:8]}"
 
+# Test timing constants
+MESSAGE_PROCESSING_DELAY = 0.5  # Allow time for message processing
+TIMESTAMP_SEPARATION_DELAY = 1.0  # Ensure clear timestamp separation between batches
+
 
 class TestResults:
     """Track test results."""
@@ -132,7 +136,7 @@ async def test_1_2_agent_filter_FIXED(client, results):
                 },
             )
 
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(MESSAGE_PROCESSING_DELAY)
 
         # Search with Alice filter
         # CORRECTED EXPECTATION: Alice is involved in 5 messages:
@@ -186,8 +190,10 @@ async def test_1_2_agent_filter_FIXED(client, results):
                 test_id,
                 test_name,
                 "PASS",
-                f"Agent filtering works correctly (Alice: {alice_count}, Bob: {bob_count}) - "
-                f"returns messages where agent is sender OR recipient",
+                (
+                    f"Agent filtering works correctly (Alice: {alice_count}, Bob: {bob_count}) - "
+                    f"returns messages where agent is sender OR recipient"
+                ),
             )
         else:
             results.add_result(
@@ -243,10 +249,10 @@ async def test_2_1_since_ts_FIXED(client, results):
             )
 
         # FIXED: Capture T0 AFTER first batch
-        await asyncio.sleep(1)
+        await asyncio.sleep(TIMESTAMP_SEPARATION_DELAY)
         t0 = datetime.now(timezone.utc)
         print(f"Captured T0: {t0.isoformat()}")
-        await asyncio.sleep(1)
+        await asyncio.sleep(TIMESTAMP_SEPARATION_DELAY)
 
         # Send second batch AFTER T0
         print("Sending second batch (5 messages)...")
@@ -303,8 +309,10 @@ async def test_2_1_since_ts_FIXED(client, results):
                 test_id,
                 test_name,
                 "PASS",
-                f"since_ts filter works correctly (verifies limit applied AFTER filter): "
-                f"Got {len(inbox_after_t0)} messages from second batch",
+                (
+                    f"since_ts filter works correctly (verifies limit applied AFTER filter): "
+                    f"Got {len(inbox_after_t0)} messages from second batch"
+                ),
             )
         else:
             results.add_result(
