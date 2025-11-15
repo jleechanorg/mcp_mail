@@ -35,6 +35,20 @@ def _create_commit(repo_path: Path, filename: str, content: str = "test") -> Non
         stderr=subprocess.PIPE,
     )
 
+def _resolve_local_sha(repo_path: Path, local_ref: str) -> str:
+    """Return a commit SHA for the requested ref, falling back to HEAD if needed."""
+    branch_name = local_ref.split("/")[-1]
+    for candidate in (branch_name, "HEAD"):
+        result = subprocess.run(
+            ["git", "rev-parse", candidate],
+            cwd=str(repo_path),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    raise RuntimeError(f"Unable to resolve commit for {local_ref} in {repo_path}")
+
 
 def _run_prepush_hook(
     script_path: Path,
@@ -45,10 +59,7 @@ def _run_prepush_hook(
 ) -> subprocess.CompletedProcess:
     """Run the pre-push hook script."""
     # Get the local SHA
-    result = subprocess.run(
-        ["git", "rev-parse", local_ref.split("/")[-1]], cwd=str(repo_path), capture_output=True, text=True, check=True
-    )
-    local_sha = result.stdout.strip()
+    local_sha = _resolve_local_sha(repo_path, local_ref)
 
     # Simulate pre-push hook stdin
     # Format: <local ref> <local sha> <remote ref> <remote sha>
@@ -70,7 +81,7 @@ def _run_prepush_hook(
 
 
 def _skip_presubmit_in_script(script_text):
-    """Remove presubmit commands and add debug output."""
+    """Remove presubmit commands from generated scripts during tests."""
     # Find and remove the PRESUBMIT_COMMANDS block
     lines = script_text.split("\n")
     result = []
@@ -80,11 +91,15 @@ def _skip_presubmit_in_script(script_text):
         # Skip from PRESUBMIT_COMMANDS until # Gate
         if "PRESUBMIT_COMMANDS = (" in line:
             # Skip until we find '# Gate'
+            start_i = i
             while i < len(lines) and "# Gate" not in lines[i]:
                 i += 1
+            if i >= len(lines):
+                raise ValueError(
+                    f"Could not find '# Gate' comment after PRESUBMIT_COMMANDS at line {start_i}"
+                )
             # Now i points to '# Gate' line, add it
-            if i < len(lines):
-                result.append(lines[i])
+            result.append(lines[i])
             i += 1
             continue
         result.append(line)
@@ -181,10 +196,7 @@ async def test_prepush_warn_mode(isolated_env, tmp_path: Path):
     env["WORKTREES_ENABLED"] = "1"
     env["AGENT_MAIL_GUARD_MODE"] = "warn"
 
-    result = subprocess.run(
-        ["git", "rev-parse", "main"], cwd=str(repo_path), capture_output=True, text=True, check=True
-    )
-    local_sha = result.stdout.strip()
+    local_sha = _resolve_local_sha(repo_path, "refs/heads/main")
 
     hook_input = f"refs/heads/main {local_sha} refs/heads/main 0000000000000000000000000000000000000000\n"
 
@@ -310,10 +322,7 @@ async def test_prepush_gate_disabled(isolated_env, tmp_path: Path):
     env["AGENT_NAME"] = "TestAgent"
     env["WORKTREES_ENABLED"] = "0"
 
-    result = subprocess.run(
-        ["git", "rev-parse", "main"], cwd=str(repo_path), capture_output=True, text=True, check=True
-    )
-    local_sha = result.stdout.strip()
+    local_sha = _resolve_local_sha(repo_path, "refs/heads/main")
 
     hook_input = f"refs/heads/main {local_sha} refs/heads/main 0000000000000000000000000000000000000000\n"
 

@@ -63,21 +63,16 @@ def test_database(tmp_path: Path) -> Path:
 
 
 def test_pseudonymization_with_export_salt(tmp_path: Path, test_database: Path):
-    """Test that export_salt actually triggers pseudonymization.
-
-    BUG: create_snapshot_context does not accept export_salt parameter,
-    so callers cannot control pseudonymization salt for deterministic output.
-    """
+    """export_salt enables deterministic pseudonymization."""
     snapshot_path = tmp_path / "snapshot.db"
     salt = os.urandom(32)
 
-    # THIS WILL FAIL - function doesn't accept export_salt parameter
     context = create_snapshot_context(
         source_database=test_database,
         snapshot_path=snapshot_path,
         project_filters=[],
         scrub_preset="standard",
-        export_salt=salt,  # This parameter doesn't exist yet!
+        export_salt=salt,
     )
 
     # Should have pseudonymized agents when salt is provided
@@ -86,8 +81,8 @@ def test_pseudonymization_with_export_salt(tmp_path: Path, test_database: Path):
     )
     assert context.scrub_summary.agents_total == 3, f"Expected 3 total agents, got {context.scrub_summary.agents_total}"
 
-    # Verify the salt was used
-    assert context.scrub_summary.pseudonym_salt == salt.hex(), "Expected scrub_summary to contain the provided salt"
+    # Verify the scrub summary records pseudonymization without leaking the salt
+    assert context.scrub_summary.pseudonymization_enabled is True
 
 
 def test_no_pseudonymization_without_export_salt(tmp_path: Path, test_database: Path):
@@ -110,11 +105,7 @@ def test_no_pseudonymization_without_export_salt(tmp_path: Path, test_database: 
 
 
 def test_pseudonymization_handles_null_names(tmp_path: Path, test_database: Path):
-    """Test that pseudonymization gracefully handles NULL agent names.
-
-    BUG: If agent.name is NULL, the pseudonymization code will crash
-    with TypeError on f-string formatting.
-    """
+    """NULL agent names are skipped without crashing."""
     snapshot_path = tmp_path / "snapshot.db"
     salt = os.urandom(32)
 

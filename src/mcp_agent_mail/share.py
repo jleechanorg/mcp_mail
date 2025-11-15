@@ -80,7 +80,7 @@ class ProjectScopeResult:
 @dataclass(slots=True, frozen=True)
 class ScrubSummary:
     preset: str
-    pseudonym_salt: str
+    pseudonymization_enabled: bool
     agents_total: int
     agents_pseudonymized: int
     ack_flags_cleared: int
@@ -736,13 +736,15 @@ def scrub_snapshot(
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
 
-        # Pseudonymize agent names for privacy
+        # Pseudonymize agent names for privacy when salt is provided
         agents_total = conn.execute("SELECT COUNT(*) FROM agents").fetchone()[0]
+        pseudonymization_enabled = bool(export_salt)
         agents_pseudonymized = 0
 
-        if export_salt:
-            # Generate pseudonyms for all agents
+        if pseudonymization_enabled and export_salt:
             agent_rows = conn.execute("SELECT id, name FROM agents").fetchall()
+            updates: list[tuple[str, int]] = []
+            salt_hex = export_salt.hex()
             for agent in agent_rows:
                 agent_id = agent["id"]
                 original_name = agent["name"]
@@ -751,17 +753,14 @@ def scrub_snapshot(
                 if original_name is None:
                     continue
 
-                # Hash the agent name with salt to create consistent pseudonym
-                hash_input = f"{original_name}{export_salt.hex()}".encode("utf-8")
+                hash_input = f"{original_name}{salt_hex}".encode("utf-8")
                 name_hash = hashlib.sha256(hash_input).hexdigest()
                 pseudonym = f"{PSEUDONYM_PREFIX}{name_hash[:PSEUDONYM_LENGTH]}"
+                updates.append((pseudonym, agent_id))
 
-                # Update agent name in database
-                conn.execute("UPDATE agents SET name = ? WHERE id = ?", (pseudonym, agent_id))
-                agents_pseudonymized += 1
-        else:
-            # No salt provided - skip pseudonymization
-            agents_pseudonymized = 0
+            if updates:
+                conn.executemany("UPDATE agents SET name = ? WHERE id = ?", updates)
+                agents_pseudonymized = len(updates)
 
         ack_cursor = conn.execute("UPDATE messages SET ack_required = 0")
         ack_flags_cleared = ack_cursor.rowcount or 0
@@ -828,11 +827,9 @@ def scrub_snapshot(
     finally:
         conn.close()
 
-    pseudonym_salt_hex = export_salt.hex() if export_salt else ""
-
     return ScrubSummary(
         preset=preset_key,
-        pseudonym_salt=pseudonym_salt_hex,
+        pseudonymization_enabled=pseudonymization_enabled,
         agents_total=agents_total,
         agents_pseudonymized=agents_pseudonymized,
         ack_flags_cleared=ack_flags_cleared,
@@ -955,7 +952,10 @@ def build_materialized_views(snapshot_path: Path) -> None:
     - message_overview_mv: Denormalized message list with sender info
     - attachments_by_message_mv: Flattened attachments for easier querying
 
-    Also creates covering indexes to enable efficient httpvfs range scans.
+    Handles older schemas that lack messages.thread_id by synthesizing
+    a stable thread key from the message id so both legacy and modern
+    snapshots remain query-compatible. Also creates covering indexes to
+    enable efficient httpvfs range scans.
     """
     conn = sqlite3.connect(str(snapshot_path))
     try:
@@ -965,9 +965,8 @@ def build_materialized_views(snapshot_path: Path) -> None:
         # Build thread_id expression based on column existence
         # Fallback to synthetic thread_id using message ID if column doesn't exist
         #
-        # SAFETY: thread_id_expr is a static SQL expression (either "m.thread_id" or "printf('msg:%d', m.id)")
-        # and never contains user input. f-string interpolation is safe here for SQL construction.
         thread_id_expr = "m.thread_id" if has_thread_id else "printf('msg:%d', m.id)"
+        assert thread_id_expr in ("m.thread_id", "printf('msg:%d', m.id)")
 
         # Message overview materialized view
         # Denormalizes messages with sender names for efficient list rendering
@@ -1268,6 +1267,7 @@ def bundle_attachments(
     manifest_items: list[dict[str, Any]] = []
     inline_count = 0
     copied_count = 0
+    detached_count = 0
     missing_count = 0
     bytes_copied = 0
 
@@ -1380,6 +1380,7 @@ def bundle_attachments(
                         }
                     )
                     copied_count += 1
+                    detached_count += 1
                     changed = True
                     continue
 
@@ -1421,6 +1422,7 @@ def bundle_attachments(
         "stats": {
             "inline": inline_count,
             "copied": copied_count,
+            "externalized": detached_count,
             "missing": missing_count,
             "bytes_copied": bytes_copied,
         },
