@@ -1264,11 +1264,6 @@ def bundle_attachments(
     manifest_items: list[dict[str, Any]] = []
     inline_count = 0
     copied_count = 0
-    # NOTE: externalized_count remains 0 with detached bundles feature.
-    # Large files >= detach_threshold are now copied to attachments/bundles/
-    # and counted in copied_count, rather than being marked as external.
-    # This variable is kept for backward compatibility in manifest stats.
-    externalized_count = 0
     missing_count = 0
     bytes_copied = 0
 
@@ -1422,7 +1417,6 @@ def bundle_attachments(
         "stats": {
             "inline": inline_count,
             "copied": copied_count,
-            "externalized": externalized_count,
             "missing": missing_count,
             "bytes_copied": bytes_copied,
         },

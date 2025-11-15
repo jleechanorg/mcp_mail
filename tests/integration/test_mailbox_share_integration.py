@@ -185,9 +185,8 @@ def test_share_export_end_to_end(monkeypatch, tmp_path: Path) -> None:
 
     stats = manifest["attachments"]["stats"]
     assert stats["inline"] == 1
-    # With detached bundles: large files are copied to bundles/ instead of externalized
+    # With detached bundles: large files are copied to bundles/
     assert stats["copied"] == 2
-    assert stats["externalized"] == 0
     assert stats["missing"] == 0
     assert manifest["scrub"]["preset"] == "standard"
 
