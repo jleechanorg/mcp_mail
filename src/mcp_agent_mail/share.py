@@ -1236,9 +1236,7 @@ def create_snapshot_context(
     create_sqlite_snapshot(source_database, snapshot_path)
     scope = apply_project_scope(snapshot_path, project_filters)
 
-    # Use provided salt or generate a random one for pseudonymization
-    if export_salt is None:
-        export_salt = os.urandom(32)
+    # Pass export_salt to scrub_snapshot; if None, pseudonymization will be skipped
     scrub_summary = scrub_snapshot(snapshot_path, preset=scrub_preset, export_salt=export_salt)
 
     fts_enabled = build_search_indexes(snapshot_path)

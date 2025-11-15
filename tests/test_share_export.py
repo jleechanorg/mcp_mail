@@ -221,7 +221,6 @@ def test_bundle_attachments_handles_modes(tmp_path: Path) -> None:
     assert stats == {
         "inline": 1,
         "copied": 2,  # medium (256) + large (512) both copied
-        "externalized": 0,  # detached bundles replaced external mode
         "missing": 1,
         "bytes_copied": 768,  # 256 + 512
     }
