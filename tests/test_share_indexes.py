@@ -9,9 +9,7 @@ from mcp_agent_mail.share import create_performance_indexes
 
 
 def _build_snapshot(tmp_path: Path, *, with_thread_id: bool) -> Path:
-    snapshot_path = tmp_path / (
-        "snapshot_with_thread.db" if with_thread_id else "snapshot_without_thread.db"
-    )
+    snapshot_path = tmp_path / ("snapshot_with_thread.db" if with_thread_id else "snapshot_without_thread.db")
     conn = sqlite3.connect(snapshot_path)
     try:
         thread_column = ", thread_id TEXT" if with_thread_id else ""
