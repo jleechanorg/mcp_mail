@@ -80,7 +80,7 @@ class ProjectScopeResult:
 @dataclass(slots=True, frozen=True)
 class ScrubSummary:
     preset: str
-    pseudonym_salt: str
+    pseudonymization_enabled: bool
     agents_total: int
     agents_pseudonymized: int
     ack_flags_cleared: int
@@ -736,9 +736,31 @@ def scrub_snapshot(
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
 
-        # Agent names (BlueMountain, GreenCastle, etc.) are already meaningless pseudonyms by design
-        # No need to further pseudonymize them
+        # Pseudonymize agent names for privacy when salt is provided
         agents_total = conn.execute("SELECT COUNT(*) FROM agents").fetchone()[0]
+        pseudonymization_enabled = bool(export_salt)
+        agents_pseudonymized = 0
+
+        if pseudonymization_enabled and export_salt:
+            agent_rows = conn.execute("SELECT id, name FROM agents").fetchall()
+            updates: list[tuple[str, int]] = []
+            salt_hex = export_salt.hex()
+            for agent in agent_rows:
+                agent_id = agent["id"]
+                original_name = agent["name"]
+
+                # Skip agents with NULL names
+                if original_name is None:
+                    continue
+
+                hash_input = f"{original_name}{salt_hex}".encode("utf-8")
+                name_hash = hashlib.sha256(hash_input).hexdigest()
+                pseudonym = f"{PSEUDONYM_PREFIX}{name_hash[:PSEUDONYM_LENGTH]}"
+                updates.append((pseudonym, agent_id))
+
+            if updates:
+                conn.executemany("UPDATE agents SET name = ? WHERE id = ?", updates)
+                agents_pseudonymized = len(updates)
 
         ack_cursor = conn.execute("UPDATE messages SET ack_required = 0")
         ack_flags_cleared = ack_cursor.rowcount or 0
@@ -807,9 +829,9 @@ def scrub_snapshot(
 
     return ScrubSummary(
         preset=preset_key,
-        pseudonym_salt="",  # No longer used - agent names already meaningless
+        pseudonymization_enabled=pseudonymization_enabled,
         agents_total=agents_total,
-        agents_pseudonymized=0,  # No longer pseudonymizing - agent names already meaningless
+        agents_pseudonymized=agents_pseudonymized,
         ack_flags_cleared=ack_flags_cleared,
         recipients_cleared=recipients_cleared,
         file_reservations_removed=file_res_removed,
@@ -890,6 +912,9 @@ def finalize_snapshot_for_export(snapshot_path: Path) -> None:
     """
     conn = sqlite3.connect(str(snapshot_path))
     try:
+        # Checkpoint WAL log before switching modes to ensure all changes are in main file
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
         # Convert to DELETE mode for single-file simplicity (no -wal/-shm files)
         conn.execute("PRAGMA journal_mode=DELETE")
 
@@ -911,6 +936,14 @@ def finalize_snapshot_for_export(snapshot_path: Path) -> None:
     finally:
         conn.close()
 
+    # Ensure WAL and SHM files are removed after closing connection
+    wal_file = Path(f"{snapshot_path}-wal")
+    shm_file = Path(f"{snapshot_path}-shm")
+    if wal_file.exists():
+        wal_file.unlink()
+    if shm_file.exists():
+        shm_file.unlink()
+
 
 def build_materialized_views(snapshot_path: Path) -> None:
     """Create materialized views and covering indexes for httpvfs performance.
@@ -919,20 +952,32 @@ def build_materialized_views(snapshot_path: Path) -> None:
     - message_overview_mv: Denormalized message list with sender info
     - attachments_by_message_mv: Flattened attachments for easier querying
 
-    Also creates covering indexes to enable efficient httpvfs range scans.
+    Handles older schemas that lack messages.thread_id by synthesizing
+    a stable thread key from the message id so both legacy and modern
+    snapshots remain query-compatible. Also creates covering indexes to
+    enable efficient httpvfs range scans.
     """
     conn = sqlite3.connect(str(snapshot_path))
     try:
+        # Check if thread_id column exists in messages table
+        has_thread_id = _column_exists(conn, "messages", "thread_id")
+
+        # Build thread_id expression based on column existence
+        # Fallback to synthetic thread_id using message ID if column doesn't exist
+        #
+        thread_id_expr = "m.thread_id" if has_thread_id else "printf('msg:%d', m.id)"
+        assert thread_id_expr in ("m.thread_id", "printf('msg:%d', m.id)")
+
         # Message overview materialized view
         # Denormalizes messages with sender names for efficient list rendering
         conn.executescript(
-            """
+            f"""
             DROP TABLE IF EXISTS message_overview_mv;
             CREATE TABLE message_overview_mv AS
             SELECT
                 m.id,
                 m.project_id,
-                m.thread_id,
+                {thread_id_expr} AS thread_id,
                 m.subject,
                 m.importance,
                 m.ack_required,
@@ -965,13 +1010,13 @@ def build_materialized_views(snapshot_path: Path) -> None:
         # Attachments by message materialized view
         # Flattens JSON attachments array for easier filtering and counting
         conn.executescript(
-            """
+            f"""
             DROP TABLE IF EXISTS attachments_by_message_mv;
             CREATE TABLE attachments_by_message_mv AS
             SELECT
                 m.id AS message_id,
                 m.project_id,
-                m.thread_id,
+                {thread_id_expr} AS thread_id,
                 m.created_ts,
                 json_extract(value, '$.type') AS attachment_type,
                 json_extract(value, '$.media_type') AS media_type,
@@ -1047,14 +1092,28 @@ def create_performance_indexes(snapshot_path: Path) -> None:
             """
         )
 
-        conn.executescript(
+        # Check if thread_id column exists before creating index
+        has_thread_id = _column_exists(conn, "messages", "thread_id")
+
+        # Create base indexes
+        conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_messages_created_ts
-              ON messages(created_ts DESC);
+              ON messages(created_ts DESC)
+            """
+        )
 
-            CREATE INDEX IF NOT EXISTS idx_messages_thread
-              ON messages(thread_id, created_ts DESC);
+        # Only create thread_id index if column exists
+        if has_thread_id:
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_messages_thread
+                  ON messages(thread_id, created_ts DESC)
+                """
+            )
 
+        conn.executescript(
+            """
             CREATE INDEX IF NOT EXISTS idx_messages_sender
               ON messages(sender_id, created_ts DESC);
 
@@ -1169,12 +1228,16 @@ def create_snapshot_context(
     snapshot_path: Path,
     project_filters: Sequence[str],
     scrub_preset: str,
+    export_salt: Optional[bytes] = None,
 ) -> SnapshotContext:
     """Materialize and prepare a snapshot for export."""
 
     create_sqlite_snapshot(source_database, snapshot_path)
     scope = apply_project_scope(snapshot_path, project_filters)
-    scrub_summary = scrub_snapshot(snapshot_path, preset=scrub_preset)
+
+    # Pass export_salt to scrub_snapshot; if None, pseudonymization will be skipped
+    scrub_summary = scrub_snapshot(snapshot_path, preset=scrub_preset, export_salt=export_salt)
+
     fts_enabled = build_search_indexes(snapshot_path)
     build_materialized_views(snapshot_path)
     create_performance_indexes(snapshot_path)
@@ -1204,7 +1267,7 @@ def bundle_attachments(
     manifest_items: list[dict[str, Any]] = []
     inline_count = 0
     copied_count = 0
-    externalized_count = 0
+    detached_count = 0
     missing_count = 0
     bytes_copied = 0
 
@@ -1296,20 +1359,28 @@ def bundle_attachments(
                     continue
 
                 if size >= detach_threshold:
-                    media_record["mode"] = "external"
-                    media_record["note"] = "Attachment exceeds detach threshold; not bundled."
+                    # Large files are "detached" into a separate bundles directory
+                    rel_path = Path("attachments") / "bundles" / f"{sha256}{ext}"
+                    dest_path = output_dir / rel_path
+                    dest_path.parent.mkdir(parents=True, exist_ok=True)
+                    if not dest_path.exists():
+                        dest_path.write_bytes(data)
+                        bytes_copied += size
+                    bundles[sha256] = rel_path
+                    media_record["mode"] = "detached"
+                    media_record["bundle_path"] = rel_path.as_posix()
                     manifest_items.append(media_record)
                     updated_list.append(
                         {
-                            "type": "external",
+                            "type": "file",
                             "media_type": media_type,
                             "bytes": size,
                             "sha256": sha256,
-                            "original_path": original_path,
-                            "note": "Requires manual hosting (exceeds bundle threshold).",
+                            "path": rel_path.as_posix(),
                         }
                     )
-                    externalized_count += 1
+                    copied_count += 1
+                    detached_count += 1
                     changed = True
                     continue
 
@@ -1351,7 +1422,7 @@ def bundle_attachments(
         "stats": {
             "inline": inline_count,
             "copied": copied_count,
-            "externalized": externalized_count,
+            "externalized": detached_count,
             "missing": missing_count,
             "bytes_copied": bytes_copied,
         },

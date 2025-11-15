@@ -47,6 +47,8 @@ def _seed_mailbox(db_path: Path, storage_root: Path) -> None:
             CREATE TABLE messages (
                 id INTEGER PRIMARY KEY,
                 project_id INTEGER,
+                sender_id INTEGER,
+                thread_id TEXT,
                 subject TEXT,
                 body_md TEXT,
                 importance TEXT,
@@ -97,10 +99,12 @@ def _seed_mailbox(db_path: Path, storage_root: Path) -> None:
 
         conn.execute(
             """
-            INSERT INTO messages (id, project_id, subject, body_md, importance, ack_required, created_ts, attachments)
+            INSERT INTO messages (id, project_id, sender_id, thread_id, subject, body_md, importance, ack_required, created_ts, attachments)
             VALUES (
                 1,
                 1,
+                1,
+                NULL,
                 'Integration Test',
                 'Body with bearer TOKEN <script>window._xss=1</script>',
                 'normal',
@@ -181,8 +185,8 @@ def test_share_export_end_to_end(monkeypatch, tmp_path: Path) -> None:
 
     stats = manifest["attachments"]["stats"]
     assert stats["inline"] == 1
-    assert stats["copied"] == 1
-    assert stats["externalized"] == 1
+    # With detached bundles: large files are copied to bundles/
+    assert stats["copied"] == 2
     assert stats["missing"] == 0
     assert manifest["scrub"]["preset"] == "standard"
 
@@ -247,6 +251,8 @@ def test_viewer_playwright_smoke(monkeypatch, tmp_path: Path) -> None:
             "export",
             "--output",
             str(output_dir),
+            "--project",
+            "primary",
             "--inline-threshold",
             "64",
             "--detach-threshold",
