@@ -35,6 +35,7 @@ def _create_commit(repo_path: Path, filename: str, content: str = "test") -> Non
         stderr=subprocess.PIPE,
     )
 
+
 def _resolve_local_sha(repo_path: Path, local_ref: str) -> str:
     """Return a commit SHA for the requested ref, falling back to HEAD if needed."""
     branch_name = local_ref.split("/")[-1]
@@ -95,9 +96,7 @@ def _skip_presubmit_in_script(script_text):
             while i < len(lines) and "# Gate" not in lines[i]:
                 i += 1
             if i >= len(lines):
-                raise ValueError(
-                    f"Could not find '# Gate' comment after PRESUBMIT_COMMANDS at line {start_i}"
-                )
+                raise ValueError(f"Could not find '# Gate' comment after PRESUBMIT_COMMANDS at line {start_i}")
             # Now i points to '# Gate' line, add it
             result.append(lines[i])
             i += 1
