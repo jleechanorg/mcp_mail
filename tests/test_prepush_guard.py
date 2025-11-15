@@ -15,7 +15,9 @@ from mcp_agent_mail.storage import ensure_archive, write_file_reservation_record
 
 def _init_git_repo(repo_path: Path) -> None:
     """Initialize a git repository with dummy config."""
-    subprocess.run(["git", "init"], cwd=str(repo_path), check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    subprocess.run(
+        ["git", "init", "-b", "main"], cwd=str(repo_path), check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
     subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(repo_path), check=True)
     subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(repo_path), check=True)
 
@@ -71,24 +73,31 @@ def _run_prepush_hook(
 
 def _skip_presubmit_in_script(script_text):
     """Remove presubmit commands and add debug output."""
-    # Find and remove the PRESUBMIT_COMMANDS block
     lines = script_text.split("\n")
-    result = []
+    result: list[str] = []
     i = 0
+    block_skipped = False
     while i < len(lines):
         line = lines[i]
         # Skip from PRESUBMIT_COMMANDS until # Gate
         if "PRESUBMIT_COMMANDS = (" in line:
-            # Skip until we find '# Gate'
+            start_i = i
             while i < len(lines) and "# Gate" not in lines[i]:
                 i += 1
-            # Now i points to '# Gate' line, add it
             if i < len(lines):
                 result.append(lines[i])
-            i += 1
+                block_skipped = True
+                i += 1
+            else:
+                raise ValueError(
+                    f"Failed to find '# Gate' after 'PRESUBMIT_COMMANDS = (' starting at line {start_i}. Script format may have changed."
+                )
             continue
         result.append(line)
         i += 1
+
+    if not block_skipped and any("PRESUBMIT_COMMANDS = (" in l for l in lines):
+        raise ValueError("PRESUBMIT_COMMANDS block was not skipped. Script format may have changed.")
 
     return "\n".join(result)
 

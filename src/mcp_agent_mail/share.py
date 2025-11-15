@@ -748,7 +748,7 @@ def scrub_snapshot(
                 original_name = agent["name"]
 
                 # Hash the agent name with salt to create consistent pseudonym
-                hash_input = f"{original_name}{export_salt.hex()}".encode("utf-8")
+                hash_input = original_name.encode("utf-8") + export_salt
                 name_hash = hashlib.sha256(hash_input).hexdigest()
                 pseudonym = f"{PSEUDONYM_PREFIX}{name_hash[:PSEUDONYM_LENGTH]}"
 
@@ -924,7 +924,8 @@ def finalize_snapshot_for_export(snapshot_path: Path) -> None:
         # Compact database and improve page locality
         conn.execute("VACUUM")
 
-        # Update planner statistics after schema/index changes
+        # Update planner statistics after schema/index changes. create_performance_indexes()
+        # no longer runs ANALYZE, so this is the single point where we refresh stats.
         conn.execute("PRAGMA analysis_limit=400")
         conn.execute("ANALYZE")
 
@@ -967,6 +968,7 @@ def build_materialized_views(snapshot_path: Path) -> None:
 
         # Message overview materialized view
         # Denormalizes messages with sender names for efficient list rendering
+        # SAFETY: thread_id_expr is static SQL defined above; keep it that way when editing.
         conn.executescript(
             f"""
             DROP TABLE IF EXISTS message_overview_mv;
@@ -1006,6 +1008,7 @@ def build_materialized_views(snapshot_path: Path) -> None:
 
         # Attachments by message materialized view
         # Flattens JSON attachments array for easier filtering and counting
+        # SAFETY: thread_id_expr is static SQL defined above; keep it that way when editing.
         conn.executescript(
             f"""
             DROP TABLE IF EXISTS attachments_by_message_mv;
