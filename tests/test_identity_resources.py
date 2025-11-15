@@ -400,8 +400,10 @@ async def test_register_agent_auto_fetch_inbox_with_filters(isolated_env):
         # Should only have urgent message
         inbox = result_urgent_only.data["inbox"]
         assert len(inbox) >= 1
-        # At least one message should be urgent
-        assert any(msg.get("importance") in ["urgent", "high"] for msg in inbox)
+        # All messages should be urgent when urgent_only=True
+        assert all(
+            msg.get("importance") in ["urgent", "high"] for msg in inbox
+        ), "urgent_only filter should return only urgent/high importance messages"
 
         # Register with include_bodies
         result_with_bodies = await client.call_tool(
@@ -420,5 +422,67 @@ async def test_register_agent_auto_fetch_inbox_with_filters(isolated_env):
         # Should have message bodies
         inbox_with_bodies = result_with_bodies.data["inbox"]
         assert len(inbox_with_bodies) >= 1
-        # At least one message should have a body_md field
-        assert any("body_md" in msg for msg in inbox_with_bodies)
+        # All messages should have body_md when include_bodies=True
+        assert all(
+            "body_md" in msg for msg in inbox_with_bodies
+        ), "include_bodies should add body_md to all inbox messages"
+
+
+@pytest.mark.asyncio
+async def test_register_agent_auto_fetch_inbox_respects_limit(isolated_env):
+    """Ensure inbox_limit parameter caps the number of returned messages."""
+    server = build_mcp_server()
+    async with Client(server) as client:
+        # Register sender and recipient agents
+        await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "test-project",
+                "program": "sender-prog-limit",
+                "model": "sender-model-limit",
+                "name": "SenderAgentLimit",
+            },
+        )
+
+        await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "test-project",
+                "program": "recipient-prog-limit",
+                "model": "recipient-model-limit",
+                "name": "RecipientAgentLimit",
+            },
+        )
+
+        # Send more messages than the limit
+        for idx in range(15):
+            await client.call_tool(
+                "send_message",
+                {
+                    "project_key": "test-project",
+                    "sender_name": "SenderAgentLimit",
+                    "to": ["RecipientAgentLimit"],
+                    "subject": f"Limited message {idx}",
+                    "body_md": f"Limited content {idx}",
+                },
+            )
+
+        # Register with a strict limit
+        inbox_limit = 5
+        limited_result = await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "test-project",
+                "program": "recipient-prog-limit-updated",
+                "model": "recipient-model-limit-updated",
+                "name": "RecipientAgentLimit",
+                "auto_fetch_inbox": True,
+                "inbox_limit": inbox_limit,
+            },
+        )
+
+        inbox_items = limited_result.data.get("inbox", [])
+        assert len(inbox_items) >= 1
+        assert (
+            len(inbox_items) <= inbox_limit
+        ), "inbox_limit should cap the number of returned messages"
