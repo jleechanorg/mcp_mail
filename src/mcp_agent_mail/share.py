@@ -736,13 +736,17 @@ def scrub_snapshot(
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
 
-        # Pseudonymize agent names for privacy
+        # Pseudonymize agent names for privacy when salt is provided
+        # Skip pseudonymization if no salt is provided
         agents_total = conn.execute("SELECT COUNT(*) FROM agents").fetchone()[0]
         agents_pseudonymized = 0
 
         if export_salt:
             # Generate pseudonyms for all agents
             agent_rows = conn.execute("SELECT id, name FROM agents").fetchall()
+            
+            # Build list of (pseudonym, agent_id) tuples for batch update
+            updates = []
             for agent in agent_rows:
                 agent_id = agent["id"]
                 original_name = agent["name"]
@@ -755,10 +759,15 @@ def scrub_snapshot(
                 hash_input = f"{original_name}{export_salt.hex()}".encode("utf-8")
                 name_hash = hashlib.sha256(hash_input).hexdigest()
                 pseudonym = f"{PSEUDONYM_PREFIX}{name_hash[:PSEUDONYM_LENGTH]}"
+                
+                updates.append((pseudonym, agent_id))
 
-                # Update agent name in database
-                conn.execute("UPDATE agents SET name = ? WHERE id = ?", (pseudonym, agent_id))
-                agents_pseudonymized += 1
+            # Batch update all agents at once
+            if updates:
+                conn.executemany("UPDATE agents SET name = ? WHERE id = ?", updates)
+                agents_pseudonymized = len(updates)
+            else:
+                agents_pseudonymized = 0
         else:
             # No salt provided - skip pseudonymization
             agents_pseudonymized = 0
@@ -955,6 +964,9 @@ def build_materialized_views(snapshot_path: Path) -> None:
     - message_overview_mv: Denormalized message list with sender info
     - attachments_by_message_mv: Flattened attachments for easier querying
 
+    Handles backward compatibility by synthesizing thread_id from message ID
+    when the column doesn't exist in older database schemas.
+    
     Also creates covering indexes to enable efficient httpvfs range scans.
     """
     conn = sqlite3.connect(str(snapshot_path))

@@ -80,11 +80,16 @@ def _skip_presubmit_in_script(script_text):
         # Skip from PRESUBMIT_COMMANDS until # Gate
         if "PRESUBMIT_COMMANDS = (" in line:
             # Skip until we find '# Gate'
+            start_i = i
             while i < len(lines) and "# Gate" not in lines[i]:
                 i += 1
+            # Verify we found the gate comment
+            if i >= len(lines):
+                raise ValueError(
+                    f"Could not find '# Gate' comment after PRESUBMIT_COMMANDS at line {start_i}"
+                )
             # Now i points to '# Gate' line, add it
-            if i < len(lines):
-                result.append(lines[i])
+            result.append(lines[i])
             i += 1
             continue
         result.append(line)
