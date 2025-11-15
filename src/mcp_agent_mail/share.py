@@ -970,6 +970,7 @@ def build_materialized_views(snapshot_path: Path) -> None:
 
         # Message overview materialized view
         # Denormalizes messages with sender names for efficient list rendering
+        # Safe to use f-string: thread_id_expr validated by assertion above
         conn.executescript(
             f"""
             DROP TABLE IF EXISTS message_overview_mv;
@@ -1009,6 +1010,7 @@ def build_materialized_views(snapshot_path: Path) -> None:
 
         # Attachments by message materialized view
         # Flattens JSON attachments array for easier filtering and counting
+        # Safe to use f-string: thread_id_expr validated by assertion above (line 969)
         conn.executescript(
             f"""
             DROP TABLE IF EXISTS attachments_by_message_mv;
