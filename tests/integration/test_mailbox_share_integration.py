@@ -251,6 +251,8 @@ def test_viewer_playwright_smoke(monkeypatch, tmp_path: Path) -> None:
             "export",
             "--output",
             str(output_dir),
+            "--project",
+            "primary",
             "--inline-threshold",
             "64",
             "--detach-threshold",
