@@ -75,20 +75,33 @@ def _skip_presubmit_in_script(script_text):
     lines = script_text.split("\n")
     result = []
     i = 0
+    block_skipped = False
+
     while i < len(lines):
         line = lines[i]
         # Skip from PRESUBMIT_COMMANDS until # Gate
         if "PRESUBMIT_COMMANDS = (" in line:
             # Skip until we find '# Gate'
+            start_i = i
             while i < len(lines) and "# Gate" not in lines[i]:
                 i += 1
             # Now i points to '# Gate' line, add it
             if i < len(lines):
                 result.append(lines[i])
-            i += 1
+                block_skipped = True
+                i += 1
+            else:
+                raise ValueError(
+                    f"Failed to find '# Gate' after 'PRESUBMIT_COMMANDS = (' starting at line {start_i}. "
+                    "Script format may have changed."
+                )
             continue
         result.append(line)
         i += 1
+
+    # Verify the block was actually found and skipped if it exists in the source
+    if not block_skipped and any("PRESUBMIT_COMMANDS = (" in line for line in lines):
+        raise ValueError("PRESUBMIT_COMMANDS block was not skipped. Script format may have changed.")
 
     return "\n".join(result)
 
