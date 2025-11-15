@@ -2992,6 +2992,10 @@ def build_mcp_server() -> FastMCP:
         task_description: str = "",
         attachments_policy: str = "auto",
         force_reclaim: bool = False,
+        auto_fetch_inbox: bool = False,
+        inbox_limit: int = 20,
+        inbox_include_bodies: bool = False,
+        inbox_urgent_only: bool = False,
     ) -> dict[str, Any]:
         """
         Create or update an agent identity within a project and persist its profile to Git.
@@ -3039,11 +3043,23 @@ def build_mcp_server() -> FastMCP:
             If True, forcefully reclaim this agent name by retiring any active agents that currently
             use it, even in other projects. Use this when you want to override existing agents.
             Default is False. When False, the system will warn you if the name is already taken.
+        auto_fetch_inbox : bool
+            If True, automatically fetch the agent's inbox after registration and include it in the response.
+            Default is False. When enabled, the response will include both agent data and inbox messages.
+        inbox_limit : int
+            Maximum number of inbox messages to fetch when auto_fetch_inbox is True. Default is 20.
+        inbox_include_bodies : bool
+            Include full message bodies in inbox when auto_fetch_inbox is True. Default is False.
+        inbox_urgent_only : bool
+            Only fetch urgent messages when auto_fetch_inbox is True. Default is False.
 
         Returns
         -------
         dict
-            { id, name, program, model, task_description, inception_ts, last_active_ts, project_id }
+            When auto_fetch_inbox is False:
+                { id, name, program, model, task_description, inception_ts, last_active_ts, project_id }
+            When auto_fetch_inbox is True:
+                { agent: {...}, inbox: [...] }
 
         Examples
         --------
@@ -3058,6 +3074,13 @@ def build_mcp_server() -> FastMCP:
         ```json
         {"jsonrpc":"2.0","id":"4","method":"tools/call","params":{"name":"register_agent","arguments":{
           "project_key":"/data/projects/backend","program":"claude-code","model":"opus-4.1","name":"BlueLake","task_description":"Navbar redesign"
+        }}}
+        ```
+
+        Register with auto-fetch inbox (automatically receive messages after registration):
+        ```json
+        {"jsonrpc":"2.0","id":"5","method":"tools/call","params":{"name":"register_agent","arguments":{
+          "project_key":"/data/projects/backend","program":"claude-code","model":"opus-4.1","auto_fetch_inbox":true,"inbox_limit":10
         }}}
         ```
 
@@ -3107,6 +3130,26 @@ def build_mcp_server() -> FastMCP:
                     await session.commit()
                     await session.refresh(db_agent)
                     agent = db_agent
+
+        # Automatically fetch inbox if requested
+        if auto_fetch_inbox:
+            inbox_items = await _list_inbox(
+                project,
+                agent,
+                inbox_limit,
+                inbox_urgent_only,
+                inbox_include_bodies,
+                since_ts=None,
+            )
+            await ctx.info(
+                f"Registered agent '{agent.name}' for project '{project.human_key}' "
+                f"and fetched {len(inbox_items)} inbox message(s)."
+            )
+            return {
+                "agent": _agent_to_dict(agent),
+                "inbox": inbox_items,
+            }
+
         await ctx.info(f"Registered agent '{agent.name}' for project '{project.human_key}'.")
         return _agent_to_dict(agent)
 
