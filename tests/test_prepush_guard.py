@@ -96,7 +96,7 @@ def _skip_presubmit_in_script(script_text):
         result.append(line)
         i += 1
 
-    if not block_skipped and any("PRESUBMIT_COMMANDS = (" in l for l in lines):
+    if not block_skipped and any("PRESUBMIT_COMMANDS = (" in line_text for line_text in lines):
         raise ValueError("PRESUBMIT_COMMANDS block was not skipped. Script format may have changed.")
 
     return "\n".join(result)
