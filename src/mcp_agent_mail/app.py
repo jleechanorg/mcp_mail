@@ -3008,6 +3008,11 @@ def build_mcp_server() -> FastMCP:
         task_description: str = "",
         attachments_policy: str = "auto",
         force_reclaim: bool = False,
+        auto_fetch_inbox: bool = False,
+        inbox_limit: int = 10,
+        inbox_urgent_only: bool = False,
+        inbox_since_ts: Optional[str] = None,
+        inbox_include_bodies: bool = False,
     ) -> dict[str, Any]:
         """
         Create or update an agent identity within a project and persist its profile to Git.
@@ -3124,6 +3129,22 @@ def build_mcp_server() -> FastMCP:
                     await session.refresh(db_agent)
                     agent = db_agent
         await ctx.info(f"Registered agent '{agent.name}' for project '{project.human_key}'.")
+
+        # Auto-fetch inbox if requested
+        if auto_fetch_inbox:
+            inbox_items = await _list_inbox(
+                project,
+                agent,
+                inbox_limit,
+                urgent_only=inbox_urgent_only,
+                include_bodies=inbox_include_bodies,
+                since_ts=inbox_since_ts,
+            )
+            return {
+                "agent": _agent_to_dict(agent),
+                "inbox": inbox_items,
+            }
+
         return _agent_to_dict(agent)
 
     @mcp.tool(name="delete_agent")
