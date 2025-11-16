@@ -73,6 +73,7 @@ async def acquire_build_slot(
         with _slot_lock(slot_dir):
             now = datetime.now(timezone.utc)
             conflicts: list[dict[str, Any]] = []
+            existing_payload: dict[str, Any] | None = None
 
             for lease_file in slot_dir.glob("*.json"):
                 try:
@@ -88,30 +89,41 @@ async def acquire_build_slot(
                     except Exception:
                         continue
 
-            same_holder = data.get("agent") == agent_name and _normalize_branch(data.get("branch")) == branch
-            if same_holder:
-                existing_payload = data
-                continue
+                if data.get("released_ts"):
+                    continue
 
-            if exclusive or data.get("exclusive", True):
-                conflicts.append(data)
+                same_holder = data.get("agent") == agent_name and _normalize_branch(data.get("branch")) == branch
+                if same_holder:
+                    existing_payload = data
+                    continue
 
-            acquired_ts = now.isoformat()
-            expires_ts = (now + timedelta(seconds=ttl_seconds)).isoformat()
-            payload = {
-                "slot": slot,
-                "agent": agent_name,
-                "branch": branch,
-                "exclusive": exclusive,
-                "acquired_ts": acquired_ts,
-                "expires_ts": expires_ts,
-            }
+                if exclusive or data.get("exclusive", True):
+                    conflicts.append(data)
 
-            lease_path = _lease_path(slot_dir, agent_name, branch)
-            lease_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            granted = not conflicts
+            acquired_ts: str | None = None
+            expires_ts: str | None = None
+
+            if granted:
+                acquired_ts = now.isoformat()
+                expires_ts = (now + timedelta(seconds=ttl_seconds)).isoformat()
+                payload = existing_payload or {}
+                payload.update(
+                    {
+                        "slot": slot,
+                        "agent": agent_name,
+                        "branch": branch,
+                        "exclusive": exclusive,
+                        "acquired_ts": acquired_ts,
+                        "expires_ts": expires_ts,
+                    }
+                )
+
+                lease_path = _lease_path(slot_dir, agent_name, branch)
+                lease_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
             return {
-                "granted": True,
+                "granted": granted,
                 "slot": slot,
                 "agent": agent_name,
                 "acquired_ts": acquired_ts,
