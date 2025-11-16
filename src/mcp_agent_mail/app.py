@@ -27,7 +27,6 @@ from git.exc import InvalidGitRepositoryError, NoSuchPathError
 from sqlalchemy import asc, delete, desc, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, NoResultFound, SQLAlchemyError
 from sqlalchemy.orm import aliased
-from sqlalchemy.sql import column, table
 
 from . import rich_logger
 from .config import Settings, get_settings
@@ -35,6 +34,11 @@ from .db import ensure_schema, get_session, init_engine
 from .guard import install_guard as install_guard_script, uninstall_guard as uninstall_guard_script
 from .llm import complete_system_user
 from .models import Agent, FileReservation, Message, MessageRecipient, Project, ProjectSiblingSuggestion
+from .slots import (
+    acquire_build_slot as acquire_slot_impl,
+    release_build_slot as release_slot_impl,
+    renew_build_slot as renew_slot_impl,
+)
 from .storage import (
     ProjectArchive,
     archive_write_lock,
@@ -92,7 +96,6 @@ class ToolExecutionError(Exception):
 
 
 def _record_tool_error(tool_name: str, exc: Exception) -> None:
-    """Log tool execution errors for diagnostics."""
     logger.warning(
         "tool_error",
         extra={
@@ -104,7 +107,6 @@ def _record_tool_error(tool_name: str, exc: Exception) -> None:
 
 
 def _register_tool(name: str, metadata: dict[str, Any]) -> None:
-    """Register a tool's metadata for capability and cluster tracking."""
     TOOL_CLUSTER_MAP[name] = metadata["cluster"]
     TOOL_METADATA[name] = metadata
 
@@ -112,7 +114,6 @@ def _register_tool(name: str, metadata: dict[str, Any]) -> None:
 def _bind_arguments(
     signature: inspect.Signature, args: tuple[Any, ...], kwargs: dict[str, Any]
 ) -> inspect.BoundArguments:
-    """Bind function arguments, falling back to full bind if partial fails."""
     try:
         return signature.bind_partial(*args, **kwargs)
     except TypeError:
@@ -120,7 +121,6 @@ def _bind_arguments(
 
 
 def _extract_argument(bound: inspect.BoundArguments, name: Optional[str]) -> Optional[str]:
-    """Extract a named argument from bound arguments as a string."""
     if not name:
         return None
     value = bound.arguments.get(name)
@@ -130,7 +130,6 @@ def _extract_argument(bound: inspect.BoundArguments, name: Optional[str]) -> Opt
 
 
 def _enforce_capabilities(ctx: Context, required: set[str], tool_name: str) -> None:
-    """Verify that required capabilities are allowed in the current context."""
     if not required:
         return
     metadata = getattr(ctx, "metadata", {}) or {}
@@ -149,7 +148,6 @@ def _enforce_capabilities(ctx: Context, required: set[str], tool_name: str) -> N
 
 
 def _record_recent(tool_name: str, project: Optional[str], agent: Optional[str]) -> None:
-    """Record tool usage for recent activity tracking."""
     RECENT_TOOL_USAGE.append((datetime.now(timezone.utc), tool_name, project, agent))
 
 
@@ -162,7 +160,6 @@ def _instrument_tool(
     agent_arg: Optional[str] = None,
     project_arg: Optional[str] = None,
 ):
-    """Decorator factory to instrument MCP tools with capability enforcement and metrics."""
     meta = {
         "cluster": cluster,
         "capabilities": sorted(capabilities or {cluster}),
@@ -268,7 +265,6 @@ def _instrument_tool(
 
 
 def _tool_metrics_snapshot() -> list[dict[str, Any]]:
-    """Generate a snapshot of tool usage metrics for monitoring."""
     snapshot = []
     for name, data in sorted(TOOL_METRICS.items()):
         metadata = TOOL_METADATA.get(name, {})
@@ -287,7 +283,6 @@ def _tool_metrics_snapshot() -> list[dict[str, Any]]:
 
 @functools.lru_cache(maxsize=1)
 def _load_capabilities_mapping() -> list[dict[str, Any]]:
-    """Load agent capabilities mapping from deployment configuration."""
     mapping_path = Path(__file__).resolve().parent.parent.parent / "deploy" / "capabilities" / "agent_capabilities.json"
     if not mapping_path.exists():
         return []
@@ -308,7 +303,6 @@ def _load_capabilities_mapping() -> list[dict[str, Any]]:
 
 
 def _capabilities_for(agent: Optional[str], project: Optional[str]) -> list[str]:
-    """Determine allowed capabilities for a given agent and project combination."""
     mapping = _load_capabilities_mapping()
     caps: set[str] = set()
     for entry in mapping:
@@ -373,7 +367,6 @@ def _ensure_utc(dt: Optional[datetime]) -> Optional[datetime]:
 
 
 def _max_datetime(*timestamps: Optional[datetime]) -> Optional[datetime]:
-    """Return the most recent datetime from a list of optional timestamps."""
     values = [ts for ts in timestamps if ts is not None]
     if not values:
         return None
@@ -385,7 +378,6 @@ _FALSE_FLAG_VALUES: tuple[str, ...] = ("0", "false", "no", "off", "n")
 
 
 def _split_slug_and_query(raw_value: str) -> tuple[str, dict[str, str]]:
-    """Split a resource URI into slug and query parameters."""
     slug, _, query_string = raw_value.partition("?")
     if not query_string:
         return slug, {}
@@ -394,7 +386,6 @@ def _split_slug_and_query(raw_value: str) -> tuple[str, dict[str, str]]:
 
 
 def _coerce_flag_to_bool(value: str, *, default: bool) -> bool:
-    """Convert string flag values to boolean, using default if ambiguous."""
     normalized = value.strip().lower()
     if normalized in _TRUE_FLAG_VALUES:
         return True
@@ -419,17 +410,14 @@ _GLOB_MARKERS: tuple[str, ...] = ("*", "?", "[")
 
 
 def _contains_glob(pattern: str) -> bool:
-    """Check if a pattern contains glob wildcards (* ? [)."""
     return any(marker in pattern for marker in _GLOB_MARKERS)
 
 
 def _normalize_pattern(pattern: str) -> str:
-    """Normalize a file pattern by removing leading slashes and whitespace."""
     return pattern.lstrip("/").strip()
 
 
 def _collect_matching_paths(base: Path, pattern: str) -> list[Path]:
-    """Collect filesystem paths matching a pattern (supports glob)."""
     if not base.exists():
         return []
     normalized = _normalize_pattern(pattern)
@@ -444,7 +432,6 @@ def _collect_matching_paths(base: Path, pattern: str) -> list[Path]:
 
 
 def _latest_filesystem_activity(paths: Sequence[Path]) -> Optional[datetime]:
-    """Get the most recent modification time from a list of paths."""
     mtimes: list[datetime] = []
     for path in paths:
         try:
@@ -458,7 +445,6 @@ def _latest_filesystem_activity(paths: Sequence[Path]) -> Optional[datetime]:
 
 
 def _latest_git_activity(repo: Optional[Repo], matches: Sequence[Path]) -> Optional[datetime]:
-    """Get the most recent Git commit time touching any of the matched paths."""
     if repo is None:
         return None
     repo_root = Path(repo.working_tree_dir or "").resolve()
@@ -481,7 +467,6 @@ def _latest_git_activity(repo: Optional[Repo], matches: Sequence[Path]) -> Optio
 
 
 def _project_workspace_path(project: Project) -> Optional[Path]:
-    """Resolve project workspace path from human_key if it exists on filesystem."""
     try:
         candidate = Path(project.human_key).expanduser()
     except Exception:
@@ -493,7 +478,6 @@ def _project_workspace_path(project: Project) -> Optional[Path]:
 
 
 def _open_repo_if_available(workspace: Optional[Path]) -> Optional[Repo]:
-    """Open a Git repository if the workspace path is a valid Git repo."""
     if workspace is None:
         return None
     try:
@@ -1972,12 +1956,6 @@ async def _find_mentions_in_global_inbox(
 
     await ensure_schema()
     sender_alias = aliased(Agent)
-    fts_messages = table(
-        "fts_messages",
-        column("rowid"),
-        column("subject"),
-        column("body"),
-    )
 
     async with get_session() as session:
         # Use FTS5 MATCH query for fast full-text search
@@ -1987,7 +1965,10 @@ async def _find_mentions_in_global_inbox(
             select(Message, MessageRecipient.kind, sender_alias.name)
             .join(MessageRecipient, MessageRecipient.message_id == Message.id)
             .join(sender_alias, Message.sender_id == sender_alias.id)
-            .join(fts_messages, Message.id == fts_messages.c.rowid)
+            .join(
+                # Join with FTS5 virtual table
+                text("fts_messages ON messages.id = fts_messages.rowid")
+            )
             .where(
                 MessageRecipient.agent_id == global_inbox_agent.id,
                 # FTS5 MATCH query - searches subject and body for the agent name
@@ -2522,6 +2503,9 @@ EXTENDED_TOOLS = {
     "macro_file_reservation_cycle",
     "install_precommit_guard",
     "uninstall_precommit_guard",
+    "acquire_build_slot",
+    "renew_build_slot",
+    "release_build_slot",
 }
 
 # Tool metadata for discovery
@@ -2548,6 +2532,18 @@ EXTENDED_TOOL_METADATA = {
     "renew_file_reservations": {
         "category": "file_reservations",
         "description": "Extend expiry for active reservations",
+    },
+    "acquire_build_slot": {
+        "category": "coordination",
+        "description": "Acquire exclusive build slot for parallel operations",
+    },
+    "renew_build_slot": {
+        "category": "coordination",
+        "description": "Extend build slot expiration",
+    },
+    "release_build_slot": {
+        "category": "coordination",
+        "description": "Release build slot",
     },
     "summarize_thread": {
         "category": "search",
@@ -3013,10 +3009,10 @@ def build_mcp_server() -> FastMCP:
         attachments_policy: str = "auto",
         force_reclaim: bool = False,
         auto_fetch_inbox: bool = False,
-        inbox_limit: int = 20,
-        inbox_include_bodies: bool = False,
+        inbox_limit: int = 10,
         inbox_urgent_only: bool = False,
         inbox_since_ts: Optional[str] = None,
+        inbox_include_bodies: bool = False,
     ) -> dict[str, Any]:
         """
         Create or update an agent identity within a project and persist its profile to Git.
@@ -3064,26 +3060,11 @@ def build_mcp_server() -> FastMCP:
             If True, forcefully reclaim this agent name by retiring any active agents that currently
             use it, even in other projects. Use this when you want to override existing agents.
             Default is False. When False, the system will warn you if the name is already taken.
-        auto_fetch_inbox : bool
-            If True, automatically fetch the agent's inbox after registration and include it in the response.
-            Default is False. When enabled, the response will include both agent data and inbox messages.
-        inbox_limit : int
-            Maximum number of inbox messages to fetch when auto_fetch_inbox is True. Default is 20.
-        inbox_include_bodies : bool
-            Include full message bodies in inbox when auto_fetch_inbox is True. Default is False.
-        inbox_urgent_only : bool
-            Only fetch urgent messages when auto_fetch_inbox is True. Default is False.
-        inbox_since_ts : Optional[str]
-            ISO-8601 timestamp to filter inbox messages by age. Only messages created after this
-            timestamp will be fetched when auto_fetch_inbox is True. Default is None (all messages).
 
         Returns
         -------
         dict
-            When auto_fetch_inbox is False:
-                { id, name, program, model, task_description, inception_ts, last_active_ts, project_id }
-            When auto_fetch_inbox is True:
-                { agent: {...}, inbox: [...] }
+            { id, name, program, model, task_description, inception_ts, last_active_ts, project_id }
 
         Examples
         --------
@@ -3098,21 +3079,6 @@ def build_mcp_server() -> FastMCP:
         ```json
         {"jsonrpc":"2.0","id":"4","method":"tools/call","params":{"name":"register_agent","arguments":{
           "project_key":"/data/projects/backend","program":"claude-code","model":"opus-4.1","name":"BlueLake","task_description":"Navbar redesign"
-        }}}
-        ```
-
-        Register with auto-fetch inbox (automatically receive messages after registration):
-        ```json
-        {"jsonrpc":"2.0","id":"5","method":"tools/call","params":{"name":"register_agent","arguments":{
-          "project_key":"/data/projects/backend","program":"claude-code","model":"opus-4.1","auto_fetch_inbox":true,"inbox_limit":10
-        }}}
-        ```
-
-        Register with age-based inbox filtering (only messages from last 24 hours):
-        ```json
-        {"jsonrpc":"2.0","id":"6","method":"tools/call","params":{"name":"register_agent","arguments":{
-          "project_key":"/data/projects/backend","program":"claude-code","model":"opus-4.1","auto_fetch_inbox":true,
-          "inbox_since_ts":"2025-01-15T00:00:00Z","inbox_limit":20
         }}}
         ```
 
@@ -3162,27 +3128,23 @@ def build_mcp_server() -> FastMCP:
                     await session.commit()
                     await session.refresh(db_agent)
                     agent = db_agent
+        await ctx.info(f"Registered agent '{agent.name}' for project '{project.human_key}'.")
 
-        # Automatically fetch inbox if requested
+        # Auto-fetch inbox if requested
         if auto_fetch_inbox:
             inbox_items = await _list_inbox(
                 project,
                 agent,
                 inbox_limit,
-                inbox_urgent_only,
-                inbox_include_bodies,
+                urgent_only=inbox_urgent_only,
+                include_bodies=inbox_include_bodies,
                 since_ts=inbox_since_ts,
-            )
-            await ctx.info(
-                f"Registered agent '{agent.name}' for project '{project.human_key}' "
-                f"and fetched {len(inbox_items)} inbox message(s)."
             )
             return {
                 "agent": _agent_to_dict(agent),
                 "inbox": inbox_items,
             }
 
-        await ctx.info(f"Registered agent '{agent.name}' for project '{project.human_key}'.")
         return _agent_to_dict(agent)
 
     @mcp.tool(name="delete_agent")
@@ -4285,9 +4247,9 @@ def build_mcp_server() -> FastMCP:
 
         Returns
         -------
-        ToolResult
-            Structured content with a `result` key containing the list of matching
-            messages.
+        list[dict]
+            Matching messages ranked by relevance. Each includes:
+            { id, subject, from, to, created_ts, relevance_score, snippet, [body_md] }
 
         Usage Examples
         --------------
@@ -4792,6 +4754,124 @@ def build_mcp_server() -> FastMCP:
             return ToolResult(structured_content={"result": items})
         except Exception:
             return items
+
+    @mcp.tool(name="acquire_build_slot")
+    @_instrument_tool(
+        "acquire_build_slot", cluster=CLUSTER_SETUP, capabilities={"coordination"}, project_arg="project_key"
+    )
+    async def acquire_build_slot(
+        ctx: Context,
+        project_key: str,
+        agent_name: str,
+        slot: str,
+        ttl_seconds: int = 3600,
+        exclusive: bool = True,
+    ) -> dict[str, Any]:
+        """
+        Acquire a build slot for coordinating parallel build operations.
+
+        Parameters
+        ----------
+        project_key : str
+            Project identifier
+        agent_name : str
+            Agent requesting the slot
+        slot : str
+            Slot name (e.g., "frontend-build", "test-runner")
+        ttl_seconds : int
+            Time-to-live in seconds (minimum 60)
+        exclusive : bool
+            Whether this is an exclusive lock
+
+        Returns
+        -------
+        dict
+            {
+                "granted": bool,
+                "slot": str,
+                "agent": str,
+                "acquired_ts": str (ISO8601),
+                "expires_ts": str (ISO8601),
+                "conflicts": list[dict],
+                "disabled": bool (if WORKTREES_ENABLED=0)
+            }
+        """
+        result = await acquire_slot_impl(project_key, agent_name, slot, ttl_seconds, exclusive)
+        await ctx.info(f"Build slot '{slot}' acquisition for agent '{agent_name}': {result.get('granted', False)}")
+        return result
+
+    @mcp.tool(name="renew_build_slot")
+    @_instrument_tool(
+        "renew_build_slot", cluster=CLUSTER_SETUP, capabilities={"coordination"}, project_arg="project_key"
+    )
+    async def renew_build_slot(
+        ctx: Context,
+        project_key: str,
+        agent_name: str,
+        slot: str,
+        extend_seconds: int = 1800,
+    ) -> dict[str, Any]:
+        """
+        Renew an existing build slot by extending its expiration.
+
+        Parameters
+        ----------
+        project_key : str
+            Project identifier
+        agent_name : str
+            Agent name
+        slot : str
+            Slot name
+        extend_seconds : int
+            Seconds to extend the expiration
+
+        Returns
+        -------
+        dict
+            {
+                "renewed": bool,
+                "expires_ts": str (ISO8601),
+                "disabled": bool (if WORKTREES_ENABLED=0)
+            }
+        """
+        result = await renew_slot_impl(project_key, agent_name, slot, extend_seconds)
+        await ctx.info(f"Build slot '{slot}' renewal for agent '{agent_name}': {result.get('renewed', False)}")
+        return result
+
+    @mcp.tool(name="release_build_slot")
+    @_instrument_tool(
+        "release_build_slot", cluster=CLUSTER_SETUP, capabilities={"coordination"}, project_arg="project_key"
+    )
+    async def release_build_slot(
+        ctx: Context,
+        project_key: str,
+        agent_name: str,
+        slot: str,
+    ) -> dict[str, Any]:
+        """
+        Release a build slot.
+
+        Parameters
+        ----------
+        project_key : str
+            Project identifier
+        agent_name : str
+            Agent name
+        slot : str
+            Slot name
+
+        Returns
+        -------
+        dict
+            {
+                "released": bool,
+                "released_ts": str (ISO8601),
+                "disabled": bool (if WORKTREES_ENABLED=0)
+            }
+        """
+        result = await release_slot_impl(project_key, agent_name, slot)
+        await ctx.info(f"Build slot '{slot}' released for agent '{agent_name}': {result.get('released', False)}")
+        return result
 
     @mcp.tool(name="summarize_thread")
     @_instrument_tool(
@@ -5696,6 +5776,48 @@ def build_mcp_server() -> FastMCP:
                         "required_capabilities": ["repository"],
                         "usage_examples": [
                             {"hint": "Cleanup", "sample": "uninstall_precommit_guard(code_repo_path='~/repo')"}
+                        ],
+                    },
+                    {
+                        "name": "acquire_build_slot",
+                        "summary": "Acquire exclusive build slot for coordinating parallel build operations.",
+                        "use_when": "Before starting builds/tests that need exclusive access to resources.",
+                        "related": ["renew_build_slot", "release_build_slot"],
+                        "expected_frequency": "Once per build/test cycle.",
+                        "required_capabilities": ["coordination"],
+                        "usage_examples": [
+                            {
+                                "hint": "Acquire slot",
+                                "sample": "acquire_build_slot(project_key='backend', agent_name='BuildAgent', slot='frontend-build')",
+                            }
+                        ],
+                    },
+                    {
+                        "name": "renew_build_slot",
+                        "summary": "Extend expiration of an active build slot.",
+                        "use_when": "When build operations are taking longer than expected TTL.",
+                        "related": ["acquire_build_slot", "release_build_slot"],
+                        "expected_frequency": "As needed during long-running builds.",
+                        "required_capabilities": ["coordination"],
+                        "usage_examples": [
+                            {
+                                "hint": "Renew slot",
+                                "sample": "renew_build_slot(project_key='backend', agent_name='BuildAgent', slot='frontend-build', extend_seconds=1800)",
+                            }
+                        ],
+                    },
+                    {
+                        "name": "release_build_slot",
+                        "summary": "Release an acquired build slot.",
+                        "use_when": "After completing build operations or on error/cleanup.",
+                        "related": ["acquire_build_slot", "renew_build_slot"],
+                        "expected_frequency": "Once per build/test cycle.",
+                        "required_capabilities": ["coordination"],
+                        "usage_examples": [
+                            {
+                                "hint": "Release slot",
+                                "sample": "release_build_slot(project_key='backend', agent_name='BuildAgent', slot='frontend-build')",
+                            }
                         ],
                     },
                 ],
@@ -7144,19 +7266,22 @@ def build_mcp_server() -> FastMCP:
     _EXTENDED_TOOL_REGISTRY.update(
         {
             "acknowledge_message": acknowledge_message,
+            "acquire_build_slot": acquire_build_slot,
             "create_agent_identity": create_agent_identity,
             "delete_agent": delete_agent,
-            "search_messages": search_messages,
             "file_reservation_paths": file_reservation_paths,
-            "release_file_reservations": release_file_reservations_tool,
             "force_release_file_reservation": force_release_file_reservation,
+            "install_precommit_guard": install_precommit_guard,
+            "macro_file_reservation_cycle": macro_file_reservation_cycle,
+            "macro_prepare_thread": macro_prepare_thread,
+            "macro_start_session": macro_start_session,
+            "release_build_slot": release_build_slot,
+            "release_file_reservations": release_file_reservations_tool,
+            "renew_build_slot": renew_build_slot,
             "renew_file_reservations": renew_file_reservations,
+            "search_messages": search_messages,
             "summarize_thread": summarize_thread,
             "summarize_threads": summarize_threads,
-            "macro_start_session": macro_start_session,
-            "macro_prepare_thread": macro_prepare_thread,
-            "macro_file_reservation_cycle": macro_file_reservation_cycle,
-            "install_precommit_guard": install_precommit_guard,
             "uninstall_precommit_guard": uninstall_precommit_guard,
         }
     )
