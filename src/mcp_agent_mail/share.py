@@ -755,9 +755,6 @@ def scrub_snapshot(
                 # Update agent name in database
                 conn.execute("UPDATE agents SET name = ? WHERE id = ?", (pseudonym, agent_id))
                 agents_pseudonymized += 1
-        else:
-            # No salt provided - skip pseudonymization
-            agents_pseudonymized = 0
 
         ack_cursor = conn.execute("UPDATE messages SET ack_required = 0")
         ack_flags_cleared = ack_cursor.rowcount or 0
@@ -1365,6 +1362,7 @@ def bundle_attachments(
                     if not dest_path.exists():
                         dest_path.write_bytes(data)
                         bytes_copied += size
+                        copied_count += 1
                     bundles[sha256] = rel_path
                     media_record["mode"] = "detached"
                     media_record["bundle_path"] = rel_path.as_posix()
@@ -1378,7 +1376,6 @@ def bundle_attachments(
                             "path": rel_path.as_posix(),
                         }
                     )
-                    copied_count += 1
                     changed = True
                     continue
 
@@ -1390,6 +1387,7 @@ def bundle_attachments(
                     if not dest_path.exists():
                         dest_path.write_bytes(data)
                         bytes_copied += size
+                        copied_count += 1
                     bundles[sha256] = rel_path
                 media_record["mode"] = "file"
                 media_record["bundle_path"] = rel_path.as_posix()
@@ -1403,7 +1401,6 @@ def bundle_attachments(
                         "path": rel_path.as_posix(),
                     }
                 )
-                copied_count += 1
                 if sha_hint and sha_hint != sha256:
                     media_record["sha_hint"] = sha_hint
                 changed = True
