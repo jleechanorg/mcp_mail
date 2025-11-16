@@ -234,3 +234,253 @@ async def test_register_agent_same_slug_different_human_keys(isolated_env):
 
         assert who1.data.get("name") == "Agent1"
         assert who2.data.get("name") == "Agent2"
+
+
+@pytest.mark.asyncio
+async def test_register_agent_auto_fetch_inbox(isolated_env):
+    """Test that register_agent can automatically fetch inbox after registration."""
+    server = build_mcp_server()
+    async with Client(server) as client:
+        # Register sender agent first
+        await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "test-project",
+                "program": "sender-prog",
+                "model": "sender-model",
+                "name": "SenderAgent",
+            },
+        )
+
+        # Register recipient agent with auto_fetch_inbox disabled (default behavior)
+        result_no_auto = await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "test-project",
+                "program": "recipient-prog",
+                "model": "recipient-model",
+                "name": "RecipientAgent",
+            },
+        )
+
+        # Should return agent dict only (backward compatibility)
+        assert "name" in result_no_auto.data
+        assert "inbox" not in result_no_auto.data
+        assert result_no_auto.data.get("name") == "RecipientAgent"
+
+        # Send a message to RecipientAgent
+        await client.call_tool(
+            "send_message",
+            {
+                "project_key": "test-project",
+                "sender_name": "SenderAgent",
+                "to": ["RecipientAgent"],
+                "subject": "Test message",
+                "body_md": "This is a test message",
+            },
+        )
+
+        # Register another agent with auto_fetch_inbox enabled
+        result_with_auto = await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "test-project",
+                "program": "recipient2-prog",
+                "model": "recipient2-model",
+                "name": "RecipientAgent2",
+                "auto_fetch_inbox": True,
+                "inbox_limit": 10,
+            },
+        )
+
+        # Should return dict with both agent and inbox keys
+        assert "agent" in result_with_auto.data
+        assert "inbox" in result_with_auto.data
+        assert result_with_auto.data["agent"]["name"] == "RecipientAgent2"
+        assert isinstance(result_with_auto.data["inbox"], list)
+
+        # Send a message to RecipientAgent2
+        await client.call_tool(
+            "send_message",
+            {
+                "project_key": "test-project",
+                "sender_name": "SenderAgent",
+                "to": ["RecipientAgent2"],
+                "subject": "Test message for RecipientAgent2",
+                "body_md": "This is another test message",
+            },
+        )
+
+        # Update RecipientAgent2 with auto_fetch_inbox to verify inbox is fetched
+        result_update = await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "test-project",
+                "program": "recipient2-prog-updated",
+                "model": "recipient2-model-updated",
+                "name": "RecipientAgent2",
+                "auto_fetch_inbox": True,
+                "inbox_limit": 10,
+            },
+        )
+
+        # Should have fetched the message
+        assert "inbox" in result_update.data
+        assert len(result_update.data["inbox"]) >= 1
+        inbox_subjects = [msg.get("subject") for msg in result_update.data["inbox"]]
+        assert "Test message for RecipientAgent2" in inbox_subjects
+
+
+@pytest.mark.asyncio
+async def test_register_agent_auto_fetch_inbox_with_filters(isolated_env):
+    """Test that register_agent auto_fetch_inbox respects filter parameters."""
+    server = build_mcp_server()
+    async with Client(server) as client:
+        # Register sender and recipient agents
+        await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "test-project",
+                "program": "sender-prog",
+                "model": "sender-model",
+                "name": "SenderAgent",
+            },
+        )
+
+        await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "test-project",
+                "program": "recipient-prog",
+                "model": "recipient-model",
+                "name": "RecipientAgent",
+            },
+        )
+
+        # Send urgent message
+        await client.call_tool(
+            "send_message",
+            {
+                "project_key": "test-project",
+                "sender_name": "SenderAgent",
+                "to": ["RecipientAgent"],
+                "subject": "Urgent message",
+                "body_md": "This is urgent!",
+                "importance": "urgent",
+            },
+        )
+
+        # Send normal message
+        await client.call_tool(
+            "send_message",
+            {
+                "project_key": "test-project",
+                "sender_name": "SenderAgent",
+                "to": ["RecipientAgent"],
+                "subject": "Normal message",
+                "body_md": "This is normal",
+                "importance": "normal",
+            },
+        )
+
+        # Register with urgent_only filter
+        result_urgent_only = await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "test-project",
+                "program": "recipient-prog-updated",
+                "model": "recipient-model-updated",
+                "name": "RecipientAgent",
+                "auto_fetch_inbox": True,
+                "inbox_urgent_only": True,
+                "inbox_limit": 10,
+            },
+        )
+
+        # Should only have urgent message
+        inbox = result_urgent_only.data["inbox"]
+        assert len(inbox) >= 1
+        # All messages should be urgent when urgent_only=True
+        assert all(msg.get("importance") in ["urgent", "high"] for msg in inbox), (
+            "urgent_only filter should return only urgent/high importance messages"
+        )
+
+        # Register with include_bodies
+        result_with_bodies = await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "test-project",
+                "program": "recipient-prog-updated2",
+                "model": "recipient-model-updated2",
+                "name": "RecipientAgent",
+                "auto_fetch_inbox": True,
+                "inbox_include_bodies": True,
+                "inbox_limit": 10,
+            },
+        )
+
+        # Should have message bodies
+        inbox_with_bodies = result_with_bodies.data["inbox"]
+        assert len(inbox_with_bodies) >= 1
+        # All messages should have body_md when include_bodies=True
+        assert all("body_md" in msg for msg in inbox_with_bodies), (
+            "include_bodies should add body_md to all inbox messages"
+        )
+
+
+@pytest.mark.asyncio
+async def test_register_agent_auto_fetch_inbox_respects_limit(isolated_env):
+    """Ensure inbox_limit parameter caps the number of returned messages."""
+    server = build_mcp_server()
+    async with Client(server) as client:
+        # Register sender and recipient agents
+        await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "test-project",
+                "program": "sender-prog-limit",
+                "model": "sender-model-limit",
+                "name": "SenderAgentLimit",
+            },
+        )
+
+        await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "test-project",
+                "program": "recipient-prog-limit",
+                "model": "recipient-model-limit",
+                "name": "RecipientAgentLimit",
+            },
+        )
+
+        # Send more messages than the limit
+        for idx in range(15):
+            await client.call_tool(
+                "send_message",
+                {
+                    "project_key": "test-project",
+                    "sender_name": "SenderAgentLimit",
+                    "to": ["RecipientAgentLimit"],
+                    "subject": f"Limited message {idx}",
+                    "body_md": f"Limited content {idx}",
+                },
+            )
+
+        # Register with a strict limit
+        inbox_limit = 5
+        limited_result = await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "test-project",
+                "program": "recipient-prog-limit-updated",
+                "model": "recipient-model-limit-updated",
+                "name": "RecipientAgentLimit",
+                "auto_fetch_inbox": True,
+                "inbox_limit": inbox_limit,
+            },
+        )
+
+        inbox_items = limited_result.data.get("inbox", [])
+        assert len(inbox_items) >= 1
+        assert len(inbox_items) <= inbox_limit, "inbox_limit should cap the number of returned messages"
