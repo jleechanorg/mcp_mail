@@ -2996,6 +2996,7 @@ def build_mcp_server() -> FastMCP:
         inbox_limit: int = 20,
         inbox_include_bodies: bool = False,
         inbox_urgent_only: bool = False,
+        inbox_since_ts: Optional[str] = None,
     ) -> dict[str, Any]:
         """
         Create or update an agent identity within a project and persist its profile to Git.
@@ -3052,6 +3053,9 @@ def build_mcp_server() -> FastMCP:
             Include full message bodies in inbox when auto_fetch_inbox is True. Default is False.
         inbox_urgent_only : bool
             Only fetch urgent messages when auto_fetch_inbox is True. Default is False.
+        inbox_since_ts : Optional[str]
+            ISO-8601 timestamp to filter inbox messages by age. Only messages created after this
+            timestamp will be fetched when auto_fetch_inbox is True. Default is None (all messages).
 
         Returns
         -------
@@ -3081,6 +3085,14 @@ def build_mcp_server() -> FastMCP:
         ```json
         {"jsonrpc":"2.0","id":"5","method":"tools/call","params":{"name":"register_agent","arguments":{
           "project_key":"/data/projects/backend","program":"claude-code","model":"opus-4.1","auto_fetch_inbox":true,"inbox_limit":10
+        }}}
+        ```
+
+        Register with age-based inbox filtering (only messages from last 24 hours):
+        ```json
+        {"jsonrpc":"2.0","id":"6","method":"tools/call","params":{"name":"register_agent","arguments":{
+          "project_key":"/data/projects/backend","program":"claude-code","model":"opus-4.1","auto_fetch_inbox":true,
+          "inbox_since_ts":"2025-01-15T00:00:00Z","inbox_limit":20
         }}}
         ```
 
@@ -3139,7 +3151,7 @@ def build_mcp_server() -> FastMCP:
                 inbox_limit,
                 inbox_urgent_only,
                 inbox_include_bodies,
-                since_ts=None,
+                since_ts=inbox_since_ts,
             )
             await ctx.info(
                 f"Registered agent '{agent.name}' for project '{project.human_key}' "

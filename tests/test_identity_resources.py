@@ -401,9 +401,9 @@ async def test_register_agent_auto_fetch_inbox_with_filters(isolated_env):
         inbox = result_urgent_only.data["inbox"]
         assert len(inbox) >= 1
         # All messages should be urgent when urgent_only=True
-        assert all(
-            msg.get("importance") in ["urgent", "high"] for msg in inbox
-        ), "urgent_only filter should return only urgent/high importance messages"
+        assert all(msg.get("importance") in ["urgent", "high"] for msg in inbox), (
+            "urgent_only filter should return only urgent/high importance messages"
+        )
 
         # Register with include_bodies
         result_with_bodies = await client.call_tool(
@@ -423,9 +423,9 @@ async def test_register_agent_auto_fetch_inbox_with_filters(isolated_env):
         inbox_with_bodies = result_with_bodies.data["inbox"]
         assert len(inbox_with_bodies) >= 1
         # All messages should have body_md when include_bodies=True
-        assert all(
-            "body_md" in msg for msg in inbox_with_bodies
-        ), "include_bodies should add body_md to all inbox messages"
+        assert all("body_md" in msg for msg in inbox_with_bodies), (
+            "include_bodies should add body_md to all inbox messages"
+        )
 
 
 @pytest.mark.asyncio
@@ -483,6 +483,4 @@ async def test_register_agent_auto_fetch_inbox_respects_limit(isolated_env):
 
         inbox_items = limited_result.data.get("inbox", [])
         assert len(inbox_items) >= 1
-        assert (
-            len(inbox_items) <= inbox_limit
-        ), "inbox_limit should cap the number of returned messages"
+        assert len(inbox_items) <= inbox_limit, "inbox_limit should cap the number of returned messages"
