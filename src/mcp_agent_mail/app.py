@@ -6558,7 +6558,7 @@ def build_mcp_server() -> FastMCP:
         payload["from"] = sender.name
         return payload
 
-    @mcp.resource("resource://thread/{thread_id}", mime_type="application/json")
+    @mcp.resource("resource://thread/{thread_id*}", mime_type="application/json")
     async def thread_resource(
         thread_id: str,
         project: Optional[str] = None,
@@ -6597,6 +6597,12 @@ def build_mcp_server() -> FastMCP:
         {"jsonrpc":"2.0","id":"r6b","method":"resources/read","params":{"uri":"resource://thread/1234?project=/abs/path/backend"}}
         ```
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(
+            f"thread_resource called: thread_id={thread_id!r}, project={project!r}, include_bodies={include_bodies!r}"
+        )
+
         # Robust query parsing: some FastMCP versions do not inject query args.
         # If the templating layer included the query string in the path segment,
         # extract it and fill missing parameters.
