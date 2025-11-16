@@ -221,6 +221,7 @@ def test_bundle_attachments_handles_modes(tmp_path: Path) -> None:
     assert stats == {
         "inline": 1,
         "copied": 2,  # medium (256) + large (512) both copied
+        "externalized": 1,  # large (512) is detached (>= 400) and also counted in copied
         "missing": 1,
         "bytes_copied": 768,  # 256 + 512
     }
@@ -334,7 +335,7 @@ def test_manifest_snapshot_structure(monkeypatch, tmp_path: Path) -> None:
         assert manifest["schema_version"] == "0.1.0"
         assert manifest["scrub"]["preset"] == "standard"
         assert manifest["scrub"]["agents_total"] == 1
-        assert manifest["scrub"]["agents_pseudonymized"] == 1
+        assert manifest["scrub"]["agents_pseudonymized"] == 0  # No export_salt provided, so no pseudonymization
         assert manifest["scrub"]["ack_flags_cleared"] == 1
         assert manifest["scrub"]["recipients_cleared"] == 1
         assert manifest["scrub"]["file_reservations_removed"] == 1
