@@ -27,6 +27,7 @@ from git.exc import InvalidGitRepositoryError, NoSuchPathError
 from sqlalchemy import asc, delete, desc, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, NoResultFound, SQLAlchemyError
 from sqlalchemy.orm import aliased
+from sqlalchemy.sql import column, table
 
 from . import rich_logger
 from .config import Settings, get_settings
@@ -1951,6 +1952,12 @@ async def _find_mentions_in_global_inbox(
 
     await ensure_schema()
     sender_alias = aliased(Agent)
+    fts_messages = table(
+        "fts_messages",
+        column("rowid"),
+        column("subject"),
+        column("body"),
+    )
 
     async with get_session() as session:
         # Use FTS5 MATCH query for fast full-text search
@@ -1960,10 +1967,7 @@ async def _find_mentions_in_global_inbox(
             select(Message, MessageRecipient.kind, sender_alias.name)
             .join(MessageRecipient, MessageRecipient.message_id == Message.id)
             .join(sender_alias, Message.sender_id == sender_alias.id)
-            .join(
-                # Join with FTS5 virtual table
-                text("fts_messages ON messages.id = fts_messages.rowid")
-            )
+            .join(fts_messages, Message.id == fts_messages.c.rowid)
             .where(
                 MessageRecipient.agent_id == global_inbox_agent.id,
                 # FTS5 MATCH query - searches subject and body for the agent name
@@ -2070,7 +2074,7 @@ async def _list_outbox(
             recipients_result = await session.execute(
                 select(MessageRecipient.message_id, MessageRecipient.kind, Agent.name)
                 .join(Agent, MessageRecipient.agent_id == Agent.id)
-                .where(MessageRecipient.message_id.in_(message_ids))
+                .where(cast(Any, MessageRecipient.message_id).in_(message_ids))
             )
             # Group recipients by message_id
             recipients_by_message: dict[str, dict[str, list[str]]] = {}
@@ -4172,7 +4176,7 @@ def build_mcp_server() -> FastMCP:
         agent_filter: Optional[str] = None,
         limit: int = 20,
         include_bodies: bool = True,
-    ) -> list[dict[str, Any]]:
+    ) -> ToolResult:
         """
         Search through mailboxes for messages matching a query.
 
@@ -4206,9 +4210,9 @@ def build_mcp_server() -> FastMCP:
 
         Returns
         -------
-        list[dict]
-            Matching messages ranked by relevance. Each includes:
-            { id, subject, from, to, created_ts, relevance_score, snippet, [body_md] }
+        ToolResult
+            Structured content with a `result` key containing the list of matching
+            messages.
 
         Usage Examples
         --------------
@@ -4281,13 +4285,13 @@ def build_mcp_server() -> FastMCP:
                 except SQLAlchemyError as exc:
                     await ctx.error("Invalid search query. Please check your search syntax and try again.")
                     logger.warning("FTS5 query error for %r: %s", query, exc)
-                    return []
+                    return ToolResult(structured_content={"result": []})
 
                 fts_rows = fts_result.fetchall()
 
                 if not fts_rows:
                     await ctx.info(f"No messages found matching query: {query}")
-                    return []
+                    return ToolResult(structured_content={"result": []})
 
                 message_ids = list(dict.fromkeys(row[0] for row in fts_rows))
                 relevance_map = {row[0]: (row[1], row[2], row[3]) for row in fts_rows}
