@@ -92,6 +92,7 @@ class ToolExecutionError(Exception):
 
 
 def _record_tool_error(tool_name: str, exc: Exception) -> None:
+    """Log tool execution errors for diagnostics."""
     logger.warning(
         "tool_error",
         extra={
@@ -103,6 +104,7 @@ def _record_tool_error(tool_name: str, exc: Exception) -> None:
 
 
 def _register_tool(name: str, metadata: dict[str, Any]) -> None:
+    """Register a tool's metadata for capability and cluster tracking."""
     TOOL_CLUSTER_MAP[name] = metadata["cluster"]
     TOOL_METADATA[name] = metadata
 
@@ -110,6 +112,7 @@ def _register_tool(name: str, metadata: dict[str, Any]) -> None:
 def _bind_arguments(
     signature: inspect.Signature, args: tuple[Any, ...], kwargs: dict[str, Any]
 ) -> inspect.BoundArguments:
+    """Bind function arguments, falling back to full bind if partial fails."""
     try:
         return signature.bind_partial(*args, **kwargs)
     except TypeError:
@@ -117,6 +120,7 @@ def _bind_arguments(
 
 
 def _extract_argument(bound: inspect.BoundArguments, name: Optional[str]) -> Optional[str]:
+    """Extract a named argument from bound arguments as a string."""
     if not name:
         return None
     value = bound.arguments.get(name)
@@ -126,6 +130,7 @@ def _extract_argument(bound: inspect.BoundArguments, name: Optional[str]) -> Opt
 
 
 def _enforce_capabilities(ctx: Context, required: set[str], tool_name: str) -> None:
+    """Verify that required capabilities are allowed in the current context."""
     if not required:
         return
     metadata = getattr(ctx, "metadata", {}) or {}
@@ -144,6 +149,7 @@ def _enforce_capabilities(ctx: Context, required: set[str], tool_name: str) -> N
 
 
 def _record_recent(tool_name: str, project: Optional[str], agent: Optional[str]) -> None:
+    """Record tool usage for recent activity tracking."""
     RECENT_TOOL_USAGE.append((datetime.now(timezone.utc), tool_name, project, agent))
 
 
@@ -156,6 +162,7 @@ def _instrument_tool(
     agent_arg: Optional[str] = None,
     project_arg: Optional[str] = None,
 ):
+    """Decorator factory to instrument MCP tools with capability enforcement and metrics."""
     meta = {
         "cluster": cluster,
         "capabilities": sorted(capabilities or {cluster}),
@@ -261,6 +268,7 @@ def _instrument_tool(
 
 
 def _tool_metrics_snapshot() -> list[dict[str, Any]]:
+    """Generate a snapshot of tool usage metrics for monitoring."""
     snapshot = []
     for name, data in sorted(TOOL_METRICS.items()):
         metadata = TOOL_METADATA.get(name, {})
@@ -279,6 +287,7 @@ def _tool_metrics_snapshot() -> list[dict[str, Any]]:
 
 @functools.lru_cache(maxsize=1)
 def _load_capabilities_mapping() -> list[dict[str, Any]]:
+    """Load agent capabilities mapping from deployment configuration."""
     mapping_path = Path(__file__).resolve().parent.parent.parent / "deploy" / "capabilities" / "agent_capabilities.json"
     if not mapping_path.exists():
         return []
@@ -299,6 +308,7 @@ def _load_capabilities_mapping() -> list[dict[str, Any]]:
 
 
 def _capabilities_for(agent: Optional[str], project: Optional[str]) -> list[str]:
+    """Determine allowed capabilities for a given agent and project combination."""
     mapping = _load_capabilities_mapping()
     caps: set[str] = set()
     for entry in mapping:
@@ -363,6 +373,7 @@ def _ensure_utc(dt: Optional[datetime]) -> Optional[datetime]:
 
 
 def _max_datetime(*timestamps: Optional[datetime]) -> Optional[datetime]:
+    """Return the most recent datetime from a list of optional timestamps."""
     values = [ts for ts in timestamps if ts is not None]
     if not values:
         return None
@@ -374,6 +385,7 @@ _FALSE_FLAG_VALUES: tuple[str, ...] = ("0", "false", "no", "off", "n")
 
 
 def _split_slug_and_query(raw_value: str) -> tuple[str, dict[str, str]]:
+    """Split a resource URI into slug and query parameters."""
     slug, _, query_string = raw_value.partition("?")
     if not query_string:
         return slug, {}
@@ -382,6 +394,7 @@ def _split_slug_and_query(raw_value: str) -> tuple[str, dict[str, str]]:
 
 
 def _coerce_flag_to_bool(value: str, *, default: bool) -> bool:
+    """Convert string flag values to boolean, using default if ambiguous."""
     normalized = value.strip().lower()
     if normalized in _TRUE_FLAG_VALUES:
         return True
@@ -406,14 +419,17 @@ _GLOB_MARKERS: tuple[str, ...] = ("*", "?", "[")
 
 
 def _contains_glob(pattern: str) -> bool:
+    """Check if a pattern contains glob wildcards (* ? [)."""
     return any(marker in pattern for marker in _GLOB_MARKERS)
 
 
 def _normalize_pattern(pattern: str) -> str:
+    """Normalize a file pattern by removing leading slashes and whitespace."""
     return pattern.lstrip("/").strip()
 
 
 def _collect_matching_paths(base: Path, pattern: str) -> list[Path]:
+    """Collect filesystem paths matching a pattern (supports glob)."""
     if not base.exists():
         return []
     normalized = _normalize_pattern(pattern)
@@ -428,6 +444,7 @@ def _collect_matching_paths(base: Path, pattern: str) -> list[Path]:
 
 
 def _latest_filesystem_activity(paths: Sequence[Path]) -> Optional[datetime]:
+    """Get the most recent modification time from a list of paths."""
     mtimes: list[datetime] = []
     for path in paths:
         try:
@@ -441,6 +458,7 @@ def _latest_filesystem_activity(paths: Sequence[Path]) -> Optional[datetime]:
 
 
 def _latest_git_activity(repo: Optional[Repo], matches: Sequence[Path]) -> Optional[datetime]:
+    """Get the most recent Git commit time touching any of the matched paths."""
     if repo is None:
         return None
     repo_root = Path(repo.working_tree_dir or "").resolve()
@@ -463,6 +481,7 @@ def _latest_git_activity(repo: Optional[Repo], matches: Sequence[Path]) -> Optio
 
 
 def _project_workspace_path(project: Project) -> Optional[Path]:
+    """Resolve project workspace path from human_key if it exists on filesystem."""
     try:
         candidate = Path(project.human_key).expanduser()
     except Exception:
@@ -474,6 +493,7 @@ def _project_workspace_path(project: Project) -> Optional[Path]:
 
 
 def _open_repo_if_available(workspace: Optional[Path]) -> Optional[Repo]:
+    """Open a Git repository if the workspace path is a valid Git repo."""
     if workspace is None:
         return None
     try:
