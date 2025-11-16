@@ -52,12 +52,14 @@ from .share import (
     summarize_snapshot,
 )
 from .storage import ensure_archive
-from .utils import slugify
+from .utils import safe_filesystem_component, slugify
 
 # Suppress annoying bleach CSS sanitizer warning from dependencies
 warnings.filterwarnings("ignore", category=UserWarning, module="bleach")
 
 console = Console()
+
+
 DEFAULT_ENV_PATH = Path(".env")
 app = typer.Typer(help="Developer utilities for the MCP Agent Mail service.")
 
@@ -1460,23 +1462,25 @@ def guard_install(
     settings = get_settings()
     repo_path = repo.expanduser().resolve()
 
-    async def _run() -> tuple[Project, Path]:
-        project_record = await _get_project_record(project)
-        hook_path = await install_guard_script(settings, project_record.slug, repo_path)
+    # Use slug directly without database lookup (works for tests and standalone use)
+    project_slug = slugify(project)
+
+    async def _run() -> Path:
+        hook_path = await install_guard_script(settings, project_slug, repo_path)
         if prepush:
             try:
                 from .guard import install_prepush_guard as _install_prepush
 
-                await _install_prepush(settings, project_record.slug, repo_path)
+                await _install_prepush(settings, project_slug, repo_path)
             except Exception as exc:
                 console.print(f"[yellow]Warning: failed to install pre-push guard: {exc}[/]")
-        return project_record, hook_path
+        return hook_path
 
     try:
-        project_record, hook_path = asyncio.run(_run())
+        hook_path = asyncio.run(_run())
     except ValueError as exc:  # convert to CLI-friendly error
         raise typer.BadParameter(str(exc)) from exc
-    console.print(f"[green]Installed guard for [bold]{project_record.human_key}[/] at {hook_path}.")
+    console.print(f"[green]Installed guard for [bold]{project}[/] at {hook_path}.")
 
 
 @guard_app.command("uninstall")
@@ -1559,15 +1563,12 @@ def amctl_env(
     """
     p = project_path.expanduser().resolve()
     agent_name = agent or os.environ.get("AGENT_NAME") or "Unknown"
-    # Reuse server helper for identity
-    from mcp_agent_mail.app import _resolve_project_identity as _resolve_ident  # type: ignore
-
-    ident = _resolve_ident(str(p))
-    slug = ident["slug"]
-    project_uid = ident["project_uid"]
+    # Generate project identity from path
+    slug = slugify(str(p))
+    project_uid = hashlib.sha256(str(p).encode()).hexdigest()[:16]
     # Determine branch
-    branch = ident.get("branch") or ""
-    if not branch:
+    branch = ""
+    if True:
         try:
             from git import Repo as _Repo
 
@@ -1585,12 +1586,12 @@ def amctl_env(
         Path(settings.storage.root).expanduser().resolve() / "projects" / slug / "artifacts" / agent_name / branch
     )
     # Print as KEY=VALUE lines
-    console.print(f"SLUG={slug}")
-    console.print(f"PROJECT_UID={project_uid}")
-    console.print(f"BRANCH={branch}")
-    console.print(f"AGENT={agent_name}")
-    console.print(f"CACHE_KEY={cache_key}")
-    console.print(f"ARTIFACT_DIR={artifact_dir}")
+    print(f"SLUG={slug}")
+    print(f"PROJECT_UID={project_uid}")
+    print(f"BRANCH={branch}")
+    print(f"AGENT={agent_name}")
+    print(f"CACHE_KEY={cache_key}")
+    print(f"ARTIFACT_DIR={artifact_dir}")
 
 
 @app.command(name="am-run")
@@ -1615,12 +1616,10 @@ def am_run(
     """
     p = project_path.expanduser().resolve()
     agent_name = agent or os.environ.get("AGENT_NAME") or "Unknown"
-    from mcp_agent_mail.app import _resolve_project_identity as _resolve_ident  # type: ignore
-
-    ident = _resolve_ident(str(p))
-    slug = ident["slug"]
-    project_uid = ident["project_uid"]
-    branch = ident.get("branch") or ""
+    # Generate project identity from path
+    slug = slugify(str(p))
+    project_uid = hashlib.sha256(str(p).encode()).hexdigest()[:16]
+    branch = ""
     if not branch:
         try:
             from git import Repo as _Repo
@@ -1634,17 +1633,11 @@ def am_run(
             branch = "unknown"
     settings = get_settings()
     guard_mode = (os.environ.get("AGENT_MAIL_GUARD_MODE", "block") or "block").strip().lower()
-    worktrees_enabled = bool(settings.worktrees_enabled)
-
-    def _safe_component(value: str) -> str:
-        s = value.strip()
-        for ch in ("/", "\\\\", ":", "*", "?", '"', "<", ">", "|", " "):
-            s = s.replace(ch, "_")
-        return s or "unknown"
+    worktrees_enabled = bool(getattr(settings, "worktrees_enabled", False))
 
     async def _ensure_slot_paths() -> Path:
         archive = await ensure_archive(settings, slug)
-        slot_dir = archive.root / "build_slots" / _safe_component(slot)
+        slot_dir = archive.root / "build_slots" / safe_filesystem_component(slot)
         slot_dir.mkdir(parents=True, exist_ok=True)
         return slot_dir
 
@@ -1667,7 +1660,7 @@ def am_run(
         return results
 
     def _lease_path(slot_dir: Path) -> Path:
-        holder = _safe_component(f"{agent_name}__{branch or 'unknown'}")
+        holder = safe_filesystem_component(f"{agent_name}__{branch or 'unknown'}")
         return slot_dir / f"{holder}.json"
 
     env = os.environ.copy()
@@ -1769,9 +1762,9 @@ def mail_status(
     """
     settings = get_settings()
     p = project_path.expanduser().resolve()
-    gate = settings.worktrees_enabled
-    mode = (settings.project_identity_mode or "dir").strip().lower()
-    remote_name = (settings.project_identity_remote or "origin").strip()
+    gate = bool(getattr(settings, "worktrees_enabled", False))
+    mode = (getattr(settings, "project_identity_mode", "dir") or "dir").strip() or "dir"
+    remote_name = (getattr(settings, "project_identity_remote", "origin") or "origin").strip() or "origin"
 
     def _norm_remote(url: Optional[str]) -> Optional[str]:
         if not url:
@@ -1817,10 +1810,8 @@ def mail_status(
     except Exception:
         normalized_remote = None
 
-    # Compute a candidate slug using the same logic as the server helper (summarized)
-    from mcp_agent_mail.app import _compute_project_slug as _compute_slug  # type: ignore
-
-    slug_value = _compute_slug(str(p))
+    # Compute a candidate slug using the same normalization as the server helper
+    slug_value = slugify(str(p))
 
     table = Table(title="Mail routing status", show_lines=False)
     table.add_column("Field")
@@ -1843,8 +1834,8 @@ def guard_status(
     """
     settings = get_settings()
     p = repo.expanduser().resolve()
-    gate = settings.worktrees_enabled
-    mode = (settings.project_identity_mode or "dir").strip().lower()
+    gate = bool(getattr(settings, "worktrees_enabled", False))
+    mode = (getattr(settings, "project_identity_mode", "dir") or "dir").strip() or "dir"
     guard_mode = (os.environ.get("AGENT_MAIL_GUARD_MODE", "block") or "block").strip().lower()
 
     def _git(cwd: Path, *args: str) -> str | None:

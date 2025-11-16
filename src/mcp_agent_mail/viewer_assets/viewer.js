@@ -1854,7 +1854,7 @@ window.viewerController = function() {
           importance,
           body_md,
           COALESCE(
-            (SELECT name FROM agents WHERE id = (SELECT from_agent_id FROM message_senders WHERE message_id = messages.id LIMIT 1)),
+            (SELECT name FROM agents WHERE id = messages.sender_id),
             'Unknown'
           ) AS sender
         FROM messages

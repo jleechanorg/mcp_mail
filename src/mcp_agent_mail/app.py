@@ -35,6 +35,11 @@ from .db import ensure_schema, get_session, init_engine
 from .guard import install_guard as install_guard_script, uninstall_guard as uninstall_guard_script
 from .llm import complete_system_user
 from .models import Agent, FileReservation, Message, MessageRecipient, Project, ProjectSiblingSuggestion
+from .slots import (
+    acquire_build_slot as acquire_slot_impl,
+    release_build_slot as release_slot_impl,
+    renew_build_slot as renew_slot_impl,
+)
 from .storage import (
     ProjectArchive,
     archive_write_lock,
@@ -2502,6 +2507,9 @@ EXTENDED_TOOLS = {
     "macro_file_reservation_cycle",
     "install_precommit_guard",
     "uninstall_precommit_guard",
+    "acquire_build_slot",
+    "renew_build_slot",
+    "release_build_slot",
 }
 
 # Tool metadata for discovery
@@ -2528,6 +2536,18 @@ EXTENDED_TOOL_METADATA = {
     "renew_file_reservations": {
         "category": "file_reservations",
         "description": "Extend expiry for active reservations",
+    },
+    "acquire_build_slot": {
+        "category": "coordination",
+        "description": "Acquire exclusive build slot for parallel operations",
+    },
+    "renew_build_slot": {
+        "category": "coordination",
+        "description": "Extend build slot expiration",
+    },
+    "release_build_slot": {
+        "category": "coordination",
+        "description": "Release build slot",
     },
     "summarize_thread": {
         "category": "search",
@@ -4718,6 +4738,123 @@ def build_mcp_server() -> FastMCP:
         except Exception:
             return items
 
+    @mcp.tool(name="acquire_build_slot")
+    @_instrument_tool(
+        "acquire_build_slot", cluster=CLUSTER_SETUP, capabilities={"coordination"}, project_arg="project_key"
+    )
+    async def acquire_build_slot(
+        ctx: Context,
+        project_key: str,
+        agent_name: str,
+        slot: str,
+        ttl_seconds: int = 3600,
+        exclusive: bool = True,
+    ) -> dict[str, Any]:
+        """
+        Acquire a build slot for coordinating parallel build operations.
+
+        Parameters
+        ----------
+        project_key : str
+            Project identifier
+        agent_name : str
+            Agent requesting the slot
+        slot : str
+            Slot name (e.g., "frontend-build", "test-runner")
+        ttl_seconds : int
+            Time-to-live in seconds (minimum 60)
+        exclusive : bool
+            Whether this is an exclusive lock
+
+        Returns
+        -------
+        dict
+            {
+                "granted": bool,
+                "slot": str,
+                "agent": str,
+                "acquired_ts": str (ISO8601),
+                "expires_ts": str (ISO8601),
+                "conflicts": list[dict],
+                "disabled": bool (if WORKTREES_ENABLED=0)
+            }
+        """
+        result = await acquire_slot_impl(project_key, agent_name, slot, ttl_seconds, exclusive)
+        await ctx.info(f"Build slot '{slot}' acquisition for agent '{agent_name}': {result.get('granted', False)}")
+        return result
+
+    @mcp.tool(name="renew_build_slot")
+    @_instrument_tool(
+        "renew_build_slot", cluster=CLUSTER_SETUP, capabilities={"coordination"}, project_arg="project_key"
+    )
+    async def renew_build_slot(
+        ctx: Context,
+        project_key: str,
+        agent_name: str,
+        slot: str,
+        extend_seconds: int = 1800,
+    ) -> dict[str, Any]:
+        """
+        Renew an existing build slot by extending its expiration.
+
+        Parameters
+        ----------
+        project_key : str
+            Project identifier
+        agent_name : str
+            Agent name
+        slot : str
+            Slot name
+        extend_seconds : int
+            Seconds to extend the expiration
+
+        Returns
+        -------
+        dict
+            {
+                "renewed": bool,
+                "expires_ts": str (ISO8601),
+                "disabled": bool (if WORKTREES_ENABLED=0)
+            }
+        """
+        result = await renew_slot_impl(project_key, agent_name, slot, extend_seconds)
+        await ctx.info(f"Build slot '{slot}' renewal for agent '{agent_name}': {result.get('renewed', False)}")
+        return result
+
+    @mcp.tool(name="release_build_slot")
+    @_instrument_tool(
+        "release_build_slot", cluster=CLUSTER_SETUP, capabilities={"coordination"}, project_arg="project_key"
+    )
+    async def release_build_slot(
+        ctx: Context,
+        project_key: str,
+        agent_name: str,
+        slot: str,
+    ) -> dict[str, Any]:
+        """
+        Release a build slot.
+
+        Parameters
+        ----------
+        project_key : str
+            Project identifier
+        agent_name : str
+            Agent name
+        slot : str
+            Slot name
+
+        Returns
+        -------
+        dict
+            {
+                "released": bool,
+                "released_ts": str (ISO8601),
+            }
+        """
+        result = await release_slot_impl(project_key, agent_name, slot)
+        await ctx.info(f"Build slot '{slot}' released for agent '{agent_name}': {result.get('released', False)}")
+        return result
+
     @mcp.tool(name="summarize_thread")
     @_instrument_tool(
         "summarize_thread", cluster=CLUSTER_SEARCH, capabilities={"summarization", "search"}, project_arg="project_key"
@@ -5621,6 +5758,48 @@ def build_mcp_server() -> FastMCP:
                         "required_capabilities": ["repository"],
                         "usage_examples": [
                             {"hint": "Cleanup", "sample": "uninstall_precommit_guard(code_repo_path='~/repo')"}
+                        ],
+                    },
+                    {
+                        "name": "acquire_build_slot",
+                        "summary": "Acquire exclusive build slot for coordinating parallel build operations.",
+                        "use_when": "Before starting builds/tests that need exclusive access to resources.",
+                        "related": ["renew_build_slot", "release_build_slot"],
+                        "expected_frequency": "Once per build/test cycle.",
+                        "required_capabilities": ["coordination"],
+                        "usage_examples": [
+                            {
+                                "hint": "Acquire slot",
+                                "sample": "acquire_build_slot(project_key='backend', agent_name='BuildAgent', slot='frontend-build')",
+                            }
+                        ],
+                    },
+                    {
+                        "name": "renew_build_slot",
+                        "summary": "Extend expiration of an active build slot.",
+                        "use_when": "When build operations are taking longer than expected TTL.",
+                        "related": ["acquire_build_slot", "release_build_slot"],
+                        "expected_frequency": "As needed during long-running builds.",
+                        "required_capabilities": ["coordination"],
+                        "usage_examples": [
+                            {
+                                "hint": "Renew slot",
+                                "sample": "renew_build_slot(project_key='backend', agent_name='BuildAgent', slot='frontend-build', extend_seconds=1800)",
+                            }
+                        ],
+                    },
+                    {
+                        "name": "release_build_slot",
+                        "summary": "Release an acquired build slot.",
+                        "use_when": "After completing build operations or on error/cleanup.",
+                        "related": ["acquire_build_slot", "renew_build_slot"],
+                        "expected_frequency": "Once per build/test cycle.",
+                        "required_capabilities": ["coordination"],
+                        "usage_examples": [
+                            {
+                                "hint": "Release slot",
+                                "sample": "release_build_slot(project_key='backend', agent_name='BuildAgent', slot='frontend-build')",
+                            }
                         ],
                     },
                 ],
@@ -7069,19 +7248,22 @@ def build_mcp_server() -> FastMCP:
     _EXTENDED_TOOL_REGISTRY.update(
         {
             "acknowledge_message": acknowledge_message,
+            "acquire_build_slot": acquire_build_slot,
             "create_agent_identity": create_agent_identity,
             "delete_agent": delete_agent,
-            "search_messages": search_messages,
             "file_reservation_paths": file_reservation_paths,
-            "release_file_reservations": release_file_reservations_tool,
             "force_release_file_reservation": force_release_file_reservation,
+            "install_precommit_guard": install_precommit_guard,
+            "macro_file_reservation_cycle": macro_file_reservation_cycle,
+            "macro_prepare_thread": macro_prepare_thread,
+            "macro_start_session": macro_start_session,
+            "release_build_slot": release_build_slot,
+            "release_file_reservations": release_file_reservations_tool,
+            "renew_build_slot": renew_build_slot,
             "renew_file_reservations": renew_file_reservations,
+            "search_messages": search_messages,
             "summarize_thread": summarize_thread,
             "summarize_threads": summarize_threads,
-            "macro_start_session": macro_start_session,
-            "macro_prepare_thread": macro_prepare_thread,
-            "macro_file_reservation_cycle": macro_file_reservation_cycle,
-            "install_precommit_guard": install_precommit_guard,
             "uninstall_precommit_guard": uninstall_precommit_guard,
         }
     )
