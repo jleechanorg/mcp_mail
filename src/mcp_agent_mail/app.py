@@ -6558,7 +6558,7 @@ def build_mcp_server() -> FastMCP:
         payload["from"] = sender.name
         return payload
 
-    @mcp.resource("resource://thread/{thread_id}", mime_type="application/json")
+    @mcp.resource("resource://thread/{thread_id*}", mime_type="application/json")
     async def thread_resource(
         thread_id: str,
         project: Optional[str] = None,
@@ -6576,8 +6576,9 @@ def build_mcp_server() -> FastMCP:
         ----------
         thread_id : str
             Either a string thread key or a numeric message id to seed the thread.
-        project : str
-            Project slug or human key (required).
+        project : Optional[str]
+            Project slug or human key. If omitted, the server attempts to infer it from a unique
+            numeric seed (message id) or a uniquely-scoped thread key; otherwise a ValueError is raised.
         include_bodies : bool
             Include message bodies if true (default false).
 
@@ -6597,9 +6598,8 @@ def build_mcp_server() -> FastMCP:
         {"jsonrpc":"2.0","id":"r6b","method":"resources/read","params":{"uri":"resource://thread/1234?project=/abs/path/backend"}}
         ```
         """
-        # Robust query parsing: some FastMCP versions do not inject query args.
-        # If the templating layer included the query string in the path segment,
-        # extract it and fill missing parameters.
+        # Robust query parsing: FastMCP with greedy patterns may include query string in path segment.
+        # Extract query parameters from thread_id if present, as FastMCP may not extract them automatically.
         if "?" in thread_id:
             id_part, _, qs = thread_id.partition("?")
             thread_id = id_part
@@ -6609,11 +6609,15 @@ def build_mcp_server() -> FastMCP:
                 parsed = parse_qs(qs, keep_blank_values=False)
                 if project is None and "project" in parsed and parsed["project"]:
                     project = parsed["project"][0]
+                # Always parse include_bodies from query string if present, overriding any default
                 if parsed.get("include_bodies"):
-                    val = parsed["include_bodies"][0].strip().lower()
-                    include_bodies = val in ("1", "true", "t", "yes", "y")
+                    include_bodies = _coerce_flag_to_bool(parsed["include_bodies"][0], default=False)
             except Exception:
                 pass
+
+        logger.debug(
+            f"thread_resource called: thread_id={thread_id!r}, project={project!r}, include_bodies={include_bodies!r}"
+        )
 
         # Determine project if omitted by client
         if project is None:
