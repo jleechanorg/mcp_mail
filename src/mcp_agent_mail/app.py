@@ -6597,15 +6597,8 @@ def build_mcp_server() -> FastMCP:
         {"jsonrpc":"2.0","id":"r6b","method":"resources/read","params":{"uri":"resource://thread/1234?project=/abs/path/backend"}}
         ```
         """
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.debug(
-            f"thread_resource called: thread_id={thread_id!r}, project={project!r}, include_bodies={include_bodies!r}"
-        )
-
-        # Robust query parsing: some FastMCP versions do not inject query args.
-        # If the templating layer included the query string in the path segment,
-        # extract it and fill missing parameters.
+        # Robust query parsing: FastMCP with greedy patterns may include query string in path segment.
+        # Extract query parameters from thread_id if present, as FastMCP may not extract them automatically.
         if "?" in thread_id:
             id_part, _, qs = thread_id.partition("?")
             thread_id = id_part
@@ -6615,11 +6608,15 @@ def build_mcp_server() -> FastMCP:
                 parsed = parse_qs(qs, keep_blank_values=False)
                 if project is None and "project" in parsed and parsed["project"]:
                     project = parsed["project"][0]
-                if parsed.get("include_bodies"):
-                    val = parsed["include_bodies"][0].strip().lower()
-                    include_bodies = val in ("1", "true", "t", "yes", "y")
+                # Always parse include_bodies from query string if present, overriding any default
+                if "include_bodies" in parsed and parsed["include_bodies"]:
+                    include_bodies = _coerce_flag_to_bool(parsed["include_bodies"][0], default=False)
             except Exception:
                 pass
+        
+        logger.debug(
+            f"thread_resource called: thread_id={thread_id!r}, project={project!r}, include_bodies={include_bodies!r}"
+        )
 
         # Determine project if omitted by client
         if project is None:
