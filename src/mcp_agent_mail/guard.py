@@ -187,7 +187,7 @@ def render_prepush_script(archive: ProjectArchive) -> str:
         "changed = []",
         "for c in commits:",
         "    try:",
-        '        cp = subprocess.run(["git","diff-tree","-r","--no-commit-id","--name-only","--no-ext-diff","--diff-filter=ACMRDTU","-z",c],',
+        '        cp = subprocess.run(["git","diff-tree","--root","-r","--no-commit-id","--name-only","--no-ext-diff","--diff-filter=ACMRDTU","-z",c],',
         "                            check=True,capture_output=True)",
         '        data = cp.stdout.decode("utf-8","ignore")',
         '        paths = [p for p in data.split("\\x00") if p]',

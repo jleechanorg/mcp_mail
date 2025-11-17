@@ -59,6 +59,21 @@ os.makedirs(f"{TEST_DIR}/evidence", exist_ok=True)
 os.makedirs(f"{TEST_DIR}/agents", exist_ok=True)
 os.makedirs(f"{TEST_DIR}/messages", exist_ok=True)
 
+
+def to_json_serializable(data):
+    """Convert FastMCP result data to JSON-serializable format.
+
+    Handles Root objects and other non-serializable types from FastMCP.
+    """
+    if isinstance(data, (dict, list, str, int, float, bool, type(None))):
+        return data
+    elif hasattr(data, 'model_dump'):
+        return data.model_dump()
+    elif hasattr(data, '__dict__'):
+        return {k: to_json_serializable(v) for k, v in data.__dict__.items()}
+    else:
+        return str(data)
+
 async def test_multi_agent_messaging():
     """Test multi-agent registration and messaging."""
     results = {
@@ -170,7 +185,7 @@ async def test_multi_agent_messaging():
             }
         )
         print(f"✅ Message 1 sent: FrontendDev -> BackendDev")
-        messages_sent.append({"from": "FrontendDev", "to": "BackendDev", "result": msg1.data})
+        messages_sent.append({"from": "FrontendDev", "to": "BackendDev", "result": to_json_serializable(msg1.data)})
 
         # Message 2: BackendDev -> DatabaseAdmin (DB query help)
         msg2 = await client.call_tool(
@@ -185,7 +200,7 @@ async def test_multi_agent_messaging():
             }
         )
         print(f"✅ Message 2 sent: BackendDev -> DatabaseAdmin")
-        messages_sent.append({"from": "BackendDev", "to": "DatabaseAdmin", "result": msg2.data})
+        messages_sent.append({"from": "BackendDev", "to": "DatabaseAdmin", "result": to_json_serializable(msg2.data)})
 
         # Message 3: DatabaseAdmin -> BackendDev (Query optimization reply)
         msg3 = await client.call_tool(
@@ -200,7 +215,7 @@ async def test_multi_agent_messaging():
             }
         )
         print(f"✅ Message 3 sent: DatabaseAdmin -> BackendDev")
-        messages_sent.append({"from": "DatabaseAdmin", "to": "BackendDev", "result": msg3.data})
+        messages_sent.append({"from": "DatabaseAdmin", "to": "BackendDev", "result": to_json_serializable(msg3.data)})
 
         # Message 4: BackendDev -> FrontendDev, DatabaseAdmin (CC) - API ready notification
         msg4 = await client.call_tool(
@@ -216,7 +231,7 @@ async def test_multi_agent_messaging():
             }
         )
         print(f"✅ Message 4 sent: BackendDev -> FrontendDev (CC: DatabaseAdmin)")
-        messages_sent.append({"from": "BackendDev", "to": ["FrontendDev"], "cc": ["DatabaseAdmin"], "result": msg4.data})
+        messages_sent.append({"from": "BackendDev", "to": ["FrontendDev"], "cc": ["DatabaseAdmin"], "result": to_json_serializable(msg4.data)})
 
         # Message 5: DevOpsEngineer -> All (Deployment notification)
         msg5 = await client.call_tool(
@@ -231,7 +246,7 @@ async def test_multi_agent_messaging():
             }
         )
         print(f"✅ Message 5 sent: DevOpsEngineer -> All agents")
-        messages_sent.append({"from": "DevOpsEngineer", "to": ["FrontendDev", "BackendDev", "DatabaseAdmin"], "result": msg5.data})
+        messages_sent.append({"from": "DevOpsEngineer", "to": ["FrontendDev", "BackendDev", "DatabaseAdmin"], "result": to_json_serializable(msg5.data)})
 
         results["steps"].append({
             "step": 3,
@@ -241,9 +256,14 @@ async def test_multi_agent_messaging():
             "messages": messages_sent
         })
 
-        # Save all messages
+        # Save all messages (with error handling for non-serializable types)
         with open(f"{TEST_DIR}/messages/all_messages.json", 'w') as f:
-            json.dump(messages_sent, f, indent=2)
+            try:
+                json.dump(messages_sent, f, indent=2)
+            except TypeError as e:
+                # Fallback: use default=str for any remaining non-serializable types
+                print(f"Warning: Had to use fallback serialization: {e}")
+                json.dump(messages_sent, f, indent=2, default=str)
 
         # Step 4: Fetch inboxes to verify delivery
         print("\n" + "=" * 60)

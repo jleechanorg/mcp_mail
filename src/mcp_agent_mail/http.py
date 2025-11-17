@@ -362,6 +362,12 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
             "::1",
             "localhost",
         }
+        # When RBAC is enabled but no authentication mechanism is available, return 401
+        if self._rbac_enabled and not is_local_ok and kind in {"tools", "resources"}:
+            # If JWT is not enabled AND bearer token is not configured, there's no way to authenticate
+            bearer_token_configured = bool(getattr(self.settings.http, "bearer_token", None))
+            if not self._jwt_enabled and not bearer_token_configured:
+                return JSONResponse({"detail": "Unauthorized"}, status_code=status.HTTP_401_UNAUTHORIZED)
         if self._rbac_enabled and not is_local_ok and kind in {"tools", "resources"}:
             is_reader = bool(roles & self._reader_roles)
             is_writer = bool(roles & self._writer_roles) or (not roles)

@@ -217,12 +217,13 @@ def test_bundle_attachments_handles_modes(tmp_path: Path) -> None:
     )
 
     stats = manifest["stats"]
+    # With detached bundles feature: large files >= detach_threshold are copied to bundles/
     assert stats == {
         "inline": 1,
-        "copied": 1,
-        "externalized": 1,
+        "copied": 2,  # medium (256) + large (512) both copied
+        "externalized": 1,  # large (512) is detached (>= 400) and also counted in copied
         "missing": 1,
-        "bytes_copied": 256,
+        "bytes_copied": 768,  # 256 + 512
     }
 
     _subject, _body, attachments = _read_message(snapshot)
@@ -232,8 +233,12 @@ def test_bundle_attachments_handles_modes(tmp_path: Path) -> None:
     assert isinstance(path_value, str)
     assert path_value.startswith("attachments/")
     assert (tmp_path / "out" / path_value).is_file()
-    assert attachments[2]["type"] == "external"
-    assert "note" in attachments[2]
+    # Large file is now detached to bundles/ instead of marked as external
+    assert attachments[2]["type"] == "file"
+    bundle_path_value = attachments[2]["path"]
+    assert isinstance(bundle_path_value, str)
+    assert bundle_path_value.startswith("attachments/bundles/")
+    assert (tmp_path / "out" / bundle_path_value).is_file()
     assert attachments[3]["type"] == "missing"
 
     inline_data = attachments[0]["data_uri"]
@@ -245,7 +250,8 @@ def test_bundle_attachments_handles_modes(tmp_path: Path) -> None:
     items = manifest["items"]
     assert len(items) == 4
     modes = {item["mode"] for item in items}
-    assert modes == {"inline", "file", "external", "missing"}
+    # "detached" mode replaces "external" for large files
+    assert modes == {"inline", "file", "detached", "missing"}
 
 
 def test_summarize_snapshot(tmp_path: Path) -> None:
@@ -329,7 +335,7 @@ def test_manifest_snapshot_structure(monkeypatch, tmp_path: Path) -> None:
         assert manifest["schema_version"] == "0.1.0"
         assert manifest["scrub"]["preset"] == "standard"
         assert manifest["scrub"]["agents_total"] == 1
-        assert manifest["scrub"]["agents_pseudonymized"] == 1
+        assert manifest["scrub"]["agents_pseudonymized"] == 0  # No export_salt provided, so no pseudonymization
         assert manifest["scrub"]["ack_flags_cleared"] == 1
         assert manifest["scrub"]["recipients_cleared"] == 1
         assert manifest["scrub"]["file_reservations_removed"] == 1
@@ -1100,6 +1106,11 @@ def test_build_materialized_views(tmp_path: Path) -> None:
                 ack_required INTEGER,
                 created_ts TEXT,
                 attachments TEXT
+            );
+            CREATE TABLE message_recipients (
+                message_id INTEGER,
+                agent_id INTEGER,
+                kind TEXT
             );
 
             INSERT INTO projects (id, slug, human_key) VALUES (1, 'demo', 'demo-key');

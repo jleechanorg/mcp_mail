@@ -42,6 +42,16 @@ This script:
 
 With the server running, Claude agents can call `ensure_project`, `register_agent`, `fetch_inbox`, and the other MCP tools without additional setup.
 
+## Slash Commands
+
+Custom slash commands are available in the git submodule at `claude-commands/.claude/commands/`. Claude Code agents should look for slash command definitions in this directory in addition to the standard `.claude/commands/` location.
+
+To use these commands:
+- Commands are defined as markdown files in `claude-commands/.claude/commands/`
+- Invoke commands with the `/` prefix (e.g., `/command-name`)
+- The git submodule contains shared commands that can be used across multiple projects
+- Ensure the submodule is initialized: `git submodule update --init --recursive`
+
 ## GitHub Authentication
 
 A GitHub token is available for use by agents via the `GITHUB_TOKEN` environment variable:
@@ -68,6 +78,23 @@ Example GitHub Actions workflow:
 ```
 
 **Note**: The token is already configured and ready to use. No additional setup is required.
+
+### Installing gh CLI if not available
+
+If the `gh` CLI is not installed on the system, download and use the precompiled binary directly from GitHub releases:
+
+```bash
+# Download and extract the precompiled binary
+curl -sL https://github.com/cli/cli/releases/download/v2.40.1/gh_2.40.1_linux_amd64.tar.gz | tar -xz -C /tmp
+
+# Use the binary directly from the extracted location
+/tmp/gh_2.40.1_linux_amd64/bin/gh --version
+
+# Authenticate using the existing GitHub token
+/tmp/gh_2.40.1_linux_amd64/bin/gh auth status
+```
+
+The binary can be used directly without installation by referencing the full path `/tmp/gh_2.40.1_linux_amd64/bin/gh`. The `GITHUB_TOKEN` environment variable will be automatically recognized for authentication.
 
 ## PR Responsibility Model
 
