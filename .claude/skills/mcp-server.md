@@ -13,7 +13,7 @@ Start the MCP Agent Mail HTTP server in the background using current repository 
 pkill -f "python.*mcp_agent_mail.*serve-http" || true
 
 # Start server in background with log output
-bash -lc "cd /Users/jleechan/mcp_mail && ./scripts/run_server_with_token.sh >/tmp/mcp_agent_mail_server.log 2>&1 & echo \$!"
+bash -lc "cd \$(git rev-parse --show-toplevel) && ./scripts/run_server_with_token.sh >/tmp/mcp_agent_mail_server.log 2>&1 & echo \$!"
 
 # Wait for server to start
 sleep 2
@@ -41,7 +41,7 @@ tail -50 /tmp/mcp_agent_mail_server.log
 ### Stop Server
 
 ```bash
-pkill -f "python.*mcp_agent_mail.*serve-http"
+pkill -f "python.*mcp_agent_mail.*serve-http" || true
 echo "Server stopped"
 ```
 
@@ -53,7 +53,7 @@ pkill -f "python.*mcp_agent_mail.*serve-http" || true
 sleep 1
 
 # Start
-bash -lc "cd /Users/jleechan/mcp_mail && ./scripts/run_server_with_token.sh >/tmp/mcp_agent_mail_server.log 2>&1 & echo \$!"
+bash -lc "cd \$(git rev-parse --show-toplevel) && ./scripts/run_server_with_token.sh >/tmp/mcp_agent_mail_server.log 2>&1 & echo \$!"
 
 # Wait and verify
 sleep 2
@@ -92,7 +92,7 @@ lsof -i :8765
 cat /tmp/mcp_agent_mail_server.log
 
 # Verify dependencies
-cd /Users/jleechan/mcp_mail && uv sync
+cd $(git rev-parse --show-toplevel) && uv sync
 ```
 
 **Connection errors:**
