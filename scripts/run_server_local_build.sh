@@ -28,29 +28,28 @@ echo "📦 Found wheel: $(basename "$WHEEL_FILE")"
 TEMP_ENV=$(mktemp -d -t mcp_mail-XXXXXX)
 trap 'rm -rf "$TEMP_ENV"' EXIT
 
-# Find Python 3.11-3.13 (Python 3.14+ has Pydantic type annotation compatibility issues)
+# Find Python 3.14+ (prefer the default python3 if it meets the requirement)
 PYTHON_BIN=""
-MIN_VERSION=311  # e.g. 3.11 -> 311, 3.12 -> 312
-MAX_VERSION=313  # Python 3.14+ has Pydantic type annotation compatibility issues
+MIN_VERSION=314  # e.g. 3.14 -> 314, 3.15 -> 315
 
-# Try specific stable versions first
-for py in python3.13 python3.12 python3.11; do
-  if command -v "$py" >/dev/null 2>&1; then
-    PYTHON_BIN=$(command -v "$py")
-    break
-  fi
-done
-
-# Fallback to default python3 if it's in the acceptable range
-if [[ -z "$PYTHON_BIN" ]] && command -v python3 >/dev/null 2>&1; then
+if command -v python3 >/dev/null 2>&1; then
   PY_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}{sys.version_info.minor:02d}")')
-  if [[ "$PY_VER" -ge "$MIN_VERSION" ]] && [[ "$PY_VER" -le "$MAX_VERSION" ]]; then
+  if [[ "$PY_VER" -ge "$MIN_VERSION" ]]; then
     PYTHON_BIN=$(command -v python3)
   fi
 fi
 
 if [[ -z "$PYTHON_BIN" ]]; then
-  echo "❌ Error: Python 3.11 or higher is required"
+  for py in python3.15 python3.14; do
+    if command -v "$py" >/dev/null 2>&1; then
+      PYTHON_BIN=$(command -v "$py")
+      break
+    fi
+  done
+fi
+
+if [[ -z "$PYTHON_BIN" ]]; then
+  echo "❌ Error: Python 3.14 or higher is required"
   exit 1
 fi
 
