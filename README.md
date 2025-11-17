@@ -393,7 +393,7 @@ MCP Agent Mail includes full Slack integration, enabling agents to send notifica
 **Quick Setup:**
 
 1. Create a Slack app at [https://api.slack.com/apps](https://api.slack.com/apps)
-2. Add bot token scopes: `chat:write`, `channels:read`
+2. Add bot token scopes: `chat:write`, `channels:read`, `groups:read`, `channels:history`, `groups:history`, `reactions:read`, `app_mentions:read`
 3. Install to workspace and copy the bot token
 4. Configure in `.env`:
    ```bash
@@ -408,6 +408,7 @@ MCP Agent Mail includes full Slack integration, enabling agents to send notifica
 - **Automatic Notifications**: MCP messages automatically posted to Slack
 - **Manual Posting**: `slack_post_message()` tool for direct Slack posts
 - **Channel Discovery**: `slack_list_channels()` to explore available channels
+- **Channel Insights**: `slack_get_channel_info()` to inspect metadata and member counts before posting
 - **Thread Support**: MCP threads map to Slack threads for conversation continuity
 - **Rich Formatting**: Uses Slack Block Kit for enhanced message presentation
 - **Webhook Support**: Receive Slack events for future bidirectional sync

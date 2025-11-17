@@ -234,10 +234,8 @@ class SlackClient:
         self._check_client()
         assert self._http_client is not None
 
-        # Read file into bytes before async request
-        # TODO: Consider using aiofiles for non-blocking file I/O
-        with file_path.open("rb") as f:
-            file_bytes = f.read()
+        # Read file into bytes without blocking the event loop
+        file_bytes = await asyncio.to_thread(file_path.read_bytes)
 
         files = {"file": (file_path.name, file_bytes, "application/octet-stream")}
         data: dict[str, Any] = {"channels": ",".join(channels)}
@@ -582,10 +580,11 @@ async def notify_slack_message(
         # Determine channel
         channel = settings.slack.default_channel
 
-        # Check for existing thread mapping
+        # Check for existing thread mapping (fallback to message_id for new threads)
         slack_thread_ts: Optional[str] = None
-        if thread_id:
-            thread_mapping = await client.get_slack_thread(thread_id)
+        thread_key = thread_id or message_id
+        if thread_key:
+            thread_mapping = await client.get_slack_thread(thread_key)
             if thread_mapping:
                 slack_thread_ts = thread_mapping.slack_thread_ts
                 channel = thread_mapping.slack_channel_id
@@ -599,11 +598,11 @@ async def notify_slack_message(
         )
 
         # If this is a new thread, create mapping
-        if thread_id and not slack_thread_ts:
+        if thread_key and not slack_thread_ts:
             msg_ts = response.get("ts")
             channel_id = response.get("channel")
             if msg_ts and channel_id:
-                await client.map_thread(thread_id, channel_id, msg_ts)
+                await client.map_thread(thread_key, channel_id, msg_ts)
 
         logger.info(f"Sent Slack notification for message {message_id[:8]} to channel {channel}")
         return response

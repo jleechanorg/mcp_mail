@@ -34,7 +34,7 @@ from .db import ensure_schema, get_session, init_engine
 from .guard import install_guard as install_guard_script, uninstall_guard as uninstall_guard_script
 from .llm import complete_system_user
 from .models import Agent, FileReservation, Message, MessageRecipient, Project, ProjectSiblingSuggestion
-from .slack_integration import SlackClient, notify_slack_message
+from .slack_integration import SlackClient, notify_slack_ack, notify_slack_message
 from .slots import (
     acquire_build_slot as acquire_slot_impl,
     release_build_slot as release_slot_impl,
@@ -3611,7 +3611,8 @@ def build_mcp_server() -> FastMCP:
                 recoverable=True,
                 data={"argument": "bcc"},
             )
-        if get_settings().tools_log_enabled:
+        settings = get_settings()
+        if settings.tools_log_enabled:
             try:
                 import importlib as _imp
 
@@ -4068,7 +4069,8 @@ def build_mcp_server() -> FastMCP:
         }}}
         ```
         """
-        if get_settings().tools_log_enabled:
+        settings = get_settings()
+        if settings.tools_log_enabled:
             try:
                 import importlib as _imp
 
@@ -4147,7 +4149,8 @@ def build_mcp_server() -> FastMCP:
         }}}
         ```
         """
-        if get_settings().tools_log_enabled:
+        settings = get_settings()
+        if settings.tools_log_enabled:
             try:
                 import importlib as _imp
 
@@ -4236,7 +4239,8 @@ def build_mcp_server() -> FastMCP:
         }}}
         ```
         """
-        if get_settings().tools_log_enabled:
+        settings = get_settings()
+        if settings.tools_log_enabled:
             try:
                 import importlib as _imp
 
@@ -4255,19 +4259,49 @@ def build_mcp_server() -> FastMCP:
                 pass
         try:
             agent = await _get_agent_by_name(agent_name)
-            await _get_message_by_id_global(message_id)
+            message = await _get_message_by_id_global(message_id)
             await _validate_agent_is_recipient(agent, message_id)
             read_ts = await _update_recipient_timestamp(agent, message_id, "read_ts")
             ack_ts = await _update_recipient_timestamp(agent, message_id, "ack_ts")
             await ctx.info(f"Acknowledged message {message_id} for '{agent.name}'.")
-            return {
+            result = {
                 "message_id": message_id,
                 "acknowledged": bool(ack_ts),
                 "acknowledged_at": _iso(ack_ts) if ack_ts else None,
                 "read_at": _iso(read_ts) if read_ts else None,
             }
+            # Fire-and-forget Slack notification for acknowledgements
+            slack_client = _slack_client
+            if settings.slack.enabled and settings.slack.notify_on_ack:
+
+                def _ack_done_cb(task: asyncio.Task) -> None:
+                    with suppress(Exception):
+                        task.result()
+
+                if slack_client:
+                    task = asyncio.create_task(
+                        notify_slack_ack(
+                            client=slack_client,
+                            settings=settings,
+                            message_id=str(message.id),
+                            agent_name=agent.name,
+                            subject=message.subject,
+                        )
+                    )
+                    task.add_done_callback(_ack_done_cb)
+                elif settings.slack.webhook_url:
+                    from .slack_integration import post_via_webhook
+
+                    async def _post_ack_webhook() -> None:
+                        text = f":white_check_mark: {agent.name} acknowledged: {message.subject}"
+                        await post_via_webhook(settings.slack.webhook_url, text)
+
+                    task = asyncio.create_task(_post_ack_webhook())
+                    task.add_done_callback(_ack_done_cb)
+
+            return result
         except Exception as exc:
-            if get_settings().tools_log_enabled:
+            if settings.tools_log_enabled:
                 try:
                     import importlib as _imp
 
