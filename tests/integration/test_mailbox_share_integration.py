@@ -224,13 +224,6 @@ def test_share_export_end_to_end(monkeypatch, tmp_path: Path) -> None:
     assert "## GitHub Pages (detected)" in deployment_text
 
 
-@pytest.mark.skip(
-    reason=(
-        "Viewer rewritten in Alpine.js - export workflow needs fixing. "
-        "Export command fails to find test database (env var issue). "
-        "See mcp_agent_mail-au2 and mcp_agent_mail-3mb for details."
-    )
-)
 @pytest.mark.usefixtures("isolated_env")
 def test_viewer_playwright_smoke(monkeypatch, tmp_path: Path) -> None:
     playwright_sync = pytest.importorskip("playwright.sync_api")
@@ -265,6 +258,10 @@ def test_viewer_playwright_smoke(monkeypatch, tmp_path: Path) -> None:
             "--detach-threshold",
             "10240",
         ],
+        env={
+            "DATABASE_URL": f"sqlite+aiosqlite:///{db_path}",
+            "STORAGE_ROOT": str(storage_root),
+        },
     )
     assert result.exit_code == 0, result.output
 
