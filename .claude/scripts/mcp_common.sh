@@ -20,7 +20,9 @@ install_beads_mcp() {
         BD_PATH="$HOME/go/bin/bd"
     fi
     
-    # Only set BEADS_PATH if bd was actually found
+    # Fix: Only set BEADS_PATH if bd was actually found
+    # Previously this was set unconditionally, which could cause issues
+    # when bd CLI is not available
     if [[ $BD_FOUND -eq 1 ]]; then
         export BEADS_PATH="$BD_PATH"
         echo "Found beads CLI at: $BEADS_PATH"
@@ -31,4 +33,3 @@ install_beads_mcp() {
     
     # ... rest of installation logic ...
 }
-
