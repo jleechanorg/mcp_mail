@@ -6576,8 +6576,9 @@ def build_mcp_server() -> FastMCP:
         ----------
         thread_id : str
             Either a string thread key or a numeric message id to seed the thread.
-        project : str
-            Project slug or human key (required).
+        project : Optional[str]
+            Project slug or human key. If omitted, the server attempts to infer it from a unique
+            numeric seed (message id) or a uniquely-scoped thread key; otherwise a ValueError is raised.
         include_bodies : bool
             Include message bodies if true (default false).
 
@@ -6609,11 +6610,11 @@ def build_mcp_server() -> FastMCP:
                 if project is None and "project" in parsed and parsed["project"]:
                     project = parsed["project"][0]
                 # Always parse include_bodies from query string if present, overriding any default
-                if "include_bodies" in parsed and parsed["include_bodies"]:
+                if parsed.get("include_bodies"):
                     include_bodies = _coerce_flag_to_bool(parsed["include_bodies"][0], default=False)
             except Exception:
                 pass
-        
+
         logger.debug(
             f"thread_resource called: thread_id={thread_id!r}, project={project!r}, include_bodies={include_bodies!r}"
         )
