@@ -1,4 +1,5 @@
 """Test thread resource query parameter parsing."""
+
 from __future__ import annotations
 
 import json
@@ -11,6 +12,7 @@ from mcp_agent_mail.app import build_mcp_server
 
 def extract_msg_id(result) -> int | None:
     """Extract message ID from send_message result."""
+
     def _get(field: str, obj):
         if isinstance(obj, dict):
             return obj.get(field)
@@ -60,10 +62,11 @@ async def test_thread_resource_with_absolute_path(isolated_env):
         assert isinstance(data.get("messages"), list) and data["messages"], "Should contain messages"
         # include_bodies=true ⇒ at least one message has body_md
         # Check if body_md key exists in any message dict
-        assert any("body_md" in m for m in data["messages"]), f"Expected body_md in messages when include_bodies=true, got: {json.dumps(data, indent=2)}"
+        assert any("body_md" in m for m in data["messages"]), (
+            f"Expected body_md in messages when include_bodies=true, got: {json.dumps(data, indent=2)}"
+        )
         assert any(
-            (m.get("subject") == "Test Message") or ("Test body" in (m.get("body_md") or ""))
-            for m in data["messages"]
+            (m.get("subject") == "Test Message") or ("Test body" in (m.get("body_md") or "")) for m in data["messages"]
         )
 
 
