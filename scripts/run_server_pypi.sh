@@ -15,9 +15,9 @@ echo "🔄 Installing mcp_mail from PyPI..."
 TEMP_ENV=$(mktemp -d -t mcp_mail-XXXXXX)
 trap 'rm -rf "$TEMP_ENV"' EXIT
 
-# Find Python 3.11+ (prefer the default python3 if it meets the requirement)
+# Find Python 3.14+ (prefer the default python3 if it meets the requirement)
 PYTHON_BIN=""
-MIN_VERSION=311  # e.g. 3.11 -> 311, 3.12 -> 312
+MIN_VERSION=314  # e.g. 3.14 -> 314, 3.15 -> 315
 
 if command -v python3 >/dev/null 2>&1; then
   PY_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}{sys.version_info.minor:02d}")')
@@ -36,7 +36,7 @@ if [[ -z "$PYTHON_BIN" ]]; then
 fi
 
 if [[ -z "$PYTHON_BIN" ]]; then
-  echo "❌ Error: Python 3.11 or higher is required"
+  echo "❌ Error: Python 3.14 or higher is required"
   exit 1
 fi
 
