@@ -22,20 +22,10 @@ jobs:
           python-version: '3.13'
 
       - name: Install uv
-        run: curl -Ls https://astral.sh/uv/install.sh | sh
-
-      - name: Add uv to PATH
-        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
-
-      - name: Cache uv
-        uses: actions/cache@v4
+        uses: astral-sh/setup-uv@v5
         with:
-          path: |
-            ~/.cache/uv
-            .venv
-          key: integration-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'uv.lock') }}
-          restore-keys: |
-            integration-${{ runner.os }}-
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
       - name: Sync dependencies
         run: uv sync --dev
