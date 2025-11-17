@@ -3,13 +3,28 @@
 Fix inbox data using direct database query instead of FastMCP serialization.
 """
 
+import argparse
 import json
 import sqlite3
 import sys
 from pathlib import Path
 
-# Find database (based on config.py default)
-db_path = Path.home() / "mcp_mail" / ".mcp_mail" / "storage.sqlite3"
+# Parse command-line arguments
+parser = argparse.ArgumentParser(description="Fix inbox data using direct database query")
+parser.add_argument("test_dir", help="Path to test directory")
+parser.add_argument(
+    "--db-path",
+    type=str,
+    default=None,
+    help="Path to SQLite database (default: .mcp_mail/storage.sqlite3)",
+)
+args = parser.parse_args()
+
+# Find database (based on config.py default: sqlite+aiosqlite:///./.mcp_mail/storage.sqlite3)
+if args.db_path:
+    db_path = Path(args.db_path)
+else:
+    db_path = Path(".mcp_mail") / "storage.sqlite3"
 
 if not db_path.exists():
     print(f"Error: Database not found at {db_path}")
@@ -18,7 +33,7 @@ if not db_path.exists():
 print(f"Found database: {db_path}\n")
 
 # Test directory
-TEST_DIR = Path("/tmp/mcp_4agent_COMPREHENSIVE_20251116_184128")
+TEST_DIR = Path(args.test_dir)
 
 # Agent IDs from test
 agent_mapping = {"FrontendDev": 71, "BackendDev": 72, "DatabaseAdmin": 73, "DevOpsEngineer": 74}
