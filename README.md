@@ -317,7 +317,92 @@ This project provides a lightweight, interoperable layer so agents can:
 
 It's designed for: FastMCP clients and CLI tools (Claude Code, Codex, Gemini CLI, etc.) coordinating across one or more codebases.
 
+## From Idea Spark to Shipping Swarm
+
+If a blank repo feels daunting, follow the field-tested workflow we documented in `project_idea_and_guide.md` ("Appendix: From Blank Repo to Coordinated Swarm"):
+
+- **Ideate fast:** Write a scrappy email-style blurb about the problem, desired UX, and any must-have stack picks (≈15 minutes).
+- **Promote it to a plan:** Feed that blurb to GPT-5 Pro (and optionally Grok4 Heavy / Opus 4.1) until you get a granular Markdown plan, then iterate on the plan file while it's still cheap to change. The Markdown Web Browser sample plan shows the level of detail to aim for.
+- **Codify the rules:** Clone a tuned `AGENTS.md`, add any tech-specific best-practice guides, and let Codex scaffold the repo plus Beads tasks straight from the plan.
+- **Spin up the swarm:** Launch multiple Codex panes (or any agent mix), register each identity with Agent Mail, and have them acknowledge `AGENTS.md`, the plan document, and the Beads backlog before touching code.
+- **Keep everyone fed:** Reuse the canned instruction cadence from the tweet thread or, better yet, let the commercial Companion app's Message Stacks broadcast those prompts automatically so you never hand-feed panes again.
+
+Watch the full 23-minute walkthrough (https://youtu.be/68VVcqMEDrs?si=pCm6AiJAndtZ6u7q) to see the loop in action.
+
+## Productivity Math & Automation Loop
+
+One disciplined hour of GPT-5 Codex—when it isn't waiting on human prompts—often produces 10–20 "human hours" of work because the agents reason and type at machine speed. Agent Mail multiplies that advantage in two layers:
+
+1. **Base OSS server:** Git-backed mailboxes, advisory file reservations, Typer CLI helpers, and searchable archives keep independent agents aligned without babysitting. Every instruction, lease, and attachment is auditable.
+2. **Companion stack (commercial):** The iOS app + host automation can provision, pair, and steer heterogeneous fleets (Claude Code, Codex, Gemini CLI, etc.) from your phone using customizable Message Stacks, Human Overseer broadcasts, Beads awareness, and plan editing tools—no manual tmux choreography required. The automation closes the loop by scheduling prompts, honoring Limited Mode, and enforcing Double-Arm confirmations for destructive work.
+
+Result: you invest 1–2 hours of human supervision, but dozens of agent-hours execute in parallel with clear audit trails and conflict-avoidance baked in.
+
+## TLDR Quickstart
+
+### One-line installer
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/mcp_agent_mail/main/scripts/install.sh | bash -s -- --yes
+```
+
+What this does:
+
+- Installs uv if missing and updates your PATH for this session
+- Creates a Python 3.14 virtual environment and installs dependencies with uv
+- Runs the auto-detect integration to wire up supported agent tools
+- Starts the MCP HTTP server on port 8765 and prints a masked bearer token
+- Creates helper scripts under `scripts/` (including `run_server_with_token.sh`)
+- Installs/updates, verifies, and wires the Beads `bd` CLI into your PATH via its official curl installer so the task planner is ready out of the box (pass `--skip-beads` to opt out or install manually)
+- Prints a short on-exit summary of each setup step so you immediately know what changed
+
+Prefer a specific location or options? Add flags like `--dir <path>`, `--project-dir <path>`, `--no-start`, `--start-only`, `--port <number>`, or `--token <hex>`.
+
+Already have Beads installed or want to handle it yourself? Append `--skip-beads` to the installer command to bypass the automatic `bd` setup and PATH wiring.
+
+**Port conflicts?** Use `--port` to specify a different port (default: 8765):
+
+```bash
+# Install with custom port
+curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/mcp_agent_mail/main/scripts/install.sh | bash -s -- --port 9000 --yes
+
+# Or use the CLI command after installation
+uv run python -m mcp_agent_mail.cli config set-port 9000
+```
+
+### If you want to do it yourself
+
+Clone the repo, set up and install with uv in a python 3.14 venv (install uv if you don't have it already), and then run `scripts/automatically_detect_all_installed_coding_agents_and_install_mcp_agent_mail_in_all.sh`. This will automatically set things up for your various installed coding agent tools and start the MCP server on port 8765. If you want to run the MCP server again in the future, simply run `scripts/run_server_with_token.sh`:
+
+```bash
+# Install uv (if you don't have it already)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+
+# Clone the repo
+git clone https://github.com/Dicklesworthstone/mcp_agent_mail
+cd mcp_agent_mail
+
+# Create a Python 3.14 virtual environment and install dependencies
+uv python install 3.14
+uv venv -p 3.14
+source .venv/bin/activate
+uv sync
+
+# Detect installed coding agents, integrate, and start the MCP server on port 8765
+scripts/automatically_detect_all_installed_coding_agents_and_install_mcp_agent_mail_in_all.sh
+
+# Later, to run the MCP server again with the same token
+scripts/run_server_with_token.sh
+
+# Now, simply launch Codex-CLI or Claude Code or other agent tools in other consoles; they should have the mail tool available. See below for a ready-made chunk of text you can add to the end of your existing AGENTS.md or CLAUDE.md files to help your agents better utilize the new tools.
+
+# Change port after installation
+uv run python -m mcp_agent_mail.cli config set-port 9000
+```
+
 ## Ready-Made Blurb to Add to Your AGENTS.md or CLAUDE.md Files:
+<!-- BEGIN_AGENT_MAIL_SNIPPET -->
 ```
 ## MCP Agent Mail: coordination for multi-agent workflows
 
@@ -351,6 +436,7 @@ Common pitfalls
 - "FILE_RESERVATION_CONFLICT": adjust patterns, wait for expiry, or use a non-exclusive reservation when appropriate.
 - Auth errors: if JWT+JWKS is enabled, include a bearer token with a `kid` that matches server JWKS; static bearer is used only when JWT is disabled.
 ```
+<!-- END_AGENT_MAIL_SNIPPET -->
 
 ## Integrating with Beads (dependency-aware task planning)
 
@@ -363,6 +449,7 @@ Highlights:
 
 Copy/paste blurb for agent-facing docs (leave as-is for reuse):
 
+<!-- BEGIN_BEADS_SNIPPET -->
 ```
 
 ## Integrating with Beads (dependency-aware task planning)
@@ -403,6 +490,9 @@ Pitfalls to avoid
 - Always include `bd-###` in message `thread_id` to avoid ID drift across tools.
 
 ```
+<!-- END_BEADS_SNIPPET -->
+
+Prefer automation? Run `uv run python -m mcp_agent_mail.cli docs insert-blurbs` to scan your code directories for `AGENTS.md`/`CLAUDE.md` files and append the latest Agent Mail + Beads snippets with per-project confirmation. The installer also offers to launch this helper right after setup so you can take care of onboarding docs immediately.
 
 ## Core ideas (at a glance)
 
