@@ -62,7 +62,7 @@ curl -s http://127.0.0.1:8765/health | jq '.'
 
 ## Server Details
 
-- **Endpoint:** http://127.0.0.1:8765/mcp/
+- **Endpoint:** `http://127.0.0.1:8765/mcp/`
 - **Log File:** /tmp/mcp_agent_mail_server.log
 - **Script:** ./scripts/run_server_with_token.sh
 - **Command:** `uv run python -m mcp_agent_mail.cli serve-http`
