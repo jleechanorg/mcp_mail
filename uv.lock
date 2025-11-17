@@ -1114,7 +1114,7 @@ wheels = [
 
 [[package]]
 name = "mcp-mail"
-version = "0.1.2"
+version = "0.1.8"
 source = { editable = "." }
 dependencies = [
     { name = "aiolimiter" },
@@ -1134,6 +1134,7 @@ dependencies = [
     { name = "markdown2" },
     { name = "orjson" },
     { name = "pillow" },
+    { name = "pydantic" },
     { name = "pydantic-core" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -1191,6 +1192,7 @@ requires-dist = [
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11.1" },
     { name = "orjson", specifier = ">=3.10.7,<4" },
     { name = "pillow", specifier = ">=10.4.0" },
+    { name = "pydantic", specifier = "==2.12.3" },
     { name = "pydantic-core", specifier = "==2.41.4" },
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.3" },

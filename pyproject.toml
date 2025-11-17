@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp_mail"
-version = "0.1.2"
+version = "0.1.8"
 description = "Coordinated multi-agent messaging and coordination MCP server."
 readme = "README.md"
 requires-python = ">=3.14"
@@ -24,6 +24,7 @@ classifiers = [
 ]
 dependencies = [
   "fastmcp==2.12.5",
+  "pydantic==2.12.3",
   "pydantic-core==2.41.4",
   "uvicorn[standard]>=0.32.0",
   "fastapi>=0.110.0",
