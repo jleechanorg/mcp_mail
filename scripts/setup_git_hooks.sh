@@ -35,6 +35,12 @@ cd "$REPO_ROOT"
 pre-commit install
 pre-commit install --hook-type pre-push
 
+# Install post-checkout hook to auto-install hooks on checkout/clone
+if [ -f "$REPO_ROOT/scripts/install-post-checkout-hook.sh" ]; then
+    echo -e "${YELLOW}Installing post-checkout hook (auto-installs hooks)...${NC}"
+    bash "$REPO_ROOT/scripts/install-post-checkout-hook.sh"
+fi
+
 echo -e "${GREEN}✓ Pre-commit hooks installed successfully${NC}"
 echo ""
 echo -e "${GREEN}Git hooks setup complete!${NC}"

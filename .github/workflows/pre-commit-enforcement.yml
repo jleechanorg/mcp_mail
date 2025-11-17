@@ -1,0 +1,24 @@
+name: Pre-Commit Hook Enforcement
+
+on:
+  pull_request:
+  push:
+    branches: [main, develop]
+
+jobs:
+  check-hooks-installed:
+    name: Check Pre-Commit Hooks Installation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check if pre-commit hooks are installed
+        run: |
+          if [ ! -f .git/hooks/pre-commit ] || ! grep -q "pre-commit" .git/hooks/pre-commit 2>/dev/null; then
+            echo "::warning::Pre-commit hooks are not installed. Run 'make install-hooks' or './scripts/setup_git_hooks.sh' to install them."
+            echo "::notice::This is a warning, not a failure. However, installing hooks locally will prevent formatting issues from reaching CI."
+            # Don't fail, just warn - hooks can be installed manually
+          else
+            echo "✅ Pre-commit hooks are installed"
+          fi
