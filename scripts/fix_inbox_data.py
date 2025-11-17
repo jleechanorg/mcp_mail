@@ -21,10 +21,7 @@ parser.add_argument(
 args = parser.parse_args()
 
 # Find database (based on config.py default: sqlite+aiosqlite:///./.mcp_mail/storage.sqlite3)
-if args.db_path:
-    db_path = Path(args.db_path)
-else:
-    db_path = Path(".mcp_mail") / "storage.sqlite3"
+db_path = Path(args.db_path) if args.db_path else Path(".mcp_mail") / "storage.sqlite3"
 
 if not db_path.exists():
     print(f"Error: Database not found at {db_path}")
