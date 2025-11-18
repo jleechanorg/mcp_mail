@@ -42,16 +42,6 @@ This script:
 
 With the server running, Claude agents can call `ensure_project`, `register_agent`, `fetch_inbox`, and the other MCP tools without additional setup.
 
-## Slash Commands
-
-Custom slash commands are available in the git submodule at `claude-commands/.claude/commands/`. Claude Code agents should look for slash command definitions in this directory in addition to the standard `.claude/commands/` location.
-
-To use these commands:
-- Commands are defined as markdown files in `claude-commands/.claude/commands/`
-- Invoke commands with the `/` prefix (e.g., `/command-name`)
-- The git submodule contains shared commands that can be used across multiple projects
-- Ensure the submodule is initialized: `git submodule update --init --recursive`
-
 ## GitHub Authentication
 
 A GitHub token is available for use by agents via the `GITHUB_TOKEN` environment variable:
