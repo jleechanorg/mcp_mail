@@ -86,6 +86,67 @@ curl -sL https://github.com/cli/cli/releases/download/v2.40.1/gh_2.40.1_linux_am
 
 The binary can be used directly without installation by referencing the full path `/tmp/gh_2.40.1_linux_amd64/bin/gh`. The `GITHUB_TOKEN` environment variable will be automatically recognized for authentication.
 
+## Credentials Management
+
+All sensitive credentials (API tokens, passwords, etc.) should be stored in `~/.bashrc` as environment variables and sourced automatically by bash sessions. This ensures credentials are:
+- **Centralized**: Single source of truth in `~/.bashrc`
+- **Secure**: Not hardcoded in scripts or config files
+- **Available**: Automatically loaded in all bash sessions via `bash -lc`
+
+### PyPI Publishing
+
+The PyPI token is stored in `~/.bashrc` as `PYPI_TOKEN`:
+
+```bash
+# In ~/.bashrc
+export PYPI_TOKEN="pypi-..."
+```
+
+The `~/.pypirc` file is automatically configured with this token. To publish packages:
+
+```bash
+# Source bashrc to get credentials (or start new bash session)
+source ~/.bashrc
+
+# Publish to PyPI using twine
+twine upload dist/mcp_mail-*.whl dist/mcp_mail-*.tar.gz
+```
+
+### Adding New Credentials
+
+When adding new API tokens or credentials:
+
+1. **Add to ~/.bashrc**:
+   ```bash
+   export SERVICE_API_TOKEN="your-token-here"
+   ```
+
+2. **Source bashrc**:
+   ```bash
+   source ~/.bashrc
+   ```
+
+3. **Use in scripts via bash -lc**:
+   ```bash
+   bash -lc 'echo $SERVICE_API_TOKEN'  # Credentials available
+   ```
+
+4. **Document in CLAUDE.md**: Add a section explaining the credential and its usage
+
+### Available Credentials
+
+Current credentials configured in `~/.bashrc`:
+- `GITHUB_TOKEN` - GitHub API access (see GitHub Authentication section above)
+- `PYPI_TOKEN` - PyPI package publishing
+
+### Best Practices
+
+- **Never commit credentials** to Git repositories
+- **Use environment variables** instead of hardcoded tokens
+- **Source bashrc** in scripts using `bash -lc` to access credentials
+- **Document all credentials** in this section when adding new ones
+- **Rotate tokens** periodically for security
+
 ## PR Responsibility Model
 
 When working on pull requests, understand that **PRs own all regressions versus `origin/main`**, regardless of which commit in the PR introduced them.
