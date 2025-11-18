@@ -1861,16 +1861,51 @@ def _file_reservations_conflict(
         return False
     normalized_existing = existing.path_pattern
 
-    # Treat simple directory patterns like "src/*" as inclusive of files under that directory
-    # when comparing against concrete file paths like "src/app.py".
-    def _expand_dir_star(p: str) -> str:
-        if p.endswith("/*"):
-            return p[:-1] + "*"  # "src/*" -> "src/**"-like breadth for fnmatchcase approximation
-        return p
+    # Handle ** glob patterns properly
+    # pathlib.PurePath.match() doesn't handle the case where **/pattern should match pattern
+    # (i.e., ** matching zero directories). We need custom logic for this.
+    import re
+    from pathlib import PurePath
 
-    a = _expand_dir_star(candidate_path)
-    b = _expand_dir_star(normalized_existing)
-    return fnmatch.fnmatchcase(a, b) or fnmatch.fnmatchcase(b, a) or a == b
+    def glob_matches(path_str: str, pattern_str: str) -> bool:
+        """Check if a path matches a glob pattern, handling ** correctly."""
+        # Exact match
+        if path_str == pattern_str:
+            return True
+
+        # Use placeholders to protect glob patterns during escaping
+        DOUBLESTAR_SLASH = '\x00DOUBLESTAR_SLASH\x00'
+        SLASH_DOUBLESTAR = '\x00SLASH_DOUBLESTAR\x00'
+        STAR = '\x00STAR\x00'
+        QUESTION = '\x00QUESTION\x00'
+
+        # Replace glob patterns with placeholders
+        pattern_re = pattern_str.replace('**/', DOUBLESTAR_SLASH)
+        pattern_re = pattern_re.replace('/**', SLASH_DOUBLESTAR)
+        pattern_re = pattern_re.replace('*', STAR)
+        pattern_re = pattern_re.replace('?', QUESTION)
+
+        # Escape special regex chars
+        pattern_re = re.escape(pattern_re)
+
+        # Replace placeholders with actual regex patterns
+        # **/ matches zero or more path segments (e.g., src/**/*.py matches src/foo.py and src/a/b/foo.py)
+        pattern_re = pattern_re.replace(DOUBLESTAR_SLASH, '(?:(?:[^/]+/)*)')
+        # /** matches / followed by anything
+        pattern_re = pattern_re.replace(SLASH_DOUBLESTAR, '(?:/.*)?')
+        # * matches anything except /
+        pattern_re = pattern_re.replace(STAR, '[^/]*')
+        # ? matches any single char except /
+        pattern_re = pattern_re.replace(QUESTION, '[^/]')
+
+        # Anchor the pattern
+        pattern_re = '^' + pattern_re + '$'
+
+        return bool(re.match(pattern_re, path_str))
+
+    # Try matching both ways
+    return glob_matches(candidate_path, normalized_existing) or \
+           glob_matches(normalized_existing, candidate_path)
 
 
 def _patterns_overlap(a: str, b: str) -> bool:
@@ -3600,30 +3635,49 @@ def build_mcp_server() -> FastMCP:
             unknown: set[str] = set()
 
             async def _route(name_list: list[str], kind: str) -> None:
-                """Simplified routing: look up agents globally by name."""
+                """Routing with cross-project addressing support.
+
+                Supported formats:
+                - Bare name: "AgentName"
+                - project:id#name: "project:/path/to/proj#AgentName"
+                - name@project: "AgentName@/path/to/proj"
+                """
                 for raw in name_list:
-                    # Strip whitespace and normalize
-                    display_value, key_candidates, canonical = _normalize(raw)
-                    if not key_candidates or not canonical:
-                        unknown.add(raw.strip() if raw else raw)
+                    name = (raw or "").strip()
+                    if not name:
                         continue
 
-                    # Allow self-send
-                    if sender_candidate_keys.intersection(key_candidates):
-                        if kind == "to":
-                            all_to.append(sender.name)
-                        elif kind == "cc":
-                            all_cc.append(sender.name)
-                        else:
-                            all_bcc.append(sender.name)
-                        continue
+                    # Parse cross-project addressing formats
+                    target_name = name
+                    target_project = None
 
-                    # Look up agent globally by name
-                    resolved = None
-                    for key in key_candidates:
-                        resolved = global_lookup.get(key)
-                        if resolved:
-                            break
+                    # Format 1: "project:<identifier>#<agent-name>"
+                    if name.startswith("project:") and "#" in name:
+                        parts = name.split("#", 1)
+                        if len(parts) == 2:
+                            project_part = parts[0].replace("project:", "", 1)
+                            target_name = parts[1].strip()
+                            target_project = project_part.strip()
+
+                    # Format 2: "<agent-name>@<project-identifier>"
+                    elif "@" in name and not name.startswith("@"):
+                        parts = name.rsplit("@", 1)  # rsplit to handle names with @ in them
+                        if len(parts) == 2:
+                            target_name = parts[0].strip()
+                            target_project = parts[1].strip()
+
+                    # Look up agent (cross-project if target_project specified, otherwise global)
+                    if target_project:
+                        # Cross-project lookup: resolve project and agent explicitly
+                        try:
+                            proj = await _get_project_by_identifier(target_project)
+                            agent = await _get_agent(proj, target_name)
+                            resolved = agent.name  # Agent names are globally unique
+                        except NoResultFound:
+                            resolved = None
+                    else:
+                        # Global lookup by name (returns canonical name)
+                        resolved = global_lookup.get(target_name.lower())
 
                     if resolved:
                         if kind == "to":
@@ -3633,7 +3687,7 @@ def build_mcp_server() -> FastMCP:
                         else:
                             all_bcc.append(resolved)
                     else:
-                        unknown.add(display_value or raw.strip() if raw else raw)
+                        unknown.add(name)
 
             await _route(to, "to")
             await _route(cc or [], "cc")
