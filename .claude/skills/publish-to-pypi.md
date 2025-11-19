@@ -13,12 +13,20 @@ The PyPI token is stored in `~/.bashrc` as an environment variable:
 grep PYPI_TOKEN ~/.bashrc
 ```
 
-The token should be available in `~/.pypirc`:
+The token should also live in `~/.pypirc` with owner-only permissions:
 
 ```ini
+[distutils]
+index-servers =
+    pypi
+
 [pypi]
 username = __token__
-password = pypi-...
+password = $PYPI_TOKEN
+```
+
+```bash
+chmod 600 ~/.pypirc
 ```
 
 ### 2. Required Tools
@@ -90,8 +98,8 @@ python -m build
 ```
 
 This creates:
-- `dist/<package>-<version>-py3-none-any.whl` (wheel)
-- `dist/<package>-<version>.tar.gz` (source distribution)
+- `dist/mcp_mail-<version>-py3-none-any.whl` (wheel)
+- `dist/mcp_mail-<version>.tar.gz` (source distribution)
 
 ### Step 5: Test Installation Locally (Optional but Recommended)
 
@@ -101,10 +109,10 @@ python -m venv test_env
 source test_env/bin/activate
 
 # Install from local wheel
-pip install dist/<package>-<version>-py3-none-any.whl
+pip install dist/mcp_mail-<version>-py3-none-any.whl
 
 # Run tests
-python -c "import <package>; print(<package>.__version__)"
+python -c "import mcp_agent_mail; print(mcp_agent_mail.__version__)"
 
 # Deactivate and remove test env
 deactivate
@@ -118,7 +126,7 @@ rm -rf test_env
 source ~/.bashrc
 
 # Upload to PyPI
-twine upload dist/<package>-<version>-py3-none-any.whl dist/<package>-<version>.tar.gz
+twine upload dist/mcp_mail-<version>-py3-none-any.whl dist/mcp_mail-<version>.tar.gz
 ```
 
 **Example for mcp_mail:**
@@ -133,13 +141,13 @@ Wait 30-60 seconds for PyPI to update, then:
 
 ```bash
 # Check PyPI index
-pip index versions <package-name>
+pip index versions mcp-mail
 
 # Install from PyPI in clean environment
-pip install --upgrade <package-name>
+pip install --upgrade mcp-mail
 
 # Verify version
-python -c "import <package>; print(<package>.__version__)"
+python -c "import mcp_agent_mail; print(mcp_agent_mail.__version__)"
 ```
 
 ### Step 8: Test Functionality
@@ -147,7 +155,7 @@ python -c "import <package>; print(<package>.__version__)"
 Run your test suite to ensure the PyPI package works:
 
 ```bash
-# For mcp_mail, run the comprehensive test
+# For mcp_mail, run the comprehensive test suite
 python testing_llm/test_script.py
 
 # Or run basic functionality test
@@ -158,7 +166,7 @@ python -c "from mcp_agent_mail.app import build_mcp_server; print('✅ Works!')"
 
 ### Issue: Authentication Error
 
-```
+```plaintext
 ERROR HTTPError: 403 Forbidden from https://upload.pypi.org/legacy/
 Invalid or non-existent authentication information.
 ```
@@ -175,7 +183,7 @@ cat ~/.pypirc | grep password
 
 ### Issue: Version Already Exists
 
-```
+```plaintext
 ERROR HTTPError: 400 Bad Request from https://upload.pypi.org/legacy/
 File already exists.
 ```
@@ -184,8 +192,8 @@ File already exists.
 
 ### Issue: Python Version Too High
 
-```
-ERROR: Could not find a version that satisfies the requirement <package>==X.Y.Z
+```plaintext
+ERROR: Could not find a version that satisfies the requirement mcp_mail==X.Y.Z
 ```
 
 **Solution**: The package requires Python 3.14+ but user has 3.11-3.13. Update `pyproject.toml`:
@@ -198,9 +206,9 @@ Then rebuild and re-publish with a new version number.
 
 ### Issue: Package Name Conflicts
 
-```
+```plaintext
 ERROR HTTPError: 403 Forbidden
-The name '<package>' is too similar to an existing project.
+The name 'mcp_mail' is too similar to an existing project.
 ```
 
 **Solution**: Choose a different package name or request name release from PyPI.
@@ -260,30 +268,28 @@ rm -rf dist/ build/ *.egg-info
 uv build
 source ~/.bashrc
 twine upload dist/*
-pip index versions <package-name>
+pip index versions mcp-mail
 ```
 
 ## Rollback
 
 If you need to remove a version from PyPI:
 
-**You cannot delete versions** - PyPI doesn't allow deletion to prevent dependency confusion attacks.
+**You cannot delete versions**—PyPI disallows deletion to prevent dependency confusion attacks.
 
 Instead:
-1. **Yank the version** (makes it unavailable for new installs):
-   ```bash
-   twine upload --repository pypi --skip-existing --comment "Yanked due to bug" dist/*
-   ```
-
+1. **Yank the release via PyPI UI or API**:
+   - Visit `https://pypi.org/project/mcp-mail/<version>/`
+   - Click **Options → Yank this release** and provide a reason
+   - Alternatively, use the [warehouse API](https://warehouse.pypa.io/api-reference/legacy/#yank) with `curl` to yank programmatically
 2. **Publish a new fixed version**
-
-3. **Document the issue** in CHANGELOG.md
+3. **Document the issue** in `CHANGELOG.md` and notify users in release notes
 
 ## Resources
 
-- PyPI Help: https://pypi.org/help/
-- Twine Documentation: https://twine.readthedocs.io/
-- Python Packaging Guide: https://packaging.python.org/
+- [PyPI Help](https://pypi.org/help/)
+- [Twine Documentation](https://twine.readthedocs.io/)
+- [Python Packaging Guide](https://packaging.python.org/)
 
 ## Environment Variables
 

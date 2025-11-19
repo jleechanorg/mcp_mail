@@ -12,7 +12,7 @@
 
 > "It's like gmail for your coding agents!"
 
-### 📦 Installation
+## 📦 Installation
 
 **Quick Install from PyPI (Recommended):**
 

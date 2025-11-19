@@ -102,7 +102,24 @@ The PyPI token is stored in `~/.bashrc` as `PYPI_TOKEN`:
 export PYPI_TOKEN="pypi-..."
 ```
 
-The `~/.pypirc` file is automatically configured with this token. To publish packages:
+You must also configure `~/.pypirc` with this token before publishing:
+
+```bash
+cat > ~/.pypirc <<'EOF'
+[distutils]
+index-servers =
+    pypi
+
+[pypi]
+username = __token__
+password = $PYPI_TOKEN
+EOF
+chmod 600 ~/.pypirc
+```
+
+> ⚠️ `~/.pypirc` stores plaintext credentials. Restrict permissions with `chmod 600` and never commit or share this file.
+
+To publish packages:
 
 ```bash
 # Source bashrc to get credentials (or start new bash session)

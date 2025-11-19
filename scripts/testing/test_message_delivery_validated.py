@@ -2,34 +2,73 @@
 """Comprehensive Message Delivery Validation Test - With SQLite Proof"""
 import asyncio
 import json
-import os
 import sqlite3
 from datetime import datetime
-from mcp_agent_mail.app import build_mcp_server
+from pathlib import Path
+from typing import Any, TypedDict
+
+from anyio import Path as AsyncPath
 from fastmcp import Client
 
+from mcp_agent_mail.app import build_mcp_server
 
 # Test directory
 TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
-TEST_DIR = f"/tmp/mcp_mail_validation_{TIMESTAMP}"
+TEST_DIR = Path(f"/tmp/mcp_mail_validation_{TIMESTAMP}")
+
+
+class ValidationResult(TypedDict):
+    agent: str
+    validation: str
+    passed: bool
+    expected: int
+    actual: int
+
+
+class TestResults(TypedDict, total=False):
+    test_name: str
+    timestamp: str
+    test_dir: str
+    validations: list[ValidationResult]
+    content_validations: list[dict[str, Any]]
+    status: str
+    sqlite_proof: dict[str, Any]
+    summary: dict[str, Any]
+
+
+async def write_json_async(path: Path, payload: dict) -> None:
+    """Persist JSON payload using non-blocking I/O."""
+    async_path = AsyncPath(path)
+    await async_path.parent.mkdir(parents=True, exist_ok=True)
+    await async_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+async def write_text_async(path: Path, content: str) -> None:
+    """Persist plain text using non-blocking I/O."""
+    async_path = AsyncPath(path)
+    await async_path.parent.mkdir(parents=True, exist_ok=True)
+    await async_path.write_text(content, encoding="utf-8")
 
 
 def setup_test_dir():
     """Create test evidence directory."""
-    os.makedirs(f"{TEST_DIR}/evidence", exist_ok=True)
-    os.makedirs(f"{TEST_DIR}/sqlite_verification", exist_ok=True)
+    evidence_dir = TEST_DIR / "evidence"
+    sqlite_dir = TEST_DIR / "sqlite_verification"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    sqlite_dir.mkdir(parents=True, exist_ok=True)
     print(f"📁 Test directory: {TEST_DIR}")
     return TEST_DIR
 
 
-def verify_via_sqlite(project_slug: str, agent_names: list) -> dict:
+def verify_via_sqlite(project_slug: str, agent_names: list[str]) -> dict:
     """Verify message content directly via SQLite database."""
-    db_path = ".mcp_mail/storage.sqlite3"
+    db_path = Path(".mcp_mail/storage.sqlite3")
+    db_path_str = db_path.as_posix()
 
-    if not os.path.exists(db_path):
+    if not db_path.exists():
         return {"error": "Database not found"}
 
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path_str)
     cursor = conn.cursor()
 
     # Get all messages
@@ -37,8 +76,10 @@ def verify_via_sqlite(project_slug: str, agent_names: list) -> dict:
         SELECT m.id, a.name as sender, m.subject, m.body_md, m.importance
         FROM messages m
         JOIN agents a ON m.sender_id = a.id
+        JOIN projects p ON m.project_id = p.id
+        WHERE p.slug = ?
         ORDER BY m.id
-    """)
+    """, (project_slug,))
     messages = cursor.fetchall()
 
     # Get all recipients for each message
@@ -46,12 +87,12 @@ def verify_via_sqlite(project_slug: str, agent_names: list) -> dict:
         SELECT m.id, a.name as recipient, mr.kind
         FROM message_recipients mr
         JOIN messages m ON mr.message_id = m.id
+        JOIN projects p ON m.project_id = p.id
         JOIN agents a ON mr.agent_id = a.id
+        WHERE p.slug = ?
         ORDER BY m.id, mr.kind, a.name
-    """)
+    """, (project_slug,))
     recipients = cursor.fetchall()
-
-    conn.close()
 
     # Organize results
     message_details = []
@@ -74,20 +115,22 @@ def verify_via_sqlite(project_slug: str, agent_names: list) -> dict:
     # Get inbox counts for each agent
     inbox_counts = {}
     for agent_name in agent_names:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-
         cursor.execute("""
             SELECT COUNT(DISTINCT mr.message_id)
             FROM message_recipients mr
+            JOIN messages m ON mr.message_id = m.id
+            JOIN projects p ON m.project_id = p.id
             JOIN agents a ON mr.agent_id = a.id
-            WHERE a.name = ?
-            AND mr.kind IN ('to', 'cc')
-        """, (agent_name,))
+            WHERE p.slug = ?
+              AND a.name = ?
+              AND mr.kind IN ('to', 'cc')
+        """, (project_slug, agent_name))
 
-        count = cursor.fetchone()[0]
+        row = cursor.fetchone()
+        count = int(row[0]) if row else 0
         inbox_counts[agent_name] = count
-        conn.close()
+
+    conn.close()
 
     return {
         "messages": message_details,
@@ -100,10 +143,10 @@ async def test_message_delivery_validation():
     """Test message delivery with SQLite-based proof."""
     setup_test_dir()
 
-    results = {
+    results: TestResults = {
         "test_name": "Message Delivery Validation Test (with SQLite Proof)",
         "timestamp": datetime.now().isoformat(),
-        "test_dir": TEST_DIR,
+        "test_dir": str(TEST_DIR),
         "validations": []
     }
 
@@ -197,10 +240,12 @@ async def test_message_delivery_validation():
         print("=" * 60)
 
         sqlite_proof = verify_via_sqlite(project_slug, agents)
+        if "error" in sqlite_proof:
+            raise RuntimeError(f"SQLite verification failed: {sqlite_proof['error']}")
 
         # Save SQLite proof
-        with open(f"{TEST_DIR}/sqlite_verification/database_proof.json", 'w') as f:
-            json.dump(sqlite_proof, f, indent=2)
+        sqlite_proof_path = TEST_DIR / "sqlite_verification" / "database_proof.json"
+        await write_json_async(sqlite_proof_path, sqlite_proof)
 
         print(f"✅ Found {sqlite_proof['total_messages']} messages in database")
         print(f"✅ Inbox counts: {sqlite_proof['inbox_counts']}")
@@ -293,8 +338,8 @@ async def test_message_delivery_validation():
         }
 
         # Save results
-        with open(f"{TEST_DIR}/evidence/VALIDATION_RESULTS.json", 'w') as f:
-            json.dump(results, f, indent=2)
+        validation_results_path = TEST_DIR / "evidence" / "VALIDATION_RESULTS.json"
+        await write_json_async(validation_results_path, results)
 
         # Create summary
         summary_text = f"""
@@ -339,13 +384,13 @@ Messages Sent: {len(sent_messages)}
 
         summary_text += f"\n{'=' * 40}\n"
         summary_text += f"{'✅ All validations PASSED!' if all_validations_passed else '❌ Some validations FAILED!'}\n"
-        summary_text += f"\n📊 Summary:\n"
+        summary_text += "\n📊 Summary:\n"
         summary_text += f"  - Messages sent: {results['summary']['total_messages_sent']}\n"
         summary_text += f"  - Delivery validations: {results['summary']['validations_passed']}/{results['summary']['total_validations']}\n"
         summary_text += f"  - Content validations: {results['summary']['content_validations_passed']}/{results['summary']['content_validations']}\n"
 
-        with open(f"{TEST_DIR}/VALIDATION_SUMMARY.txt", 'w') as f:
-            f.write(summary_text)
+        summary_path = TEST_DIR / "VALIDATION_SUMMARY.txt"
+        await write_text_async(summary_path, summary_text)
 
         print(summary_text)
 

@@ -18,6 +18,7 @@ from typing import Any, Iterable, Sequence
 
 from filelock import SoftFileLock, Timeout
 from git import Actor, Repo
+from git.objects.tree import Tree as GitTree
 from PIL import Image
 
 from .config import Settings
@@ -1000,7 +1001,11 @@ async def get_commit_detail(repo: Repo, sha: str, max_diff_size: int = 5 * 1024 
 
             # Get diff text with size limit
             if diff.diff:
-                decoded_diff = diff.diff.decode("utf-8", errors="replace")
+                diff_payload = diff.diff
+                if isinstance(diff_payload, bytes):
+                    decoded_diff = diff_payload.decode("utf-8", errors="replace")
+                else:
+                    decoded_diff = str(diff_payload)
                 if len(diff_text) + len(decoded_diff) > max_diff_size:
                     diff_text += "\n\n[... Diff truncated - exceeds size limit ...]\n"
                     break
@@ -1198,6 +1203,9 @@ async def get_archive_tree(
             tree = commit.tree / tree_path
         except KeyError:
             # Path doesn't exist
+            return []
+
+        if not isinstance(tree, GitTree):
             return []
 
         entries = []

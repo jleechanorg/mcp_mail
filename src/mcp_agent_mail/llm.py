@@ -12,7 +12,7 @@ import contextlib
 import os
 import socket
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, cast
 from urllib.parse import urlparse
 
 import litellm
@@ -78,11 +78,11 @@ def _setup_callbacks() -> None:
             # Never let logging issues impact normal flow
             pass
 
-    if _on_success not in _existing_callbacks():
-        callbacks: list[Callable[..., Any]] = [*_existing_callbacks(), _on_success]
-        # Attribute exists on modern LiteLLM; fall back safely if absent
-        with contextlib.suppress(Exception):
-            litellm.success_callback = callbacks
+        if _on_success not in _existing_callbacks():
+            callbacks: list[Callable[..., Any]] = [*_existing_callbacks(), _on_success]
+            # Attribute exists on modern LiteLLM; fall back safely if absent
+            with contextlib.suppress(Exception):
+                litellm.success_callback = cast(Any, callbacks)
 
 
 async def _ensure_initialized() -> None:
