@@ -48,6 +48,7 @@ def _setup_callbacks() -> None:
 
     settings = get_settings()
     if not settings.llm.cost_logging_enabled:
+        _callbacks_registered = True
         return
 
     def _on_success(kwargs: dict[str, Any], completion_response: Any, start_time: float, end_time: float) -> None:
@@ -88,7 +89,8 @@ def _setup_callbacks() -> None:
         # Attribute exists on modern LiteLLM; fall back safely if absent
         with contextlib.suppress(Exception):
             litellm.success_callback = cast(Any, callbacks)
-        _callbacks_registered = True
+
+    _callbacks_registered = True
 
 
 async def _ensure_initialized() -> None:
