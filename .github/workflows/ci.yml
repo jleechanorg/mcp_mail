@@ -18,8 +18,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.14'
-          allow-prereleases: true
+          python-version: '3.13'
       - name: Install uv
         run: curl -Ls https://astral.sh/uv/install.sh | sh
       - name: Add uv to PATH
@@ -49,8 +48,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.14'
-          allow-prereleases: true
+          python-version: '3.13'
       - name: Install uv
         run: curl -Ls https://astral.sh/uv/install.sh | sh
       - name: Add uv to PATH
@@ -78,8 +76,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.14'
-          allow-prereleases: true
+          python-version: '3.13'
       - name: Install uv
         run: curl -Ls https://astral.sh/uv/install.sh | sh
       - name: Add uv to PATH
@@ -98,8 +95,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.14'
-          allow-prereleases: true
+          python-version: '3.13'
       - name: Install uv
         run: curl -Ls https://astral.sh/uv/install.sh | sh
       - name: Add uv to PATH
@@ -127,8 +123,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.14'
-          allow-prereleases: true
+          python-version: '3.13'
       - name: Install uv
         run: curl -Ls https://astral.sh/uv/install.sh | sh
       - name: Add uv to PATH
