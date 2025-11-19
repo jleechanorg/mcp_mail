@@ -86,6 +86,84 @@ curl -sL https://github.com/cli/cli/releases/download/v2.40.1/gh_2.40.1_linux_am
 
 The binary can be used directly without installation by referencing the full path `/tmp/gh_2.40.1_linux_amd64/bin/gh`. The `GITHUB_TOKEN` environment variable will be automatically recognized for authentication.
 
+## Credentials Management
+
+All sensitive credentials (API tokens, passwords, etc.) should be stored in `~/.bashrc` as environment variables and sourced automatically by bash sessions. This ensures credentials are:
+- **Centralized**: Single source of truth in `~/.bashrc`
+- **Secure**: Not hardcoded in scripts or config files
+- **Available**: Automatically loaded in all bash sessions via `bash -lc`
+
+### PyPI Publishing
+
+The PyPI token is stored in `~/.bashrc` as `PYPI_TOKEN`:
+
+```bash
+# In ~/.bashrc
+export PYPI_TOKEN="pypi-..."
+```
+
+You must also configure `~/.pypirc` with this token before publishing (the heredoc expands `PYPI_TOKEN` so the file stores the actual token value):
+
+```bash
+cat > ~/.pypirc <<EOF
+[distutils]
+index-servers =
+    pypi
+
+[pypi]
+username = __token__
+password = ${PYPI_TOKEN}
+EOF
+chmod 600 ~/.pypirc
+```
+
+> ⚠️ `~/.pypirc` stores plaintext credentials. Restrict permissions with `chmod 600` and never commit or share this file. Keep `PYPI_TOKEN` in `~/.bashrc` so shells and scripts can regenerate `.pypirc` when needed.
+
+To publish packages:
+
+```bash
+# Source bashrc to get credentials (or start new bash session)
+source ~/.bashrc
+
+# Publish to PyPI using twine
+twine upload dist/mcp_mail-*.whl dist/mcp_mail-*.tar.gz
+```
+
+### Adding New Credentials
+
+When adding new API tokens or credentials:
+
+1. **Add to ~/.bashrc**:
+   ```bash
+   export SERVICE_API_TOKEN="your-token-here"
+   ```
+
+2. **Source bashrc**:
+   ```bash
+   source ~/.bashrc
+   ```
+
+3. **Use in scripts via bash -lc**:
+   ```bash
+   bash -lc 'echo $SERVICE_API_TOKEN'  # Credentials available
+   ```
+
+4. **Document in CLAUDE.md**: Add a section explaining the credential and its usage
+
+### Available Credentials
+
+Current credentials configured in `~/.bashrc`:
+- `GITHUB_TOKEN` - GitHub API access (see GitHub Authentication section above)
+- `PYPI_TOKEN` - PyPI package publishing
+
+### Best Practices
+
+- **Never commit credentials** to Git repositories
+- **Use environment variables** instead of hardcoded tokens
+- **Source bashrc** in scripts using `bash -lc` to access credentials
+- **Document all credentials** in this section when adding new ones
+- **Rotate tokens** at least quarterly (and immediately after any suspected exposure)
+
 ## PR Responsibility Model
 
 When working on pull requests, understand that **PRs own all regressions versus `origin/main`**, regardless of which commit in the PR introduced them.
@@ -130,7 +208,65 @@ This ensures every merged PR maintains a clean history and working state.
 
 ## Beads hygiene (agents are responsible)
 
-- Always keep Beads in lockstep with reality. If you uncover a new bug, regression, or TODO that isn’t already tracked, **open a Beads issue immediately** (`bd create ...`) before starting the fix.
+- Always keep Beads in lockstep with reality. If you uncover a new bug, regression, or TODO that isn't already tracked, **open a Beads issue immediately** (`bd create ...`) before starting the fix.
 - Update Beads issue state as you work (`bd update`, `bd close`) so other agents see an accurate queue.
 - Mirror the Beads id in every Mail thread (`thread_id`, subject prefix) to keep the audit trail consistent.
-- Don’t wait for humans to ask—treat Beads upkeep as part of the job every time you touch code.
+- Don't wait for humans to ask—treat Beads upkeep as part of the job every time you touch code.
+
+## Test Execution Policy
+
+When asked to "run all tests", "run tests in testing_llm/", or execute a test suite:
+
+### Mandatory Rules
+
+1. **Execute EVERY test** listed in the specified directory or test suite
+2. **NEVER skip tests** due to cost, time, or complexity concerns without explicit permission
+3. **Ask first, don't assume** - If a test requires resources (API credits, external services), ASK the user before skipping but DO NOT skip unilaterally
+4. **Document all skipped tests** - If a test is skipped, it MUST be with explicit user permission and documented in the evidence
+
+### Testing_LLM Directory
+
+All tests in `testing_llm/` are designed to validate MCP Agent Mail functionality:
+- **MESSAGE_DELIVERY_VALIDATION** - SQLite-based message delivery proof
+- **MULTI_AGENT_MESSAGING_TEST** - Multi-agent coordination with Python
+- **REAL_CLAUDE_MULTI_AGENT_TEST** - Real Claude CLI instances coordinating
+
+**These tests exist for a reason.** Run them all unless explicitly instructed otherwise.
+
+### Test Evidence
+
+All tests must generate complete evidence in `/tmp/` with:
+- Test execution logs
+- Agent profiles and registrations
+- Message exchanges and routing proof
+- Validation results (pass/fail with details)
+- Summary documents
+
+### What Went Wrong (Lesson Learned)
+
+**Issue:** On 2025-11-18, Test 3 (REAL_CLAUDE_MULTI_AGENT_TEST) was initially skipped due to assumed cost concerns without asking the user.
+
+**User Feedback:** "wtf it should work" and "how do we make you follow instructions next time?"
+
+**Resolution:**
+- Test 3 was executed after user insistence
+- This policy was added to prevent future unilateral skipping
+- All future test execution requests will run ALL tests unless explicitly instructed to skip
+
+### Correct Behavior
+
+```markdown
+User: "run all tests in testing_llm/"
+
+Agent Response:
+1. List all tests found in testing_llm/
+2. If any test requires significant resources: "Test X requires API credits/external services. Proceed with all tests?"
+3. Upon user confirmation (or if no concerns): Execute ALL tests sequentially
+4. Generate complete evidence for each test
+5. Provide comprehensive summary of all test results
+```
+
+**NEVER:**
+- Skip tests without asking
+- Assume cost/time concerns override explicit instructions
+- Execute partial test suites when "all" was requested

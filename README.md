@@ -12,7 +12,57 @@
 
 > "It's like gmail for your coding agents!"
 
-### 📦 Installation Options
+## 📦 Installation
+
+**Quick Install from PyPI (Recommended):**
+
+```bash
+pip install mcp-mail
+```
+
+or with uv:
+
+```bash
+uv pip install mcp_mail
+```
+
+**One-Line Installer (sets up everything):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jleechanorg/mcp_mail/main/scripts/install.sh | bash -s -- --yes
+```
+
+This installer:
+- Installs uv if missing and updates your PATH
+- Creates a Python 3.11 virtual environment
+- Installs dependencies
+- Starts the MCP HTTP server on port 8765
+- Creates helper scripts (including `run_server_with_token.sh`)
+
+After installation, the server listens on [http://127.0.0.1:8765/mail](http://127.0.0.1:8765/mail).
+
+**Manual Installation:**
+
+```bash
+# Install uv (if you don't have it already)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+
+# Clone the repo
+git clone https://github.com/jleechanorg/mcp_mail
+cd mcp_mail
+
+# Create a Python 3.11 virtual environment and install
+uv python install 3.11
+uv venv -p 3.11
+source .venv/bin/activate
+uv sync
+
+# Start the MCP server
+scripts/run_server_with_token.sh
+```
+
+**Alternative Install Sources:**
 
 [![PyPI](https://img.shields.io/badge/Install%20from-PyPI-0073b7?style=for-the-badge&logo=pypi&logoColor=white)](https://pypi.org/project/mcp-mail/)
 [![Piwheels](https://img.shields.io/badge/Install%20from-Piwheels-c51a4a?style=for-the-badge&logo=raspberrypi&logoColor=white)](https://www.piwheels.org/project/mcp-mail/)
@@ -206,16 +256,6 @@ STORAGE_ROOT=~/.mcp_agent_mail_git_mailbox_repo uv run python -m mcp_agent_mail.
 
 ---
 
-## Installation
-
-Install from PyPI with uv (requires Python 3.11):
-
-```bash
-uv pip install mcp_mail
-```
-
----
-
 A mail-like coordination layer for coding agents, exposed as an HTTP-only FastMCP server. It gives agents memorable identities, an inbox/outbox, searchable message history, and voluntary file reservation "leases" to avoid stepping on each other.
 
 Think of it as asynchronous email + directory + change-intent signaling for your agents, backed by Git (for human-auditable artifacts) and SQLite (for indexing and queries).
@@ -239,65 +279,6 @@ This project provides a lightweight, interoperable layer so agents can:
 - Inspect a directory of active agents, programs/models, and activity
 
 It's designed for: FastMCP clients and CLI tools (Claude Code, Codex, Gemini CLI, etc.) coordinating across one or more codebases.
-
-## TLDR Quickstart
-
-### One-line installer
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/jleechanorg/mcp_mail/main/scripts/install.sh | bash -s -- --yes
-```
-
-What this does:
-
-- Installs uv if missing and updates your PATH for this session
-- Creates a Python 3.11 virtual environment and installs dependencies with uv
-- Runs the auto-detect integration to wire up supported agent tools
-- Starts the MCP HTTP server on port 8765 and prints a masked bearer token
-- Creates helper scripts under `scripts/` (including `run_server_with_token.sh`)
-
-Prefer a specific location or options? Add flags like `--dir <path>`, `--project-dir <path>`, `--no-start`, `--start-only`, `--port <number>`, or `--token <hex>`.
-
-**Port conflicts?** Use `--port` to specify a different port (default: 8765):
-
-```bash
-# Install with custom port
-curl -fsSL https://raw.githubusercontent.com/jleechanorg/mcp_mail/main/scripts/install.sh | bash -s -- --port 9000 --yes
-
-# Or use the CLI command after installation
-uv run python -m mcp_agent_mail.cli config set-port 9000
-```
-
-### If you want to do it yourself
-
-Clone the repo, set up and install with uv in a Python 3.11 venv (install uv if you don't have it already), and then run `scripts/automatically_detect_all_installed_coding_agents_and_install_mcp_agent_mail_in_all.sh`. This will automatically set things up for your various installed coding agent tools and start the MCP server on port 8765. If you want to run the MCP server again in the future, simply run `scripts/run_server_with_token.sh`:
-
-```bash
-# Install uv (if you don't have it already)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
-
-# Clone the repo
-git clone https://github.com/jleechanorg/mcp_mail
-cd mcp_mail
-
-# Create a Python 3.11 virtual environment and install dependencies
-uv python install 3.11
-uv venv -p 3.11
-source .venv/bin/activate
-uv sync
-
-# Detect installed coding agents, integrate, and start the MCP server on port 8765
-scripts/automatically_detect_all_installed_coding_agents_and_install_mcp_agent_mail_in_all.sh
-
-# Later, to run the MCP server again with the same token
-scripts/run_server_with_token.sh
-
-# Now, simply launch Codex-CLI or Claude Code or other agent tools in other consoles; they should have the mail tool available. See below for a ready-made chunk of text you can add to the end of your existing AGENTS.md or CLAUDE.md files to help your agents better utilize the new tools.
-
-# Change port after installation
-uv run python -m mcp_agent_mail.cli config set-port 9000
-```
 
 ## Ready-Made Blurb to Add to Your AGENTS.md or CLAUDE.md Files:
 ```

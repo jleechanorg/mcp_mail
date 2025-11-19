@@ -12,7 +12,7 @@ import contextlib
 import os
 import socket
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, cast
 from urllib.parse import urlparse
 
 import litellm
@@ -25,6 +25,7 @@ from .config import get_settings
 _router: Optional[Any] = None
 _init_lock = asyncio.Lock()
 _logger = structlog.get_logger(__name__)
+_callbacks_registered = False
 
 
 @dataclass(slots=True, frozen=True)
@@ -41,8 +42,13 @@ def _existing_callbacks() -> list[Any]:
 
 
 def _setup_callbacks() -> None:
+    global _callbacks_registered
+    if _callbacks_registered:
+        return
+
     settings = get_settings()
     if not settings.llm.cost_logging_enabled:
+        _callbacks_registered = True
         return
 
     def _on_success(kwargs: dict[str, Any], completion_response: Any, start_time: float, end_time: float) -> None:
@@ -82,7 +88,9 @@ def _setup_callbacks() -> None:
         callbacks: list[Callable[..., Any]] = [*_existing_callbacks(), _on_success]
         # Attribute exists on modern LiteLLM; fall back safely if absent
         with contextlib.suppress(Exception):
-            litellm.success_callback = callbacks
+            litellm.success_callback = cast(Any, callbacks)
+
+    _callbacks_registered = True
 
 
 async def _ensure_initialized() -> None:

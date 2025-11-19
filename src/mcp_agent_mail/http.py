@@ -10,6 +10,7 @@ import importlib
 import json
 import logging
 import re
+from collections.abc import MutableMapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
@@ -974,7 +975,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         status_code = 200
         headers: dict[str, str] = {}
 
-        async def _send(message: dict) -> None:
+        async def _send(message: MutableMapping[str, Any]) -> None:
             nonlocal response_body, status_code, headers
             if message.get("type") == "http.response.start":
                 status_code = int(message.get("status", 200))
