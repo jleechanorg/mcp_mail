@@ -6,28 +6,35 @@ This skill provides step-by-step instructions for publishing Python packages to 
 
 ### 1. PyPI Token Configuration
 
-The PyPI token is stored in `~/.bashrc` as an environment variable:
+The PyPI token is stored in `~/.bashrc` as an environment variable (for example, `export PYPI_TOKEN="pypi-AgEI..."`). Twine can read `PYPI_TOKEN` directly from the environment, or you can render a `.pypirc` file from that variable before publishing.
 
 ```bash
 # Check if token is configured
 grep PYPI_TOKEN ~/.bashrc
 ```
 
-The token should also live in `~/.pypirc` with owner-only permissions:
+To generate `~/.pypirc` **with the actual token value (no variable substitution occurs inside the file itself)**:
 
-```ini
+```bash
+# Render ~/.pypirc from the PYPI_TOKEN in your shell
+cat > ~/.pypirc <<EOF
 [distutils]
 index-servers =
     pypi
 
 [pypi]
 username = __token__
-password = $PYPI_TOKEN
+password = ${PYPI_TOKEN}
+EOF
 ```
 
 ```bash
 chmod 600 ~/.pypirc
 ```
+
+**Security notes:**
+- `.pypirc` stores the token in plaintext—restrict access with `chmod 600` and never commit or share this file.
+- Keeping `PYPI_TOKEN` in `~/.bashrc` ensures shells and scripts can populate `~/.pypirc` when needed.
 
 ### 2. Required Tools
 
@@ -140,7 +147,7 @@ twine upload dist/mcp_mail-0.1.9-py3-none-any.whl dist/mcp_mail-0.1.9.tar.gz
 Wait 30-60 seconds for PyPI to update, then:
 
 ```bash
-# Check PyPI index
+# Check PyPI index (use the hyphenated project name)
 pip index versions mcp-mail
 
 # Install from PyPI in clean environment

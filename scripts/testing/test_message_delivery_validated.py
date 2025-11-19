@@ -63,74 +63,75 @@ def setup_test_dir():
 def verify_via_sqlite(project_slug: str, agent_names: list[str]) -> dict:
     """Verify message content directly via SQLite database."""
     db_path = Path(".mcp_mail/storage.sqlite3")
-    db_path_str = db_path.as_posix()
 
     if not db_path.exists():
         return {"error": "Database not found"}
 
-    conn = sqlite3.connect(db_path_str)
-    cursor = conn.cursor()
+    try:
+        with sqlite3.connect(str(db_path)) as conn:
+            cursor = conn.cursor()
 
-    # Get all messages
-    cursor.execute("""
-        SELECT m.id, a.name as sender, m.subject, m.body_md, m.importance
-        FROM messages m
-        JOIN agents a ON m.sender_id = a.id
-        JOIN projects p ON m.project_id = p.id
-        WHERE p.slug = ?
-        ORDER BY m.id
-    """, (project_slug,))
-    messages = cursor.fetchall()
+            # Get all messages
+            cursor.execute("""
+                SELECT m.id, a.name as sender, m.subject, m.body_md, m.importance
+                FROM messages m
+                JOIN agents a ON m.sender_id = a.id
+                JOIN projects p ON m.project_id = p.id
+                WHERE p.slug = ?
+                ORDER BY m.id
+            """, (project_slug,))
+            messages = cursor.fetchall()
 
-    # Get all recipients for each message
-    cursor.execute("""
-        SELECT m.id, a.name as recipient, mr.kind
-        FROM message_recipients mr
-        JOIN messages m ON mr.message_id = m.id
-        JOIN projects p ON m.project_id = p.id
-        JOIN agents a ON mr.agent_id = a.id
-        WHERE p.slug = ?
-        ORDER BY m.id, mr.kind, a.name
-    """, (project_slug,))
-    recipients = cursor.fetchall()
+            # Get all recipients for each message
+            cursor.execute("""
+                SELECT m.id, a.name as recipient, mr.kind
+                FROM message_recipients mr
+                JOIN messages m ON mr.message_id = m.id
+                JOIN projects p ON m.project_id = p.id
+                JOIN agents a ON mr.agent_id = a.id
+                WHERE p.slug = ?
+                ORDER BY m.id, mr.kind, a.name
+            """, (project_slug,))
+            recipients = cursor.fetchall()
 
-    # Organize results
-    message_details = []
-    for msg_id, sender, subject, body, importance in messages:
-        msg_recipients = [
-            {"name": name, "kind": kind}
-            for mid, name, kind in recipients
-            if mid == msg_id
-        ]
+            # Organize results
+            message_details = []
+            for msg_id, sender, subject, body, importance in messages:
+                msg_recipients = [
+                    {"name": name, "kind": kind}
+                    for mid, name, kind in recipients
+                    if mid == msg_id
+                ]
 
-        message_details.append({
-            "id": msg_id,
-            "sender": sender,
-            "subject": subject,
-            "body": body,
-            "importance": importance,
-            "recipients": msg_recipients
-        })
+                message_details.append({
+                    "id": msg_id,
+                    "sender": sender,
+                    "subject": subject,
+                    "body": body,
+                    "importance": importance,
+                    "recipients": msg_recipients
+                })
 
-    # Get inbox counts for each agent
-    inbox_counts = {}
-    for agent_name in agent_names:
-        cursor.execute("""
-            SELECT COUNT(DISTINCT mr.message_id)
-            FROM message_recipients mr
-            JOIN messages m ON mr.message_id = m.id
-            JOIN projects p ON m.project_id = p.id
-            JOIN agents a ON mr.agent_id = a.id
-            WHERE p.slug = ?
-              AND a.name = ?
-              AND mr.kind IN ('to', 'cc')
-        """, (project_slug, agent_name))
+            # Get inbox counts for each agent
+            inbox_counts = {}
+            for agent_name in agent_names:
+                cursor.execute("""
+                    SELECT COUNT(DISTINCT mr.message_id)
+                    FROM message_recipients mr
+                    JOIN messages m ON mr.message_id = m.id
+                    JOIN projects p ON m.project_id = p.id
+                    JOIN agents a ON mr.agent_id = a.id
+                    WHERE p.slug = ?
+                      AND a.name = ?
+                      AND mr.kind IN ('to', 'cc')
+                """, (project_slug, agent_name))
 
-        row = cursor.fetchone()
-        count = int(row[0]) if row else 0
-        inbox_counts[agent_name] = count
+                row = cursor.fetchone()
+                count = int(row[0]) if row else 0
+                inbox_counts[agent_name] = count
 
-    conn.close()
+    except Exception as exc:  # pragma: no cover - defensive guard
+        return {"error": f"SQLite verification failed: {exc}"}
 
     return {
         "messages": message_details,
@@ -163,7 +164,10 @@ async def test_message_delivery_validation():
             "ensure_project",
             arguments={"human_key": project_key}
         )
-        project_slug = project_result.data['slug']
+        project_data = getattr(project_result, "data", {}) or {}
+        project_slug = project_data.get("slug")
+        if not project_slug:
+            raise RuntimeError(f"Failed to create project: {project_result}")
         print(f"✅ Project: {project_slug}")
 
         # Step 2: Register agents
@@ -228,7 +232,19 @@ async def test_message_delivery_validation():
             )
 
             # Extract message ID from delivery
-            msg_id = msg_result.data['deliveries'][0]['payload']['id']
+            msg_data = getattr(msg_result, "data", {}) or {}
+            deliveries = msg_data.get("deliveries") or []
+            if (
+                not isinstance(deliveries, list)
+                or not deliveries
+                or not isinstance(deliveries[0], dict)
+                or "payload" not in deliveries[0]
+                or not isinstance(deliveries[0]["payload"], dict)
+                or "id" not in deliveries[0]["payload"]
+            ):
+                raise RuntimeError(f"Failed to send message {idx}: {msg_result}")
+
+            msg_id = deliveries[0]["payload"]["id"]
             msg_def['message_id'] = msg_id
             sent_messages.append(msg_def)
 

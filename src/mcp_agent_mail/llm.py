@@ -25,6 +25,7 @@ from .config import get_settings
 _router: Optional[Any] = None
 _init_lock = asyncio.Lock()
 _logger = structlog.get_logger(__name__)
+_callbacks_registered = False
 
 
 @dataclass(slots=True, frozen=True)
@@ -41,6 +42,10 @@ def _existing_callbacks() -> list[Any]:
 
 
 def _setup_callbacks() -> None:
+    global _callbacks_registered
+    if _callbacks_registered:
+        return
+
     settings = get_settings()
     if not settings.llm.cost_logging_enabled:
         return
@@ -83,6 +88,7 @@ def _setup_callbacks() -> None:
             # Attribute exists on modern LiteLLM; fall back safely if absent
             with contextlib.suppress(Exception):
                 litellm.success_callback = cast(Any, callbacks)
+            _callbacks_registered = True
 
 
 async def _ensure_initialized() -> None:

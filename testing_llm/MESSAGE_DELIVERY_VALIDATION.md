@@ -36,7 +36,7 @@ Creates 3 agents (Alice, Bob, Charlie) and sends 3 specific messages:
 - All subjects preserved exactly
 - All bodies preserved exactly
 - All sender attributions correct
-- All recipient routing correct (to/cc)
+- Recipient routing details are captured in the SQLite proof for manual review
 
 ## Running the Test
 
@@ -57,7 +57,7 @@ python3 scripts/testing/test_message_delivery_validated.py
 
 ### Expected Output
 
-```
+```text
 ============================================================
 STEP 1: Creating clean test project
 ============================================================
@@ -184,11 +184,10 @@ The test creates a timestamped evidence directory: `/tmp/mcp_mail_validation_<ti
 
 ✅ **Message Storage:** Messages are stored completely with full subjects and bodies
 ✅ **Sender Attribution:** Sender information is correctly preserved
-✅ **Message Routing:** Direct recipients (to) receive messages
-✅ **CC Functionality:** CC recipients receive messages correctly
-✅ **Global Inbox:** All messages are CC'd to global-inbox for project-wide visibility
 ✅ **Inbox Counts:** Each agent sees the correct number of messages
 ✅ **Content Preservation:** Subject, body, importance, and metadata are preserved
+
+ℹ️ **Routing evidence:** The SQLite proof (`database_proof.json`) records all direct and CC recipients (including any global-inbox recipients) for manual inspection; the automated assertions currently focus on counts and content.
 
 ## Known Limitations
 

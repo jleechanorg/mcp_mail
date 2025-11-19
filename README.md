@@ -39,6 +39,8 @@ This installer:
 - Starts the MCP HTTP server on port 8765
 - Creates helper scripts (including `run_server_with_token.sh`)
 
+After installation, the server listens on [http://127.0.0.1:8765/mail](http://127.0.0.1:8765/mail).
+
 **Manual Installation:**
 
 ```bash
