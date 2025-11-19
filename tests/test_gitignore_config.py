@@ -55,7 +55,6 @@ def test_mcp_mail_gitignore_allows_messages_to_be_tracked():
     and verifies it's not gitignored.
     """
     import subprocess
-    import tempfile
 
     # Create a temporary test message file structure
     project_root = Path(__file__).parent.parent
@@ -72,13 +71,14 @@ def test_mcp_mail_gitignore_allows_messages_to_be_tracked():
             cwd=project_root,
             capture_output=True,
             text=True,
+            timeout=5,
         )
 
         # git check-ignore exits with 0 if file IS ignored, 1 if NOT ignored
         # We want exit code 1 (file is NOT ignored)
         assert result.returncode == 1, (
             f"Message file {test_msg_path} is being ignored by git! "
-            f"git check-ignore output: {result.stdout}"
+            f"git check-ignore output: {result.stdout}\n"
             "This means agent messages won't be committed to the repository."
         )
 
