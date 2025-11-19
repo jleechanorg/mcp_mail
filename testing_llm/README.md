@@ -2,6 +2,38 @@
 
 This directory contains human-readable and LLM-executable test cases for the MCP Agent Mail system. These tests are designed to be read and executed by AI assistants (like Claude) or human testers, not automated test scripts.
 
+## ⚠️ Test Execution Policy
+
+**CRITICAL:** When asked to "run all tests" or "run tests in testing_llm/", ALL tests in this directory must be executed unless explicitly instructed otherwise.
+
+### Mandatory Rules for LLM Executors
+
+1. **Execute EVERY test** in this directory when requested
+2. **NEVER skip tests** due to cost, time, or complexity concerns without explicit user permission
+3. **Ask first, don't assume** - If a test requires resources (API credits, external services), ASK the user before skipping
+4. **Document any skipped tests** with explicit user permission in the evidence
+
+### Why This Matters
+
+On 2025-11-18, REAL_CLAUDE_MULTI_AGENT_TEST was initially skipped due to assumed cost concerns. User correctly insisted: "wtf it should work" and "how do we make you follow instructions next time?"
+
+**Lesson learned:** Tests exist for a reason. Run them all unless explicitly told otherwise.
+
+### Correct Behavior
+
+```
+User: "run all tests in testing_llm/"
+
+LLM Response:
+1. List all test files found
+2. Note if any require API credits/resources: "Test X requires [resource]. Proceed?"
+3. Upon confirmation: Execute ALL tests sequentially
+4. Generate complete evidence for each test
+5. Provide comprehensive summary with pass/fail for each
+```
+
+**See:** `.claude/skills/run-tests.md` for complete test execution procedures
+
 ## Purpose
 
 The test cases in this directory validate:

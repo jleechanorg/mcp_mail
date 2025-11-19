@@ -676,18 +676,18 @@ async def _ensure_project(human_key: str) -> Project:
         project = result.scalars().first()
         if project:
             # Ensure global inbox agent exists for existing project
-            await _ensure_global_inbox_agent(project)
+            await _ensure_global_inbox_agent(project, session=session)
             return project
         project = Project(slug=slug, human_key=human_key)
         session.add(project)
         await session.commit()
         await session.refresh(project)
         # Create global inbox agent for new project
-        await _ensure_global_inbox_agent(project)
+        await _ensure_global_inbox_agent(project, session=session)
         return project
 
 
-async def _ensure_global_inbox_agent(project: Project) -> Agent:
+async def _ensure_global_inbox_agent(project: Project, session: Optional["AsyncSession"] = None) -> Agent:
     """Ensure the global inbox agent exists for the given project.
 
     Each project gets its own global inbox agent with a project-specific name
@@ -699,30 +699,39 @@ async def _ensure_global_inbox_agent(project: Project) -> Agent:
     global_inbox_name = get_global_inbox_name(project)
 
     await ensure_schema()
-    async with get_session() as session:
-        # Check if global inbox agent already exists for this project
-        result = await session.execute(
-            select(Agent).where(
-                Agent.project_id == project.id,
-                Agent.name == global_inbox_name,
-            )
-        )
-        existing_agent = result.scalars().first()
-        if existing_agent:
-            return existing_agent
+    
+    # Use provided session or create a new one
+    if session:
+        return await _create_or_get_global_inbox(session, project, global_inbox_name)
+        
+    async with get_session() as new_session:
+        return await _create_or_get_global_inbox(new_session, project, global_inbox_name)
 
-        # Create global inbox agent for this project
-        agent = Agent(
-            project_id=project.id,
-            name=global_inbox_name,
-            program="mcp-mail-system",
-            model="system",
-            task_description=f"Global inbox for project '{project.slug}'.",
+
+async def _create_or_get_global_inbox(session: "AsyncSession", project: Project, global_inbox_name: str) -> Agent:
+    # Check if global inbox agent already exists for this project
+    result = await session.execute(
+        select(Agent).where(
+            Agent.project_id == project.id,
+            Agent.name == global_inbox_name,
         )
-        session.add(agent)
-        await session.commit()
-        await session.refresh(agent)
-        return agent
+    )
+    existing_agent = result.scalars().first()
+    if existing_agent:
+        return existing_agent
+
+    # Create global inbox agent for this project
+    agent = Agent(
+        project_id=project.id,
+        name=global_inbox_name,
+        program="mcp-mail-system",
+        model="system",
+        task_description=f"Global inbox for project '{project.slug}'.",
+    )
+    session.add(agent)
+    await session.commit()
+    await session.refresh(agent)
+    return agent
 
 
 async def _get_project_by_identifier(identifier: str) -> Project:
