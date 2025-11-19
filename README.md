@@ -85,7 +85,7 @@ Full credit goes to the original author for creating this innovative multi-agent
 > **Note**: This was copied as a standalone repository rather than kept as a fork because Codex web appears to ignore forks in its repository indexing. Here was my first attempt at a normal fork: [jleechanorg/mcp_agent_mail](https://github.com/jleechanorg/mcp_agent_mail)
 ## Fork Improvements
 
-This fork extends the original MCP Agent Mail with **10 core enhancements** focused on removing coordination barriers and improving efficiency:
+This fork extends the original MCP Agent Mail with **11 core enhancements** focused on removing coordination barriers and improving efficiency:
 
 ### 🚀 Token Efficiency
 
@@ -167,7 +167,7 @@ This fork extends the original MCP Agent Mail with **10 core enhancements** focu
   - Eliminates need for separate `fetch_inbox` call
   - Configurable filters: `inbox_limit`, `inbox_urgent_only`, `inbox_since_ts`
   - Agents immediately see relevant messages upon joining
-  - **Implementation**: `src/mcp_agent_mail/app.py:3021-3147`
+  - **Implementation**: `src/mcp_agent_mail/app.py:3021-3159`
 
 ### 🔍 Advanced Search
 
@@ -180,7 +180,9 @@ This fork extends the original MCP Agent Mail with **10 core enhancements** focu
   - **`search_messages` (EXTENDED)**: Simpler FTS5 search for basic queries
   - Full-text search across subjects, bodies, and attachments
   - Helps agents find prior work before duplicating effort
-  - **Implementation**: `src/mcp_agent_mail/app.py:4210-4767`
+  - **Implementation**:
+    - `search_mailbox`: `src/mcp_agent_mail/app.py:4218-4454`
+    - `search_messages`: `src/mcp_agent_mail/app.py:4646-4767`
 
 Example usage:
 ```python
