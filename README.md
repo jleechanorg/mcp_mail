@@ -85,7 +85,7 @@ Full credit goes to the original author for creating this innovative multi-agent
 > **Note**: This was copied as a standalone repository rather than kept as a fork because Codex web appears to ignore forks in its repository indexing. Here was my first attempt at a normal fork: [jleechanorg/mcp_agent_mail](https://github.com/jleechanorg/mcp_agent_mail)
 ## Fork Improvements
 
-This fork extends the original MCP Agent Mail with **9 core enhancements** focused on removing coordination barriers and improving efficiency:
+This fork extends the original MCP Agent Mail with **10 core enhancements** focused on removing coordination barriers and improving efficiency:
 
 ### 🚀 Token Efficiency
 
@@ -161,6 +161,41 @@ This fork extends the original MCP Agent Mail with **9 core enhancements** focus
   - Auto-registration of missing local recipients
   - Streamlines multi-agent coordination across projects
   - Configure via `messaging_auto_register_recipients` (default: True)
+
+- **⚡ Auto-Fetch Inbox** - Streamline agent registration:
+  - `register_agent(..., auto_fetch_inbox=True)` automatically fetches inbox after registration
+  - Eliminates need for separate `fetch_inbox` call
+  - Configurable filters: `inbox_limit`, `inbox_urgent_only`, `inbox_since_ts`
+  - Agents immediately see relevant messages upon joining
+  - **Implementation**: `src/mcp_agent_mail/app.py:3021-3147`
+
+### 🔍 Advanced Search
+
+- **🎯 Dual Search System** - Find messages with sophisticated ranking:
+  - **`search_mailbox` (CORE)**: Advanced FTS5 search with BM25 relevance scoring
+    - Global inbox prioritization (important messages ranked higher)
+    - Agent filtering and subject/body snippet highlighting
+    - Full message body inclusion option
+    - Returns detailed metadata with relevance scores
+  - **`search_messages` (EXTENDED)**: Simpler FTS5 search for basic queries
+  - Full-text search across subjects, bodies, and attachments
+  - Helps agents find prior work before duplicating effort
+  - **Implementation**: `src/mcp_agent_mail/app.py:4210-4767`
+
+Example usage:
+```python
+# Search with relevance ranking
+results = await search_mailbox(
+    query="authentication bug",
+    agent="MyAgent",
+    project_key="my-project",
+    limit=10
+)
+
+# Results sorted by relevance (BM25)
+for result in results:
+    print(f"Score: {result['score']}, Subject: {result['subject']}")
+```
 
 ### 📝 How Messages Are Stored
 
@@ -252,7 +287,7 @@ STORAGE_ROOT=~/.mcp_agent_mail_git_mailbox_repo uv run python -m mcp_agent_mail.
 
 ---
 
-**Summary**: This fork removes coordination barriers by making everything **global by default** - agents, messages, and projects all work across boundaries. Combined with token-efficient lazy loading, automatic mention scanning, and simplified workflows, it creates a **frictionless multi-agent collaboration platform** while maintaining full Git auditability for all communications.
+**Summary**: This fork removes coordination barriers by making everything **global by default** - agents, messages, and projects all work across boundaries. Combined with advanced search with BM25 relevance ranking, auto-fetch inbox on registration, automatic @mention scanning, and project-local storage (`.mcp_mail/` directory), it creates a **frictionless multi-agent collaboration platform** while maintaining full Git auditability for all communications.
 
 ---
 
