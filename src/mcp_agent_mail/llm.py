@@ -83,12 +83,12 @@ def _setup_callbacks() -> None:
             # Never let logging issues impact normal flow
             pass
 
-        if _on_success not in _existing_callbacks():
-            callbacks: list[Callable[..., Any]] = [*_existing_callbacks(), _on_success]
-            # Attribute exists on modern LiteLLM; fall back safely if absent
-            with contextlib.suppress(Exception):
-                litellm.success_callback = cast(Any, callbacks)
-            _callbacks_registered = True
+    if _on_success not in _existing_callbacks():
+        callbacks: list[Callable[..., Any]] = [*_existing_callbacks(), _on_success]
+        # Attribute exists on modern LiteLLM; fall back safely if absent
+        with contextlib.suppress(Exception):
+            litellm.success_callback = cast(Any, callbacks)
+        _callbacks_registered = True
 
 
 async def _ensure_initialized() -> None:

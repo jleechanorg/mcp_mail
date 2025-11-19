@@ -3,6 +3,7 @@
 import asyncio
 import json
 import sqlite3
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, TypedDict
@@ -12,9 +13,9 @@ from fastmcp import Client
 
 from mcp_agent_mail.app import build_mcp_server
 
-# Test directory
 TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
-TEST_DIR = Path(f"/tmp/mcp_mail_validation_{TIMESTAMP}")
+# Test directory (cross-platform)
+TEST_DIR = Path(tempfile.gettempdir()) / f"mcp_mail_validation_{TIMESTAMP}"
 
 
 class ValidationResult(TypedDict):
@@ -159,7 +160,7 @@ async def test_message_delivery_validation():
         print("STEP 1: Creating clean test project")
         print("=" * 60)
 
-        project_key = f"/tmp/test_validation_{TIMESTAMP}"
+        project_key = str(Path(tempfile.gettempdir()) / f"test_validation_{TIMESTAMP}")
         project_result = await client.call_tool(
             "ensure_project",
             arguments={"human_key": project_key}

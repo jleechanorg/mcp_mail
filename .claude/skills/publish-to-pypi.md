@@ -163,7 +163,7 @@ Run your test suite to ensure the PyPI package works:
 
 ```bash
 # For mcp_mail, run the comprehensive test suite
-python testing_llm/test_script.py
+python scripts/testing/test_message_delivery_validated.py
 
 # Or run basic functionality test
 python -c "from mcp_agent_mail.app import build_mcp_server; print('✅ Works!')"
@@ -197,16 +197,16 @@ File already exists.
 
 **Solution**: You cannot re-upload the same version. Increment version in `pyproject.toml` and rebuild.
 
-### Issue: Python Version Too High
+### Issue: Python Version Too Low
 
 ```plaintext
 ERROR: Could not find a version that satisfies the requirement mcp_mail==X.Y.Z
 ```
 
-**Solution**: The package requires Python 3.14+ but user has 3.11-3.13. Update `pyproject.toml`:
+**Solution**: The package requires Python 3.11+ but the environment is older (for example, Python 3.10). Update `pyproject.toml` if needed and rebuild:
 
 ```toml
-requires-python = ">=3.11"  # Change from ">=3.14"
+requires-python = ">=3.11"
 ```
 
 Then rebuild and re-publish with a new version number.
