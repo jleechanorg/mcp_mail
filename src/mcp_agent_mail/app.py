@@ -26,6 +26,7 @@ from git import Repo
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
 from sqlalchemy import asc, delete, desc, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, NoResultFound, SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from . import rich_logger
@@ -687,7 +688,7 @@ async def _ensure_project(human_key: str) -> Project:
         return project
 
 
-async def _ensure_global_inbox_agent(project: Project, session: Optional["AsyncSession"] = None) -> Agent:
+async def _ensure_global_inbox_agent(project: Project, session: Optional[AsyncSession] = None) -> Agent:
     """Ensure the global inbox agent exists for the given project.
 
     Each project gets its own global inbox agent with a project-specific name
@@ -699,16 +700,16 @@ async def _ensure_global_inbox_agent(project: Project, session: Optional["AsyncS
     global_inbox_name = get_global_inbox_name(project)
 
     await ensure_schema()
-    
+
     # Use provided session or create a new one
     if session:
         return await _create_or_get_global_inbox(session, project, global_inbox_name)
-        
+
     async with get_session() as new_session:
         return await _create_or_get_global_inbox(new_session, project, global_inbox_name)
 
 
-async def _create_or_get_global_inbox(session: "AsyncSession", project: Project, global_inbox_name: str) -> Agent:
+async def _create_or_get_global_inbox(session: AsyncSession, project: Project, global_inbox_name: str) -> Agent:
     # Check if global inbox agent already exists for this project
     result = await session.execute(
         select(Agent).where(
