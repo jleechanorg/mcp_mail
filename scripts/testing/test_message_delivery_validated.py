@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Comprehensive Message Delivery Validation Test - With SQLite Proof"""
+
 import asyncio
 import json
 import sqlite3
@@ -73,18 +74,22 @@ def verify_via_sqlite(project_slug: str, agent_names: list[str]) -> dict:
             cursor = conn.cursor()
 
             # Get all messages
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT m.id, a.name as sender, m.subject, m.body_md, m.importance
                 FROM messages m
                 JOIN agents a ON m.sender_id = a.id
                 JOIN projects p ON m.project_id = p.id
                 WHERE p.slug = ?
                 ORDER BY m.id
-            """, (project_slug,))
+            """,
+                (project_slug,),
+            )
             messages = cursor.fetchall()
 
             # Get all recipients for each message
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT m.id, a.name as recipient, mr.kind
                 FROM message_recipients mr
                 JOIN messages m ON mr.message_id = m.id
@@ -92,31 +97,32 @@ def verify_via_sqlite(project_slug: str, agent_names: list[str]) -> dict:
                 JOIN agents a ON mr.agent_id = a.id
                 WHERE p.slug = ?
                 ORDER BY m.id, mr.kind, a.name
-            """, (project_slug,))
+            """,
+                (project_slug,),
+            )
             recipients = cursor.fetchall()
 
             # Organize results
             message_details = []
             for msg_id, sender, subject, body, importance in messages:
-                msg_recipients = [
-                    {"name": name, "kind": kind}
-                    for mid, name, kind in recipients
-                    if mid == msg_id
-                ]
+                msg_recipients = [{"name": name, "kind": kind} for mid, name, kind in recipients if mid == msg_id]
 
-                message_details.append({
-                    "id": msg_id,
-                    "sender": sender,
-                    "subject": subject,
-                    "body": body,
-                    "importance": importance,
-                    "recipients": msg_recipients
-                })
+                message_details.append(
+                    {
+                        "id": msg_id,
+                        "sender": sender,
+                        "subject": subject,
+                        "body": body,
+                        "importance": importance,
+                        "recipients": msg_recipients,
+                    }
+                )
 
             # Get inbox counts for each agent
             inbox_counts = {}
             for agent_name in agent_names:
-                cursor.execute("""
+                cursor.execute(
+                    """
                     SELECT COUNT(DISTINCT mr.message_id)
                     FROM message_recipients mr
                     JOIN messages m ON mr.message_id = m.id
@@ -125,7 +131,9 @@ def verify_via_sqlite(project_slug: str, agent_names: list[str]) -> dict:
                     WHERE p.slug = ?
                       AND a.name = ?
                       AND mr.kind IN ('to', 'cc')
-                """, (project_slug, agent_name))
+                """,
+                    (project_slug, agent_name),
+                )
 
                 row = cursor.fetchone()
                 count = int(row[0]) if row else 0
@@ -134,11 +142,7 @@ def verify_via_sqlite(project_slug: str, agent_names: list[str]) -> dict:
     except Exception as exc:  # pragma: no cover - defensive guard
         return {"error": f"SQLite verification failed: {exc}"}
 
-    return {
-        "messages": message_details,
-        "inbox_counts": inbox_counts,
-        "total_messages": len(message_details)
-    }
+    return {"messages": message_details, "inbox_counts": inbox_counts, "total_messages": len(message_details)}
 
 
 async def test_message_delivery_validation():
@@ -149,22 +153,18 @@ async def test_message_delivery_validation():
         "test_name": "Message Delivery Validation Test (with SQLite Proof)",
         "timestamp": datetime.now().isoformat(),
         "test_dir": str(TEST_DIR),
-        "validations": []
+        "validations": [],
     }
 
     mcp = build_mcp_server()
     async with Client(mcp) as client:
-
         # Step 1: Create project
         print("\n" + "=" * 60)
         print("STEP 1: Creating clean test project")
         print("=" * 60)
 
         project_key = str(Path(tempfile.gettempdir()) / f"test_validation_{TIMESTAMP}")
-        project_result = await client.call_tool(
-            "ensure_project",
-            arguments={"human_key": project_key}
-        )
+        project_result = await client.call_tool("ensure_project", arguments={"human_key": project_key})
         project_data = getattr(project_result, "data", {}) or {}
         project_slug = project_data.get("slug")
         if not project_slug:
@@ -185,8 +185,8 @@ async def test_message_delivery_validation():
                     "program": "test",
                     "model": "test-model",
                     "name": agent_name,
-                    "task_description": f"Test agent {agent_name}"
-                }
+                    "task_description": f"Test agent {agent_name}",
+                },
             )
             print(f"✅ Registered: {agent_name}")
 
@@ -200,21 +200,21 @@ async def test_message_delivery_validation():
                 "sender": "Alice",
                 "to": ["Bob"],
                 "subject": "Test Message 1: Alice to Bob",
-                "body": "This is a direct message from Alice to Bob."
+                "body": "This is a direct message from Alice to Bob.",
             },
             {
                 "sender": "Bob",
                 "to": ["Charlie"],
                 "subject": "Test Message 2: Bob to Charlie",
-                "body": "This is a direct message from Bob to Charlie."
+                "body": "This is a direct message from Bob to Charlie.",
             },
             {
                 "sender": "Alice",
                 "to": ["Bob"],
                 "cc": ["Charlie"],
                 "subject": "Test Message 3: Alice to Bob (CC Charlie)",
-                "body": "This message should reach Bob directly and Charlie via CC."
-            }
+                "body": "This message should reach Bob directly and Charlie via CC.",
+            },
         ]
 
         sent_messages = []
@@ -228,8 +228,8 @@ async def test_message_delivery_validation():
                     "cc": msg_def.get("cc"),
                     "subject": msg_def["subject"],
                     "body_md": msg_def["body"],
-                    "importance": "normal"
-                }
+                    "importance": "normal",
+                },
             )
 
             # Extract message ID from delivery
@@ -246,7 +246,7 @@ async def test_message_delivery_validation():
                 raise RuntimeError(f"Failed to send message {idx}: {msg_result}")
 
             msg_id = deliveries[0]["payload"]["id"]
-            msg_def['message_id'] = msg_id
+            msg_def["message_id"] = msg_id
             sent_messages.append(msg_def)
 
             print(f"✅ Message {idx} sent (ID: {msg_id}): {msg_def['sender']} → {msg_def['to']}")
@@ -274,14 +274,14 @@ async def test_message_delivery_validation():
 
         expected_deliveries = {
             "Alice": 0,  # Only sent messages
-            "Bob": 2,    # Msg 1 (direct) + Msg 3 (direct)
-            "Charlie": 2 # Msg 2 (direct) + Msg 3 (CC)
+            "Bob": 2,  # Msg 1 (direct) + Msg 3 (direct)
+            "Charlie": 2,  # Msg 2 (direct) + Msg 3 (CC)
         }
 
         all_validations_passed = True
 
         for agent_name in agents:
-            actual_count = sqlite_proof['inbox_counts'][agent_name]
+            actual_count = sqlite_proof["inbox_counts"][agent_name]
             expected_count = expected_deliveries[agent_name]
 
             count_valid = actual_count == expected_count
@@ -291,13 +291,15 @@ async def test_message_delivery_validation():
             if not count_valid:
                 all_validations_passed = False
 
-            results["validations"].append({
-                "agent": agent_name,
-                "validation": "message_count",
-                "passed": count_valid,
-                "expected": expected_count,
-                "actual": actual_count
-            })
+            results["validations"].append(
+                {
+                    "agent": agent_name,
+                    "validation": "message_count",
+                    "passed": count_valid,
+                    "expected": expected_count,
+                    "actual": actual_count,
+                }
+            )
 
         # Step 6: Validate message content
         print("\n" + "=" * 60)
@@ -308,22 +310,22 @@ async def test_message_delivery_validation():
         for idx, sent_msg in enumerate(sent_messages, 1):
             # Find corresponding message in SQLite proof
             db_msg = None
-            for msg in sqlite_proof['messages']:
-                if msg['subject'] == sent_msg['subject']:
+            for msg in sqlite_proof["messages"]:
+                if msg["subject"] == sent_msg["subject"]:
                     db_msg = msg
                     break
 
             if db_msg:
-                subject_match = db_msg['subject'] == sent_msg['subject']
-                body_match = db_msg['body'] == sent_msg['body']
-                sender_match = db_msg['sender'] == sent_msg['sender']
+                subject_match = db_msg["subject"] == sent_msg["subject"]
+                body_match = db_msg["body"] == sent_msg["body"]
+                sender_match = db_msg["sender"] == sent_msg["sender"]
 
                 validation = {
                     "message_id": idx,
                     "subject_match": subject_match,
                     "body_match": body_match,
                     "sender_match": sender_match,
-                    "all_match": subject_match and body_match and sender_match
+                    "all_match": subject_match and body_match and sender_match,
                 }
                 content_validations.append(validation)
 
@@ -351,7 +353,7 @@ async def test_message_delivery_validation():
             "validations_passed": sum(1 for v in results["validations"] if v["passed"]),
             "content_validations": len(content_validations),
             "content_validations_passed": sum(1 for v in content_validations if v.get("all_match")),
-            "all_validations_passed": all_validations_passed
+            "all_validations_passed": all_validations_passed,
         }
 
         # Save results
@@ -363,22 +365,24 @@ async def test_message_delivery_validation():
 Message Delivery Validation Test - RESULTS
 =========================================
 
-Test Status: {'✅ SUCCESS' if all_validations_passed else '❌ FAILED'}
+Test Status: {"✅ SUCCESS" if all_validations_passed else "❌ FAILED"}
 Test Directory: {TEST_DIR}
-Timestamp: {results['timestamp']}
+Timestamp: {results["timestamp"]}
 
 Messages Sent: {len(sent_messages)}
 ----------------------------------------
 """
         for idx, msg in enumerate(sent_messages, 1):
-            cc_info = f" (CC: {msg.get('cc')})" if msg.get('cc') else ""
+            cc_info = f" (CC: {msg.get('cc')})" if msg.get("cc") else ""
             summary_text += f"  {idx}. {msg['sender']} → {msg['to']}{cc_info}\n"
             summary_text += f"     Subject: {msg['subject']}\n"
             summary_text += f"     Message ID: {msg['message_id']}\n"
 
         summary_text += f"\nSQLite Database Proof:\n{'-' * 40}\n"
-        for msg in sqlite_proof['messages']:
-            summary_text += f"  ID {msg['id']}: {msg['sender']} → [{', '.join([r['name'] for r in msg['recipients']])}]\n"
+        for msg in sqlite_proof["messages"]:
+            summary_text += (
+                f"  ID {msg['id']}: {msg['sender']} → [{', '.join([r['name'] for r in msg['recipients']])}]\n"
+            )
             summary_text += f"    Subject: {msg['subject']}\n"
             summary_text += f"    Body: {msg['body'][:50]}...\n"
 
@@ -397,7 +401,9 @@ Messages Sent: {len(sent_messages)}
             if val["all_match"]:
                 summary_text += "All fields match\n"
             else:
-                summary_text += f"Subject:{val['subject_match']} Body:{val['body_match']} Sender:{val['sender_match']}\n"
+                summary_text += (
+                    f"Subject:{val['subject_match']} Body:{val['body_match']} Sender:{val['sender_match']}\n"
+                )
 
         summary_text += f"\n{'=' * 40}\n"
         summary_text += f"{'✅ All validations PASSED!' if all_validations_passed else '❌ Some validations FAILED!'}\n"
@@ -419,9 +425,10 @@ if __name__ == "__main__":
     try:
         results = asyncio.run(test_message_delivery_validation())
         print(f"\n📁 All evidence saved to: {results['test_dir']}")
-        exit(0 if results['status'] == 'SUCCESS' else 1)
+        exit(0 if results["status"] == "SUCCESS" else 1)
     except Exception as e:
         print(f"\n❌ TEST FAILED: {e}")
         import traceback
+
         traceback.print_exc()
         exit(1)
