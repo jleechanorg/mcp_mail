@@ -10,7 +10,6 @@ import importlib
 import json
 import logging
 import re
-from collections.abc import MutableMapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
@@ -20,13 +19,17 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import NoResultFound
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.types import Receive, Scope, Send
 
 from .app import (
+    _create_message,
+    _ensure_project,
     _expire_stale_file_reservations,
+    _get_agent_by_name_optional,
+    _message_frontmatter,
     _tool_metrics_snapshot,
     build_mcp_server,
     get_project_sibling_data,
@@ -49,6 +52,7 @@ from .storage import (
     get_timeline_commits,
     write_agent_profile,
     write_file_reservation_record,
+    write_message_bundle,
 )
 
 
@@ -76,6 +80,7 @@ def _decode_jwt_header_segment(token: str) -> dict[str, object] | None:
 
 
 _LOGGING_CONFIGURED = False
+_SLACK_SYNC_PROJECT_NAME = "Slack Sync"
 
 
 def _configure_logging(settings: Settings) -> None:
@@ -129,9 +134,10 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         self._allow_localhost = allow_localhost
 
     async def dispatch(self, request: Request, call_next):
+        path = request.url.path or ""
         if request.method == "OPTIONS":  # allow CORS preflight
             return await call_next(request)
-        if request.url.path.startswith("/health/"):
+        if path.startswith("/health/") or path.startswith("/slack/"):
             return await call_next(request)
         # Allow localhost without Authorization when enabled
         try:
@@ -300,8 +306,9 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
         return True
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint):
-        # Allow CORS preflight and health endpoints
-        if request.method == "OPTIONS" or request.url.path.startswith("/health/"):
+        # Allow CORS preflight, health checks, and Slack webhooks
+        path = request.url.path or ""
+        if request.method == "OPTIONS" or path.startswith("/health/") or path.startswith("/slack/"):
             return await call_next(request)
 
         # Only read/patch body for POST requests. GET (including SSE) must not receive http.request messages.
@@ -317,7 +324,7 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
             except Exception:
                 body_bytes = b""
 
-        kind, tool_name = self._classify_request(request.url.path, request.method, body_bytes)
+        kind, tool_name = self._classify_request(path, request.method, body_bytes)
 
         # JWT auth (if enabled)
         if self._jwt_enabled:
@@ -896,6 +903,173 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
     async def oauth_meta_root_mcp() -> JSONResponse:
         return JSONResponse({"mcp_oauth": False})
 
+    # Slack Events API webhook endpoint for bidirectional sync
+    @fastapi_app.post("/slack/events")
+    async def slack_events_webhook(request: Request) -> JSONResponse:
+        """Handle incoming Slack events for bidirectional sync.
+
+        Implements:
+        - URL verification challenge (for Slack app setup)
+        - Signature verification (security)
+        - Message event processing (Slack → MCP Mail sync)
+        - Reaction handling (optional acknowledgment sync)
+
+        Reference: https://api.slack.com/apis/connections/events-api
+        """
+        logger = structlog.get_logger("slack")
+
+        # Read raw body for signature verification
+        body_bytes = await request.body()
+
+        # Verify Slack request signature if signing secret is configured
+        if settings.slack.signing_secret:
+            from .slack_integration import SlackClient
+
+            timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
+            signature = request.headers.get("X-Slack-Signature", "")
+
+            if not SlackClient.verify_signature(
+                signing_secret=settings.slack.signing_secret,
+                timestamp=timestamp,
+                signature=signature,
+                body=body_bytes,
+            ):
+                logger.warning("slack_signature_verification_failed")
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid signature")
+
+        # Parse JSON payload
+        try:
+            payload = json.loads(body_bytes.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            logger.error("slack_payload_decode_error", error=str(e))
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON") from e
+
+        event_type = payload.get("type")
+        logger.info("slack_event_received", event_type=event_type)
+
+        # Handle URL verification challenge (required for Slack app setup)
+        if event_type == "url_verification":
+            challenge = payload.get("challenge", "")
+            logger.info("slack_url_verification", challenge=challenge[:20])
+            return JSONResponse({"challenge": challenge})
+
+        # Handle event callback
+        if event_type == "event_callback":
+            event = payload.get("event", {})
+            event_subtype = event.get("type")
+            logger.info("slack_event_callback", subtype=event_subtype)
+
+            # Handle message events
+            if event_subtype == "message":
+                # Import handler function
+                from .slack_integration import handle_slack_message_event
+
+                # Process Slack message and get MCP message details
+                message_info = await handle_slack_message_event(event, settings)
+
+                if message_info:
+                    # Create MCP message from Slack event
+                    try:
+                        # Ensure project exists
+                        project = await _ensure_project(_SLACK_SYNC_PROJECT_NAME)
+
+                        # Get or create SlackBridge agent
+                        sender_name = message_info["sender_name"]
+                        sender_agent = await _get_agent_by_name_optional(sender_name)
+
+                        if not sender_agent:
+                            # Auto-create SlackBridge system agent
+                            from .models import Agent
+
+                            async with get_session() as session:
+                                sender_agent = Agent(
+                                    name=sender_name,
+                                    project_id=project.id,
+                                    program_name="slack",
+                                    is_active=True,
+                                )
+                                session.add(sender_agent)
+                                await session.commit()
+                                await session.refresh(sender_agent)
+                            logger.info("slack_bridge_agent_created", agent_name=sender_name)
+
+                        # Get all active agents as recipients (broadcast)
+                        from .models import Agent
+
+                        async with get_session() as session:
+                            result = await session.execute(
+                                select(Agent).where(
+                                    cast(Any, Agent.project_id) == project.id,
+                                    cast(Any, Agent.is_active).is_(True),
+                                    cast(Any, Agent.name) != sender_name,  # Don't send to self
+                                )
+                            )
+                            recipient_agents = list(result.scalars().all())
+
+                        if not recipient_agents:
+                            logger.warning("slack_no_recipients", project=project.slug)
+                            return JSONResponse({"ok": True, "message": "No active recipients"})
+
+                        # Create message
+                        recipients_list = [(agent, "to") for agent in recipient_agents]
+                        message = await _create_message(
+                            project=project,
+                            sender=sender_agent,
+                            subject=message_info["subject"],
+                            body_md=message_info["body_md"],
+                            recipients=recipients_list,
+                            importance="normal",
+                            ack_required=False,
+                            thread_id=message_info.get("thread_id"),
+                            attachments=[],
+                        )
+
+                        # Write message to archive
+                        to_agents = [r[0] for r in recipients_list if r[1] == "to"]
+                        cc_agents = [r[0] for r in recipients_list if r[1] == "cc"]
+                        frontmatter = _message_frontmatter(
+                            message=message,
+                            project=project,
+                            sender=sender_agent,
+                            to_agents=to_agents,
+                            cc_agents=cc_agents,
+                        )
+                        bundle = {
+                            "message_uuid": message.uuid,
+                            "subject": message.subject,
+                            "body_md": message.body_md,
+                            "importance": message.importance,
+                            "frontmatter": frontmatter,
+                        }
+                        await write_message_bundle(bundle)
+
+                        logger.info(
+                            "slack_message_created",
+                            message_id=message.uuid[:8],
+                            subject=message.subject[:50],
+                            recipients=len(recipient_agents),
+                        )
+
+                        return JSONResponse({"ok": True, "message_id": message.uuid})
+
+                    except Exception as e:
+                        logger.error("slack_message_creation_failed", error=str(e))
+                        raise HTTPException(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to create message: {e}"
+                        ) from e
+                else:
+                    # Message was filtered/ignored (e.g., bot message, wrong channel)
+                    return JSONResponse({"ok": True, "message": "Event ignored"})
+
+            # Handle reaction_added events (future: map to acknowledgments)
+            elif event_subtype == "reaction_added":
+                logger.info("slack_reaction_received", reaction=event.get("reaction"))
+                # TODO: Implement reaction → acknowledgment mapping
+                return JSONResponse({"ok": True, "message": "Reaction handling not yet implemented"})
+
+        # Return success for unhandled event types
+        return JSONResponse({"ok": True})
+
     # A minimal stateless ASGI adapter that does not rely on ASGI lifespan management
     # and runs a fresh StreamableHTTP transport per request.
     from mcp.server.streamable_http import StreamableHTTPServerTransport
@@ -975,7 +1149,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         status_code = 200
         headers: dict[str, str] = {}
 
-        async def _send(message: MutableMapping[str, Any]) -> None:
+        async def _send(message: dict) -> None:
             nonlocal response_body, status_code, headers
             if message.get("type") == "http.response.start":
                 status_code = int(message.get("status", 200))
