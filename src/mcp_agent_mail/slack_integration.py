@@ -745,6 +745,8 @@ async def handle_slack_message_event(
         "slack_channel": channel_id,
         "slack_ts": message_ts,
         "slack_thread_ts": thread_ts,
+        # TODO: mentioned_users extracted for future targeted delivery feature
+        # Could be used to send messages only to mentioned agents instead of broadcast
         "mentioned_users": mentioned_users,
     }
 

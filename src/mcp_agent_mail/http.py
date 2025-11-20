@@ -137,7 +137,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         path = request.url.path or ""
         if request.method == "OPTIONS":  # allow CORS preflight
             return await call_next(request)
-        if path.startswith("/health/") or path.startswith("/slack/"):
+        if path.startswith("/health/") or path == "/slack/events":
             return await call_next(request)
         # Allow localhost without Authorization when enabled
         try:
@@ -308,7 +308,7 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint):
         # Allow CORS preflight, health checks, and Slack webhooks
         path = request.url.path or ""
-        if request.method == "OPTIONS" or path.startswith("/health/") or path.startswith("/slack/"):
+        if request.method == "OPTIONS" or path.startswith("/health/") or path == "/slack/events":
             return await call_next(request)
 
         # Only read/patch body for POST requests. GET (including SSE) must not receive http.request messages.
@@ -1003,7 +1003,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                 select(Agent).where(
                                     cast(Any, Agent.project_id) == project.id,
                                     cast(Any, Agent.is_active).is_(True),
-                                    cast(Any, Agent.name) != sender_name,  # Don't send to self
+                                    cast(Any, Agent.id) != sender_agent.id,  # Don't send to self
                                 )
                             )
                             recipient_agents = list(result.scalars().all())
