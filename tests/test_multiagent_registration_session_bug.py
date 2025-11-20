@@ -121,8 +121,9 @@ async def test_multiple_agents_register_with_global_inbox(isolated_env):
                 "agent_name": "Agent3",
             },
         )
-        # If inbox fetch succeeds, registration worked correctly
-        assert "result" in agent3_inbox.structured_content
+        messages = agent3_inbox.structured_content["result"]
+        assert isinstance(messages, list)
+        assert len(messages) >= 0  # Agent3 may have zero messages, but structure should be correct
 
 
 @pytest.mark.asyncio
@@ -172,16 +173,17 @@ async def test_agent_reregistration_with_same_name(isolated_env):
 
 
 @pytest.mark.asyncio
-async def test_concurrent_agent_registration_same_project(isolated_env):
+async def test_sequential_agent_registration_same_project(isolated_env):
     """
-    Test that concurrent agent registrations in the same project don't cause
-    session conflicts or race conditions.
+    Test that multiple agents can register sequentially in the same project without
+    session errors.
 
-    This is a stress test for the session management fix.
+    This is a stress test for the session management fix, ensuring that registering
+    several agents one after another does not cause session conflicts or errors.
 
-    Note: We register agents sequentially since concurrent registration may have
-    race conditions in agent name uniqueness checking. The key test is that
-    multiple agents can register in the same project without session errors.
+    Note: Agents are registered sequentially (not concurrently) to avoid race conditions
+    in agent name uniqueness checking. The key test is that multiple agents can register
+    in the same project without session errors.
     """
     server = build_mcp_server()
     async with Client(server) as client:

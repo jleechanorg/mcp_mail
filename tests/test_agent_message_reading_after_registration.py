@@ -1,6 +1,6 @@
 """Test for agent message reading after registration bug.
 
-This test reproduces the issue where agents can't properly read messages
+This test validates the fix for the issue where agents couldn't properly read messages
 immediately after registration.
 """
 
