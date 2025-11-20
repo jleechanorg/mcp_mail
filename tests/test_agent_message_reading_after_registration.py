@@ -1,7 +1,7 @@
 """Test for agent message reading after registration bug.
 
-This test reproduces the issue where agents can't properly read messages
-immediately after registration.
+This test validates the fix for the issue where agents couldn't properly read
+messages immediately after registration.
 """
 
 from __future__ import annotations
@@ -64,6 +64,8 @@ async def test_agent_reads_messages_immediately_after_registration(isolated_env)
             },
         )
         assert send_result.data["count"] > 0
+        assert "deliveries" in send_result.data
+        assert send_result.data["deliveries"], "Expected at least one delivery"
         message_id = send_result.data["deliveries"][0]["payload"]["id"]
 
         # Step 4: Recipient immediately fetches inbox
@@ -77,10 +79,15 @@ async def test_agent_reads_messages_immediately_after_registration(isolated_env)
         )
 
         # Step 5: Verify message is visible
-        inbox_messages = inbox_result.structured_content["result"]
+        inbox_messages = (
+            inbox_result.structured_content["result"]
+            if hasattr(inbox_result, "structured_content")
+            else inbox_result
+        )
         assert len(inbox_messages) > 0, "Inbox should not be empty after message was sent"
-        assert any(msg["id"] == message_id for msg in inbox_messages), \
-            f"Message {message_id} not found in inbox. Got: {inbox_messages}"
+        matching = [msg for msg in inbox_messages if msg["id"] == message_id]
+        assert matching, f"Message {message_id} not found in inbox. Got: {inbox_messages}"
+        assert matching[0]["subject"] == "Test Message"
 
 
 @pytest.mark.asyncio
@@ -115,7 +122,11 @@ async def test_brand_new_agent_fetch_inbox_empty(isolated_env):
         )
 
         # Should return empty list, not error
-        inbox_messages = inbox_result.structured_content["result"]
+        inbox_messages = (
+            inbox_result.structured_content["result"]
+            if hasattr(inbox_result, "structured_content")
+            else inbox_result
+        )
         assert isinstance(inbox_messages, list)
         assert len(inbox_messages) == 0
 
@@ -160,6 +171,7 @@ async def test_agent_auto_fetch_inbox_on_registration(isolated_env):
         assert "inbox" in recipient_result.data
         assert recipient_result.data["agent"]["name"] == "AutoFetchRecipient"
         assert isinstance(recipient_result.data["inbox"], list)
+        first_agent_id = recipient_result.data["agent"]["id"]
         # Inbox should be empty since no messages sent yet
         assert len(recipient_result.data["inbox"]) == 0
 
@@ -188,5 +200,6 @@ async def test_agent_auto_fetch_inbox_on_registration(isolated_env):
         )
 
         # Now inbox should have the message
+        assert update_result.data["agent"]["id"] == first_agent_id
         assert len(update_result.data["inbox"]) == 1
         assert update_result.data["inbox"][0]["subject"] == "Late message"
