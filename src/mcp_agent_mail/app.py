@@ -7474,11 +7474,16 @@ def build_mcp_server() -> FastMCP:
             # Get permalink for the message
             permalink = ""
             if result.get("ok") and result.get("channel") and result.get("ts"):
-                # Permalink retrieval is non-critical; ignore errors and proceed without permalink
-                with suppress(Exception):
+                # Permalink retrieval is non-critical; log errors at debug level and proceed without permalink
+                try:
                     permalink = await _slack_client.get_permalink(
                         channel=result["channel"],
                         message_ts=result["ts"],
+                    )
+                except Exception as ex:
+                    logger.debug(
+                        f"Failed to retrieve Slack permalink for channel={result['channel']} "
+                        f"ts={result['ts']}: {ex}"
                     )
 
             await ctx.info(f"Posted message to Slack channel {channel}")
