@@ -985,7 +985,9 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                 sender_agent = Agent(
                                     name=sender_name,
                                     project_id=project.id,
-                                    program_name="slack",
+                                    program="slack_bridge",
+                                    model="slack-events",
+                                    task_description="Bridges Slack messages into MCP Agent Mail",
                                     is_active=True,
                                 )
                                 session.add(sender_agent)
@@ -1027,30 +1029,34 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         # Write message to archive
                         to_agents = [r[0] for r in recipients_list if r[1] == "to"]
                         cc_agents = [r[0] for r in recipients_list if r[1] == "cc"]
+                        bcc_agents = [r[0] for r in recipients_list if r[1] == "bcc"]
                         frontmatter = _message_frontmatter(
                             message=message,
                             project=project,
                             sender=sender_agent,
                             to_agents=to_agents,
                             cc_agents=cc_agents,
+                            bcc_agents=bcc_agents,
+                            attachments=[],
                         )
-                        bundle = {
-                            "message_uuid": message.uuid,
-                            "subject": message.subject,
-                            "body_md": message.body_md,
-                            "importance": message.importance,
-                            "frontmatter": frontmatter,
-                        }
-                        await write_message_bundle(bundle)
+                        # Get archive and write message bundle
+                        archive = await ensure_archive(settings, project.slug)
+                        await write_message_bundle(
+                            archive=archive,
+                            message=frontmatter,
+                            body_md=message.body_md,
+                            sender=sender_agent.name,
+                            recipients=[agent.name for agent in recipient_agents],
+                        )
 
                         logger.info(
                             "slack_message_created",
-                            message_id=message.uuid[:8],
+                            message_id=message.id,
                             subject=message.subject[:50],
                             recipients=len(recipient_agents),
                         )
 
-                        return JSONResponse({"ok": True, "message_id": message.uuid})
+                        return JSONResponse({"ok": True, "message_id": str(message.id)})
 
                     except Exception as e:
                         logger.error("slack_message_creation_failed", error=str(e))

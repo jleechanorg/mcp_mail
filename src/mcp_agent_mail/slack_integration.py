@@ -23,6 +23,7 @@ import asyncio
 import hashlib
 import hmac
 import logging
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -413,8 +414,8 @@ class SlackClient:
             https://api.slack.com/authentication/verifying-requests-from-slack
         """
         if not signing_secret:
-            logger.warning("SLACK_SIGNING_SECRET not set, skipping signature verification")
-            return True
+            logger.warning("SLACK_SIGNING_SECRET not set, rejecting request (signature verification required)")
+            return False
 
         try:
             # Reject old timestamps to prevent replay attacks
@@ -714,8 +715,6 @@ async def handle_slack_message_event(
 
     # Extract @mentions for targeted delivery
     # Slack format: <@U1234567890|username> or <@U1234567890>
-    import re
-
     mention_pattern = r"<@([A-Z0-9]+)(?:\|[^>]+)?>"
     mentioned_users = re.findall(mention_pattern, text)
 
