@@ -125,7 +125,7 @@ def write_slack_message(
             "email": f"{sender_name}@slack.local",
         },
         "to": {"agent": "all"},  # Broadcast to all agents
-        "subject": f"[Slack] {text.split('\n')[0][:100]}",
+        "subject": "[Slack] " + text.split("\n")[0][:100],
         "body": text,
         "metadata": {
             "slack_channel": channel_id,
