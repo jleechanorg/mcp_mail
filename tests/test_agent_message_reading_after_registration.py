@@ -80,9 +80,9 @@ async def test_agent_reads_messages_immediately_after_registration(isolated_env)
 
         # Step 5: Verify message is visible
         inbox_messages = (
-            inbox_result.structured_content["result"]
+            inbox_result.structured_content.get("result", inbox_result.data)
             if hasattr(inbox_result, "structured_content")
-            else inbox_result
+            else inbox_result.data
         )
         assert len(inbox_messages) > 0, "Inbox should not be empty after message was sent"
         matching = [msg for msg in inbox_messages if msg["id"] == message_id]
@@ -123,9 +123,9 @@ async def test_brand_new_agent_fetch_inbox_empty(isolated_env):
 
         # Should return empty list, not error
         inbox_messages = (
-            inbox_result.structured_content["result"]
+            inbox_result.structured_content.get("result", inbox_result.data)
             if hasattr(inbox_result, "structured_content")
-            else inbox_result
+            else inbox_result.data
         )
         assert isinstance(inbox_messages, list)
         assert len(inbox_messages) == 0

@@ -46,7 +46,7 @@ await _ensure_global_inbox_agent(project)  # Line 687
 ### Step 2: Run Tests
 
 ```bash
-$ uv run pytest tests/test_multiagent_registration_session_bug.py::test_multiple_agents_register_with_global_inbox -x
+uv run pytest tests/test_multiagent_registration_session_bug.py::test_multiple_agents_register_with_global_inbox -x
 ```
 
 **Result**: ❌ **FAILED**
@@ -78,7 +78,7 @@ await _ensure_global_inbox_agent(project, session=session)  # Line 687
 ### Step 4: Verify Tests Pass
 
 ```bash
-$ uv run pytest tests/test_multiagent_registration_session_bug.py tests/test_agent_message_reading_after_registration.py -v
+uv run pytest tests/test_multiagent_registration_session_bug.py tests/test_agent_message_reading_after_registration.py -v
 ```
 
 **Result**: ✅ **6 passed in 13.53s**
@@ -213,4 +213,4 @@ def test_multiple_agents_register_with_global_inbox():
 - Beads Issue: MCP-fq5
 - Fix Commit: `68c4751` (Release v0.1.9)
 - Test Commit: `df0bbb2`
-- SQLAlchemy Docs: https://sqlalche.me/e/20/bhk3
+- SQLAlchemy Docs: <https://sqlalche.me/e/20/bhk3>

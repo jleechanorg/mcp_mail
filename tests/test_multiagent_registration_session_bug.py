@@ -110,9 +110,9 @@ async def test_multiple_agents_register_with_global_inbox(isolated_env):
             },
         )
         messages = (
-            agent2_inbox.structured_content["result"]
+            agent2_inbox.structured_content.get("result", agent2_inbox.data)
             if hasattr(agent2_inbox, "structured_content")
-            else agent2_inbox
+            else agent2_inbox.data
         )
         # Agent2 should have at least one message
         assert len(messages) >= 1
@@ -126,9 +126,9 @@ async def test_multiple_agents_register_with_global_inbox(isolated_env):
             },
         )
         messages = (
-            agent3_inbox.structured_content["result"]
+            agent3_inbox.structured_content.get("result", agent3_inbox.data)
             if hasattr(agent3_inbox, "structured_content")
-            else agent3_inbox
+            else agent3_inbox.data
         )
         assert isinstance(messages, list)
         assert len(messages) >= 1
