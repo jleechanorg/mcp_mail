@@ -26,12 +26,12 @@ async def test_list_extended_tools(isolated_env):
         assert "by_category" in result
         assert "tools" in result
 
-        # Check correct count (18 extended tools)
-        assert result["total"] == 18
+        # Check correct count (21 extended tools)
+        assert result["total"] == 21
         assert result["total"] == len(EXTENDED_TOOLS)
 
         # Check all tools have valid metadata
-        assert len(result["tools"]) == 18
+        assert len(result["tools"]) == 21
         for tool in result["tools"]:
             assert "name" in tool
             assert "category" in tool
@@ -44,9 +44,9 @@ async def test_list_extended_tools(isolated_env):
         all_categorized_tools = []
         for tools_list in result["by_category"].values():
             all_categorized_tools.extend(tools_list)
-        # All 18 extended tools should be categorized
+        # All 21 extended tools should be categorized
         # (contact-related tools were removed from EXTENDED_TOOLS entirely)
-        assert len(all_categorized_tools) == 18
+        assert len(all_categorized_tools) == 21
 
 
 @pytest.mark.asyncio
@@ -139,8 +139,8 @@ def test_core_and_extended_tools_disjoint():
 
 
 def test_extended_tools_count():
-    """Test that we have exactly 18 extended tools (includes 3 build-slot tools)."""
-    assert len(EXTENDED_TOOLS) == 18, f"Expected 18 extended tools, but found {len(EXTENDED_TOOLS)}"
+    """Test that we have exactly 21 extended tools (includes 3 build-slot tools and 3 Slack tools)."""
+    assert len(EXTENDED_TOOLS) == 21, f"Expected 21 extended tools, but found {len(EXTENDED_TOOLS)}"
 
 
 def test_core_tools_count():
