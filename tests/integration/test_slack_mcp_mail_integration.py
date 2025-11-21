@@ -125,7 +125,7 @@ def write_slack_message(
             "email": f"{sender_name}@slack.local",
         },
         "to": {"agent": "all"},  # Broadcast to all agents
-        "subject": f"[Slack] {text.split(chr(10))[0][:100]}",
+        "subject": f"[Slack] {text.split('\n')[0][:100]}",
         "body": text,
         "metadata": {
             "slack_channel": channel_id,
@@ -529,7 +529,7 @@ async def test_update_slack_message_metadata(mcp_mail_repo):
         "ts": "1234567890.123456",
     }
 
-    _msg_id = write_slack_message(mcp_mail_repo, event)
+    _ = write_slack_message(mcp_mail_repo, event)
 
     # Simulate adding reaction metadata (in real implementation)
     messages = read_messages(mcp_mail_repo)

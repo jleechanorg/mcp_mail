@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import base64
 import contextlib
+from collections.abc import MutableMapping
 import importlib
 import json
 import logging
@@ -80,7 +81,6 @@ def _decode_jwt_header_segment(token: str) -> dict[str, object] | None:
 
 
 _LOGGING_CONFIGURED = False
-_SLACK_SYNC_PROJECT_NAME = "Slack Sync"
 
 
 def _configure_logging(settings: Settings) -> None:
@@ -137,7 +137,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         path = request.url.path or ""
         if request.method == "OPTIONS":  # allow CORS preflight
             return await call_next(request)
-        if path.startswith("/health/") or path.startswith("/slack/"):
+        if path.startswith("/health/") or path == "/slack/events":
             return await call_next(request)
         # Allow localhost without Authorization when enabled
         try:
@@ -306,9 +306,21 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
         return True
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint):
-        # Allow CORS preflight, health checks, and Slack webhooks
+        # Allow CORS preflight and health checks
         path = request.url.path or ""
-        if request.method == "OPTIONS" or path.startswith("/health/") or path.startswith("/slack/"):
+        if request.method == "OPTIONS" or path.startswith("/health/"):
+            return await call_next(request)
+
+        # Apply dedicated rate limiting for Slack webhooks
+        if path == "/slack/events":
+            slack_rpm = int(getattr(self.settings.http, "rate_limit_slack_per_minute", 120) or 120)
+            slack_burst = int(getattr(self.settings.http, "rate_limit_slack_burst", 0) or 0)
+            slack_burst = slack_burst if slack_burst > 0 else max(1, slack_rpm)
+            client_ip = request.client.host if request.client else "unknown"
+            key = f"slack:{client_ip}"
+            allowed = await self._consume_bucket(key, slack_rpm / 60.0, slack_burst)
+            if not allowed:
+                return JSONResponse({"detail": "Rate limit exceeded"}, status_code=status.HTTP_429_TOO_MANY_REQUESTS)
             return await call_next(request)
 
         # Only read/patch body for POST requests. GET (including SSE) must not receive http.request messages.
@@ -317,7 +329,7 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
             try:
                 body_bytes = await request.body()
 
-                async def _receive() -> dict:
+                async def _receive() -> MutableMapping[str, Any]:
                     return {"type": "http.request", "body": body_bytes, "more_body": False}
 
                 cast(Any, request)._receive = _receive
@@ -971,7 +983,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     # Create MCP message from Slack event
                     try:
                         # Ensure project exists
-                        project = await _ensure_project(_SLACK_SYNC_PROJECT_NAME)
+                        project = await _ensure_project(settings.slack.sync_project_name)
 
                         # Get or create SlackBridge agent
                         sender_name = message_info["sender_name"]
@@ -1003,7 +1015,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                 select(Agent).where(
                                     cast(Any, Agent.project_id) == project.id,
                                     cast(Any, Agent.is_active).is_(True),
-                                    cast(Any, Agent.name) != sender_name,  # Don't send to self
+                                    cast(Any, Agent.id) != sender_agent.id,  # Don't send to self
                                 )
                             )
                             recipient_agents = list(result.scalars().all())
