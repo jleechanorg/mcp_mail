@@ -6,11 +6,11 @@ import argparse
 import asyncio
 import base64
 import contextlib
-from collections.abc import MutableMapping
 import importlib
 import json
 import logging
 import re
+from collections.abc import MutableMapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
@@ -1059,6 +1059,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                             body_md=message.body_md,
                             sender=sender_agent.name,
                             recipients=[agent.name for agent in recipient_agents],
+                            extra_paths=[],
                         )
 
                         logger.info(

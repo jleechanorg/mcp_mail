@@ -115,6 +115,8 @@ def write_slack_message(
     thread_ts = slack_event.get("thread_ts")
 
     # Create MCP message from Slack event
+    subject_line = text.splitlines()[0][:100] if text else ""
+
     message = {
         "id": msg_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -125,7 +127,7 @@ def write_slack_message(
             "email": f"{sender_name}@slack.local",
         },
         "to": {"agent": "all"},  # Broadcast to all agents
-        "subject": f"[Slack] {text.split('\n')[0][:100]}",
+        "subject": f"[Slack] {subject_line}",
         "body": text,
         "metadata": {
             "slack_channel": channel_id,
