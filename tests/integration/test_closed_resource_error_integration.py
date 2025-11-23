@@ -40,6 +40,7 @@ def _run_server(port: int, db_path: str, log_path: str) -> None:
         sys.stderr = log_file
 
         import uvicorn
+
         from mcp_agent_mail.app import build_mcp_server
         from mcp_agent_mail.config import clear_settings_cache, get_settings
         from mcp_agent_mail.http import build_http_app
