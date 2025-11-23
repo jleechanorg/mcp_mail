@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
+import anyio
 import structlog
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, status
@@ -932,10 +933,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 security_settings=None,
             )
 
-            # Import anyio for ClosedResourceError handling - client disconnects can cause
-            # the message router to raise this when streams are closed mid-operation
-            import anyio
-
             try:
                 async with http_transport.connect() as streams:
                     read_stream, write_stream = streams
@@ -955,26 +952,37 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         # Cancel server_task before exiting context to prevent ClosedResourceError
                         # from the message router trying to read from closed streams
                         server_task.cancel()
-                        with contextlib.suppress(Exception):
+                        # Wait briefly to ensure cancellation completes before closing streams
+                        try:
+                            await asyncio.wait_for(server_task, timeout=0.1)
+                        except (asyncio.CancelledError, asyncio.TimeoutError):
+                            pass  # Expected - task was cancelled or timed out
+                        try:
                             await http_transport.terminate()
-                        with contextlib.suppress(Exception, asyncio.CancelledError):
-                            await server_task
+                        except anyio.ClosedResourceError:
+                            pass  # Expected on client disconnect
+                        except Exception as exc:
+                            structlog.get_logger().error(
+                                "Unexpected error during http_transport.terminate()",
+                                exc_info=True,
+                                exception=exc,
+                            )
             except anyio.ClosedResourceError:
                 # Gracefully handle client disconnects - this is expected behavior when
                 # clients close connections during message routing (e.g., Codex, OAuth flows)
                 pass
-            except ExceptionGroup as eg:
+            except (ExceptionGroup, BaseExceptionGroup) as eg:
                 # Handle exception groups from anyio task groups - filter out ClosedResourceError
                 # and re-raise if there are other non-suppressible exceptions
                 non_closed = [e for e in eg.exceptions if not isinstance(e, anyio.ClosedResourceError)]
                 if non_closed:
-                    raise ExceptionGroup(eg.message, non_closed) from eg
+                    # Use derive() to preserve exception context and traceback
+                    if hasattr(eg, "derive"):
+                        raise eg.derive(non_closed) from eg
+                    else:
+                        # Fallback for older Python versions without derive()
+                        raise type(eg)(eg.message, non_closed) from eg
                 # All exceptions were ClosedResourceError, suppress silently
-            except BaseExceptionGroup as beg:
-                # Same handling for BaseExceptionGroup (Python 3.11+)
-                non_closed = [e for e in beg.exceptions if not isinstance(e, anyio.ClosedResourceError)]
-                if non_closed:
-                    raise BaseExceptionGroup(beg.message, non_closed) from beg
 
     # Mount at both '/base' and '/base/' to tolerate either form from clients/tests
     mount_base = settings.http.path or "/mcp"
