@@ -161,7 +161,9 @@ After applying the fix and running the same reproduction steps:
 ## Commit
 
 ```text
-88d187e Fix ClosedResourceError crash when client disconnects during MCP request
+4f52383 Fix ClosedResourceError crash when client disconnects during MCP request
+69cb601 Fix ruff linting errors in test files
+bcd4ddd Address review feedback (from PR #70)
 ```
 
 Branch: `claude/fix-mail-crash-01ALo4EddmAe7DM4TsyRYXsN`
