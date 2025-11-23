@@ -31,12 +31,10 @@ def _rpc(method: str, params: dict) -> dict[str, Any]:
 
 @pytest.mark.asyncio
 async def test_closed_resource_error_handled_gracefully(isolated_env, monkeypatch):
-    """Test that ClosedResourceError from client disconnect doesn't crash the server.
+    """Sanity check that standard requests do not crash the server.
 
-    This test simulates the scenario where:
-    1. Client connects to MCP server
-    2. During message routing, connection is closed (e.g., client disconnects)
-    3. The server should handle this gracefully without propagating the exception
+    This ensures baseline HTTP handling is stable before simulating disconnects
+    in later tests.
     """
     with contextlib.suppress(Exception):
         _config.clear_settings_cache()

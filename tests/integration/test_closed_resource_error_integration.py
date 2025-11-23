@@ -40,7 +40,6 @@ def _run_server(port: int, db_path: str, log_path: str) -> None:
         sys.stderr = log_file
 
         import uvicorn
-
         from mcp_agent_mail.app import build_mcp_server
         from mcp_agent_mail.config import clear_settings_cache, get_settings
         from mcp_agent_mail.http import build_http_app
@@ -121,10 +120,11 @@ async def test_server_handles_disconnect_gracefully(real_server):
                 headers={"Accept": "text/event-stream"},
             ) as response:
                 # Read first chunk then abort
-                async for _chunk in response.aiter_bytes():
+                async for _ in response.aiter_bytes():
                     break  # Abort after first chunk
         except Exception:
-            pass  # Expected - we're aborting
+            # Exceptions are expected here due to client disconnect; ignore to allow test to proceed.
+            pass
 
         # Give server time to process
         await asyncio.sleep(0.3)
@@ -157,9 +157,10 @@ async def test_server_continues_after_disconnect(real_server):
                 json={"jsonrpc": "2.0", "id": "1", "method": "tools/list", "params": {}},
                 headers={"Accept": "text/event-stream"},
             ) as response:
-                async for _chunk in response.aiter_bytes():
+                async for _ in response.aiter_bytes():
                     break
         except Exception:
+            # Exceptions are expected here due to client disconnect; ignore to allow test to proceed.
             pass
 
         # Give server time to process the error
@@ -196,9 +197,10 @@ async def test_multiple_disconnects_dont_crash_server(real_server):
                     json={"jsonrpc": "2.0", "id": str(i), "method": "tools/list", "params": {}},
                     headers={"Accept": "text/event-stream"},
                 ) as response:
-                    async for _chunk in response.aiter_bytes():
+                    async for _ in response.aiter_bytes():
                         break
             except Exception:
+                # Ignore exceptions caused by intentional client disconnects.
                 pass
             await asyncio.sleep(0.1)
 
@@ -239,9 +241,10 @@ async def test_no_asgi_exception_in_logs(real_server):
                     json={"jsonrpc": "2.0", "id": str(i), "method": "tools/list", "params": {}},
                     headers={"Accept": "text/event-stream"},
                 ) as response:
-                    async for _chunk in response.aiter_bytes():
+                    async for _ in response.aiter_bytes():
                         break
             except Exception:
+                # Ignore exceptions caused by intentional client disconnects.
                 pass
 
     await asyncio.sleep(0.5)
@@ -254,5 +257,7 @@ async def test_no_asgi_exception_in_logs(real_server):
         f"ASGI application exception should not be logged after fix.\nLog:\n{log_content}"
 
     # ExceptionGroup should also not propagate
-    assert "ExceptionGroup" not in log_content or "BaseExceptionGroup" not in log_content, \
-        f"ExceptionGroup should not propagate after fix.\nLog:\n{log_content}"
+    assert (
+        "ExceptionGroup" not in log_content
+        and "BaseExceptionGroup" not in log_content
+    ), f"ExceptionGroup should not propagate after fix.\nLog:\n{log_content}"
