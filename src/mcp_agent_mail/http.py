@@ -932,25 +932,49 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 security_settings=None,
             )
 
-            async with http_transport.connect() as streams:
-                read_stream, write_stream = streams
-                server_task = asyncio.create_task(
-                    self._server._mcp_server.run(
-                        read_stream,
-                        write_stream,
-                        self._server._mcp_server.create_initialization_options(),
-                        stateless=True,
+            # Import anyio for ClosedResourceError handling - client disconnects can cause
+            # the message router to raise this when streams are closed mid-operation
+            import anyio
+
+            try:
+                async with http_transport.connect() as streams:
+                    read_stream, write_stream = streams
+                    server_task = asyncio.create_task(
+                        self._server._mcp_server.run(
+                            read_stream,
+                            write_stream,
+                            self._server._mcp_server.create_initialization_options(),
+                            stateless=True,
+                        )
                     )
-                )
-                # No response wrapping/unwrapping - just pass through MCP responses as-is
-                # MCP clients can handle JSON-RPC format properly
-                try:
-                    await http_transport.handle_request(new_scope, receive, send)
-                finally:
-                    with contextlib.suppress(Exception):
-                        await http_transport.terminate()
-                    with contextlib.suppress(Exception):
-                        await server_task
+                    # No response wrapping/unwrapping - just pass through MCP responses as-is
+                    # MCP clients can handle JSON-RPC format properly
+                    try:
+                        await http_transport.handle_request(new_scope, receive, send)
+                    finally:
+                        # Cancel server_task before exiting context to prevent ClosedResourceError
+                        # from the message router trying to read from closed streams
+                        server_task.cancel()
+                        with contextlib.suppress(Exception):
+                            await http_transport.terminate()
+                        with contextlib.suppress(Exception, asyncio.CancelledError):
+                            await server_task
+            except anyio.ClosedResourceError:
+                # Gracefully handle client disconnects - this is expected behavior when
+                # clients close connections during message routing (e.g., Codex, OAuth flows)
+                pass
+            except ExceptionGroup as eg:
+                # Handle exception groups from anyio task groups - filter out ClosedResourceError
+                # and re-raise if there are other non-suppressible exceptions
+                non_closed = [e for e in eg.exceptions if not isinstance(e, anyio.ClosedResourceError)]
+                if non_closed:
+                    raise ExceptionGroup(eg.message, non_closed) from eg
+                # All exceptions were ClosedResourceError, suppress silently
+            except BaseExceptionGroup as beg:
+                # Same handling for BaseExceptionGroup (Python 3.11+)
+                non_closed = [e for e in beg.exceptions if not isinstance(e, anyio.ClosedResourceError)]
+                if non_closed:
+                    raise BaseExceptionGroup(beg.message, non_closed) from beg
 
     # Mount at both '/base' and '/base/' to tolerate either form from clients/tests
     mount_base = settings.http.path or "/mcp"
