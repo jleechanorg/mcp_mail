@@ -160,6 +160,7 @@ async def test_server_continues_after_disconnect(real_server):
                 async for _chunk in response.aiter_bytes():
                     break
         except Exception:
+            # Exceptions are expected here due to client disconnect; ignore to allow test to proceed.
             pass
 
         # Give server time to process the error
@@ -199,6 +200,7 @@ async def test_multiple_disconnects_dont_crash_server(real_server):
                     async for _chunk in response.aiter_bytes():
                         break
             except Exception:
+                # Exceptions are expected here due to client disconnect; ignore to allow test to proceed.
                 pass
             await asyncio.sleep(0.1)
 
@@ -242,6 +244,7 @@ async def test_no_asgi_exception_in_logs(real_server):
                     async for _chunk in response.aiter_bytes():
                         break
             except Exception:
+                # Ignore exceptions caused by intentional client disconnects.
                 pass
 
     await asyncio.sleep(0.5)
@@ -254,5 +257,5 @@ async def test_no_asgi_exception_in_logs(real_server):
         f"ASGI application exception should not be logged after fix.\nLog:\n{log_content}"
 
     # ExceptionGroup should also not propagate
-    assert "ExceptionGroup" not in log_content or "BaseExceptionGroup" not in log_content, \
+    assert "ExceptionGroup" not in log_content and "BaseExceptionGroup" not in log_content, \
         f"ExceptionGroup should not propagate after fix.\nLog:\n{log_content}"
