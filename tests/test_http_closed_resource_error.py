@@ -12,7 +12,6 @@ Error trace being addressed:
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 from typing import Any
 from unittest.mock import patch
@@ -251,13 +250,11 @@ async def test_server_recovers_after_closed_resource_error(isolated_env, monkeyp
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         # First request triggers ClosedResourceError
         with patch.object(StreamableHTTPServerTransport, 'handle_request', patched_handle_request):
-            try:
+            with contextlib.suppress(Exception):
                 await client.post(
                     settings.http.path,
                     json=_rpc("tools/call", {"name": "health_check", "arguments": {}}),
                 )
-            except Exception:
-                pass  # Expected to fail or be handled
 
         # Second request (without patch) should work - server has recovered
         r2 = await client.post(

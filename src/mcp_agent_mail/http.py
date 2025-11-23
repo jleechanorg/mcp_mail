@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import base64
 import contextlib
+import anyio
 import importlib
 import json
 import logging
@@ -932,10 +933,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 security_settings=None,
             )
 
-            # Import anyio for ClosedResourceError handling - client disconnects can cause
-            # the message router to raise this when streams are closed mid-operation
-            import anyio
-
             try:
                 async with http_transport.connect() as streams:
                     read_stream, write_stream = streams
@@ -955,26 +952,33 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         # Cancel server_task before exiting context to prevent ClosedResourceError
                         # from the message router trying to read from closed streams
                         server_task.cancel()
-                        with contextlib.suppress(Exception):
+                        await asyncio.wait({server_task}, timeout=0.1)
+                        try:
                             await http_transport.terminate()
-                        with contextlib.suppress(Exception, asyncio.CancelledError):
+                        except anyio.ClosedResourceError:
+                            # Expected on client disconnect
+                            pass
+                        except Exception as exc:
+                            structlog.get_logger().error(
+                                "Unexpected error during http_transport.terminate()",
+                                exc_info=True,
+                                exception=exc,
+                            )
+                        with contextlib.suppress(asyncio.CancelledError):
                             await server_task
             except anyio.ClosedResourceError:
                 # Gracefully handle client disconnects - this is expected behavior when
                 # clients close connections during message routing (e.g., Codex, OAuth flows)
                 pass
-            except ExceptionGroup as eg:
+            except (ExceptionGroup, BaseExceptionGroup) as eg:
                 # Handle exception groups from anyio task groups - filter out ClosedResourceError
                 # and re-raise if there are other non-suppressible exceptions
-                non_closed = [e for e in eg.exceptions if not isinstance(e, anyio.ClosedResourceError)]
+                non_closed = [
+                    e for e in eg.exceptions if not isinstance(e, anyio.ClosedResourceError)
+                ]
                 if non_closed:
-                    raise ExceptionGroup(eg.message, non_closed) from eg
+                    raise eg.derive(non_closed) from eg
                 # All exceptions were ClosedResourceError, suppress silently
-            except BaseExceptionGroup as beg:
-                # Same handling for BaseExceptionGroup (Python 3.11+)
-                non_closed = [e for e in beg.exceptions if not isinstance(e, anyio.ClosedResourceError)]
-                if non_closed:
-                    raise BaseExceptionGroup(beg.message, non_closed) from beg
 
     # Mount at both '/base' and '/base/' to tolerate either form from clients/tests
     mount_base = settings.http.path or "/mcp"
