@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
+import anyio
 import structlog
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, status
@@ -932,25 +933,50 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 security_settings=None,
             )
 
-            async with http_transport.connect() as streams:
-                read_stream, write_stream = streams
-                server_task = asyncio.create_task(
-                    self._server._mcp_server.run(
-                        read_stream,
-                        write_stream,
-                        self._server._mcp_server.create_initialization_options(),
-                        stateless=True,
+            try:
+                async with http_transport.connect() as streams:
+                    read_stream, write_stream = streams
+                    server_task = asyncio.create_task(
+                        self._server._mcp_server.run(
+                            read_stream,
+                            write_stream,
+                            self._server._mcp_server.create_initialization_options(),
+                            stateless=True,
+                        )
                     )
-                )
-                # No response wrapping/unwrapping - just pass through MCP responses as-is
-                # MCP clients can handle JSON-RPC format properly
-                try:
-                    await http_transport.handle_request(new_scope, receive, send)
-                finally:
-                    with contextlib.suppress(Exception):
-                        await http_transport.terminate()
-                    with contextlib.suppress(Exception):
-                        await server_task
+                    # No response wrapping/unwrapping - just pass through MCP responses as-is
+                    # MCP clients can handle JSON-RPC format properly
+                    try:
+                        await http_transport.handle_request(new_scope, receive, send)
+                    finally:
+                        # Cancel server_task before exiting context to prevent ClosedResourceError
+                        # from the message router trying to read from closed streams
+                        server_task.cancel()
+                        # Wait briefly to allow cancellation to propagate before closing streams
+                        await asyncio.wait({server_task}, timeout=0.1)
+                        try:
+                            await http_transport.terminate()
+                        except anyio.ClosedResourceError:
+                            pass  # Expected on client disconnect
+                        except Exception as exc:
+                            structlog.get_logger().error(
+                                "Unexpected error during http_transport.terminate()",
+                                exc_info=True,
+                                exception=exc,
+                            )
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await server_task
+            except anyio.ClosedResourceError:
+                # Gracefully handle client disconnects - this is expected behavior when
+                # clients close connections during message routing (e.g., Codex, OAuth flows)
+                pass
+            except (ExceptionGroup, BaseExceptionGroup) as eg:
+                # Handle exception groups from anyio task groups - filter out ClosedResourceError
+                # and re-raise if there are other non-suppressible exceptions
+                non_closed = [e for e in eg.exceptions if not isinstance(e, anyio.ClosedResourceError)]
+                if non_closed:
+                    derived = eg.derive(non_closed) if hasattr(eg, "derive") else type(eg)(eg.args[0], non_closed)
+                    raise derived from eg
 
     # Mount at both '/base' and '/base/' to tolerate either form from clients/tests
     mount_base = settings.http.path or "/mcp"
