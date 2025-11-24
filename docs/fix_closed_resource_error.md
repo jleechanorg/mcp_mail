@@ -117,7 +117,8 @@ except anyio.ClosedResourceError:
 except (ExceptionGroup, BaseExceptionGroup) as eg:
     non_closed = [e for e in eg.exceptions if not isinstance(e, anyio.ClosedResourceError)]
     if non_closed:
-        raise eg.derive(non_closed) from eg
+        derived = eg.derive(non_closed) if hasattr(eg, "derive") else type(eg)(eg.args[0], non_closed)
+        raise derived from eg
 ```
 
 ## Test Results
