@@ -107,6 +107,7 @@ select = [
   "SIM",
   "PTH",
   "FA",
+  "Q",
 ]
 ignore = [
   "E501",
