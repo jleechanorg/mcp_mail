@@ -975,10 +975,13 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 # and re-raise if there are other non-suppressible exceptions
                 non_closed = [e for e in eg.exceptions if not isinstance(e, anyio.ClosedResourceError)]
                 if non_closed:
-                    derived = (
-                        eg.derive(non_closed)
-                        if hasattr(eg, "derive")
-                        else type(eg)(eg.args[0], non_closed)
+                    derived = eg.derive(non_closed) if hasattr(eg, "derive") else type(
+                        eg
+                    )(
+                        eg.message
+                        if hasattr(eg, "message")
+                        else (eg.args[0] if eg.args else str(eg)),
+                        non_closed,
                     )
                     raise derived from eg
 
