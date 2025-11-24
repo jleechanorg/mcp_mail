@@ -254,11 +254,11 @@ async def test_no_asgi_exception_in_logs(real_server):
 
     # After fix: Should NOT see "Exception in ASGI application"
     # This is the key assertion - the fix should prevent this error
-    assert "Exception in ASGI application" not in log_content, \
+    assert "Exception in ASGI application" not in log_content, (
         f"ASGI application exception should not be logged after fix.\nLog:\n{log_content}"
+    )
 
     # ExceptionGroup should also not propagate
-    assert (
-        "ExceptionGroup" not in log_content
-        and "BaseExceptionGroup" not in log_content
-    ), f"ExceptionGroup should not propagate after fix.\nLog:\n{log_content}"
+    assert "ExceptionGroup" not in log_content and "BaseExceptionGroup" not in log_content, (
+        f"ExceptionGroup should not propagate after fix.\nLog:\n{log_content}"
+    )
