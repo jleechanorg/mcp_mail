@@ -22,7 +22,7 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import select, text
-from sqlalchemy.exc import NoResultFound
+from sqlalchemy.exc import IntegrityError, NoResultFound
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.types import Receive, Scope, Send
 
@@ -1000,7 +1000,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         sender_agent = await _get_agent_by_name_optional(sender_name)
 
                         if not sender_agent:
-                            # Auto-create SlackBridge system agent
+                            # Auto-create SlackBridge system agent; tolerate concurrent creation
                             async with get_session() as session:
                                 sender_agent = Agent(
                                     name=sender_name,
@@ -1011,9 +1011,22 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                     is_active=True,
                                 )
                                 session.add(sender_agent)
-                                await session.commit()
-                                await session.refresh(sender_agent)
-                            logger.info("slack_bridge_agent_created", agent_name=sender_name)
+                                try:
+                                    await session.commit()
+                                    await session.refresh(sender_agent)
+                                    logger.info("slack_bridge_agent_created", agent_name=sender_name)
+                                except IntegrityError:
+                                    await session.rollback()
+                                    result = await session.execute(
+                                        select(Agent).where(
+                                            cast(Any, Agent.project_id) == project.id,
+                                            cast(Any, Agent.name) == sender_name,
+                                        )
+                                    )
+                                    existing_agent = result.scalars().first()
+                                    if not existing_agent:
+                                        raise
+                                    sender_agent = existing_agent
 
                         # Get all active agents as recipients (broadcast)
                         async with get_session() as session:
