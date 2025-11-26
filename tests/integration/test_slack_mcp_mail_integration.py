@@ -1,7 +1,7 @@
 """Integration tests for Slack ↔ MCP Mail bidirectional sync.
 
 These tests validate end-to-end Slack integration with .mcp_mail/ messaging:
-- Slack → MCP: Incoming Slack messages create .mcp_mail/ entries
+- Slack → MCP: Incoming Slack messages create MCP database messages that are archived to .mcp_mail/
 - MCP → Slack: MCP messages trigger Slack notifications
 - Thread mapping: Slack threads ↔ MCP thread_id
 - CRUD operations on .mcp_mail/ with Slack context
@@ -16,7 +16,6 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -64,36 +63,6 @@ def mcp_mail_repo(tmp_path):
     )
 
     return repo_path
-
-
-@pytest.fixture
-def mock_settings():
-    """Create mock settings with Slack enabled."""
-    from mcp_agent_mail.config import SlackSettings
-
-    slack_settings = SlackSettings(
-        enabled=True,
-        bot_token="xoxb-test-token",
-        app_token=None,
-        signing_secret="test-secret",
-        default_channel="general",
-        notify_on_message=True,
-        notify_on_ack=False,
-        notify_mention_format="agent_name",
-        sync_enabled=True,
-        sync_channels=["C1234567890"],
-        sync_thread_replies=True,
-        sync_reactions=True,
-        use_blocks=True,
-        include_attachments=True,
-        webhook_url="https://hooks.slack.com/test",
-    )
-
-    mock_settings = MagicMock()
-    mock_settings.slack = slack_settings
-
-    return mock_settings
-
 
 def write_slack_message(
     repo_path: Path,

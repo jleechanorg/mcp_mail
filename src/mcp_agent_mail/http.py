@@ -10,7 +10,7 @@ import importlib
 import json
 import logging
 import re
-from collections.abc import MutableMapping
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
@@ -319,7 +319,7 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
             slack_burst = slack_burst if slack_burst > 0 else max(1, slack_rpm)
             client_ip = request.client.host if request.client else "unknown"
             key = f"slack:{client_ip}"
-            allowed = await self._consume_bucket(key, slack_rpm / 60.0, slack_burst)
+            allowed = await self._consume_bucket(key, slack_rpm, slack_burst)
             if not allowed:
                 return JSONResponse({"detail": "Rate limit exceeded"}, status_code=status.HTTP_429_TOO_MANY_REQUESTS)
             return await call_next(request)
@@ -330,7 +330,7 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
             try:
                 body_bytes = await request.body()
 
-                async def _receive() -> MutableMapping[str, Any]:
+                async def _receive() -> dict[str, Any]:
                     return {"type": "http.request", "body": body_bytes, "more_body": False}
 
                 cast(Any, request)._receive = _receive
@@ -930,25 +930,34 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         Reference: https://api.slack.com/apis/connections/events-api
         """
         logger = structlog.get_logger("slack")
+        from .models import Agent
+
+        if not settings.slack.enabled:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Slack integration disabled")
 
         # Read raw body for signature verification
         body_bytes = await request.body()
 
-        # Verify Slack request signature if signing secret is configured
-        if settings.slack.signing_secret:
-            from .slack_integration import SlackClient
+        if not settings.slack.signing_secret:
+            logger.error("slack_signing_secret_missing")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Slack signing secret not configured",
+            )
 
-            timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
-            signature = request.headers.get("X-Slack-Signature", "")
+        from .slack_integration import SlackClient
 
-            if not SlackClient.verify_signature(
-                signing_secret=settings.slack.signing_secret,
-                timestamp=timestamp,
-                signature=signature,
-                body=body_bytes,
-            ):
-                logger.warning("slack_signature_verification_failed")
-                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid signature")
+        timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
+        signature = request.headers.get("X-Slack-Signature", "")
+
+        if not SlackClient.verify_signature(
+            signing_secret=settings.slack.signing_secret,
+            timestamp=timestamp,
+            signature=signature,
+            body=body_bytes,
+        ):
+            logger.warning("slack_signature_verification_failed")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid signature")
 
         # Parse JSON payload
         try:
@@ -992,8 +1001,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
                         if not sender_agent:
                             # Auto-create SlackBridge system agent
-                            from .models import Agent
-
                             async with get_session() as session:
                                 sender_agent = Agent(
                                     name=sender_name,
@@ -1009,8 +1016,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                             logger.info("slack_bridge_agent_created", agent_name=sender_name)
 
                         # Get all active agents as recipients (broadcast)
-                        from .models import Agent
-
                         async with get_session() as session:
                             result = await session.execute(
                                 select(Agent).where(
@@ -1194,7 +1199,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         status_code = 200
         headers: dict[str, str] = {}
 
-        async def _send(message: dict) -> None:
+        async def _send(message: Mapping[str, Any]) -> None:
             nonlocal response_body, status_code, headers
             if message.get("type") == "http.response.start":
                 status_code = int(message.get("status", 200))
