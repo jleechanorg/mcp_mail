@@ -26,7 +26,6 @@ from git import Repo
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
 from sqlalchemy import asc, delete, desc, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, NoResultFound, SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from . import rich_logger
@@ -35,6 +34,7 @@ from .db import ensure_schema, get_session, init_engine
 from .guard import install_guard as install_guard_script, uninstall_guard as uninstall_guard_script
 from .llm import complete_system_user
 from .models import Agent, FileReservation, Message, MessageRecipient, Project, ProjectSiblingSuggestion
+from .slack_integration import SlackClient, notify_slack_ack, notify_slack_message
 from .slots import (
     acquire_build_slot as acquire_slot_impl,
     release_build_slot as release_slot_impl,
@@ -55,6 +55,9 @@ from .storage import (
 from .utils import generate_agent_name, sanitize_agent_name, slugify
 
 logger = logging.getLogger(__name__)
+
+# Global Slack client instance (initialized in lifespan)
+_slack_client: Optional[SlackClient] = None
 
 TOOL_METRICS: defaultdict[str, dict[str, int]] = defaultdict(lambda: {"calls": 0, "errors": 0})
 TOOL_CLUSTER_MAP: dict[str, str] = {}
@@ -322,6 +325,8 @@ def _capabilities_for(agent: Optional[str], project: Optional[str]) -> list[str]
 def _lifespan_factory(settings: Settings):
     @asynccontextmanager
     async def lifespan(app: FastMCP):
+        global _slack_client
+
         init_engine(settings)
         heal_summary = await heal_archive_locks(settings)
         if heal_summary.get("locks_removed") or heal_summary.get("metadata_removed"):
@@ -334,7 +339,28 @@ def _lifespan_factory(settings: Settings):
                 },
             )
         await ensure_schema(settings)
+
+        # Initialize Slack client if enabled
+        if settings.slack.enabled:
+            try:
+                _slack_client = SlackClient(settings.slack)
+                await _slack_client.connect()
+                logger.info("Slack integration initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize Slack integration: {e}")
+                _slack_client = None
+
         yield
+
+        # Cleanup Slack client
+        if _slack_client:
+            try:
+                await _slack_client.close()
+                logger.info("Slack client closed")
+            except Exception as e:
+                logger.error(f"Error closing Slack client: {e}")
+            finally:
+                _slack_client = None
 
     return lifespan
 
@@ -677,18 +703,18 @@ async def _ensure_project(human_key: str) -> Project:
         project = result.scalars().first()
         if project:
             # Ensure global inbox agent exists for existing project
-            await _ensure_global_inbox_agent(project, session=session)
+            await _ensure_global_inbox_agent(project)
             return project
         project = Project(slug=slug, human_key=human_key)
         session.add(project)
         await session.commit()
         await session.refresh(project)
         # Create global inbox agent for new project
-        await _ensure_global_inbox_agent(project, session=session)
+        await _ensure_global_inbox_agent(project)
         return project
 
 
-async def _ensure_global_inbox_agent(project: Project, session: Optional[AsyncSession] = None) -> Agent:
+async def _ensure_global_inbox_agent(project: Project) -> Agent:
     """Ensure the global inbox agent exists for the given project.
 
     Each project gets its own global inbox agent with a project-specific name
@@ -700,39 +726,30 @@ async def _ensure_global_inbox_agent(project: Project, session: Optional[AsyncSe
     global_inbox_name = get_global_inbox_name(project)
 
     await ensure_schema()
-
-    # Use provided session or create a new one
-    if session:
-        return await _create_or_get_global_inbox(session, project, global_inbox_name)
-
-    async with get_session() as new_session:
-        return await _create_or_get_global_inbox(new_session, project, global_inbox_name)
-
-
-async def _create_or_get_global_inbox(session: AsyncSession, project: Project, global_inbox_name: str) -> Agent:
-    # Check if global inbox agent already exists for this project
-    result = await session.execute(
-        select(Agent).where(
-            Agent.project_id == project.id,
-            Agent.name == global_inbox_name,
+    async with get_session() as session:
+        # Check if global inbox agent already exists for this project
+        result = await session.execute(
+            select(Agent).where(
+                Agent.project_id == project.id,
+                Agent.name == global_inbox_name,
+            )
         )
-    )
-    existing_agent = result.scalars().first()
-    if existing_agent:
-        return existing_agent
+        existing_agent = result.scalars().first()
+        if existing_agent:
+            return existing_agent
 
-    # Create global inbox agent for this project
-    agent = Agent(
-        project_id=project.id,
-        name=global_inbox_name,
-        program="mcp-mail-system",
-        model="system",
-        task_description=f"Global inbox for project '{project.slug}'.",
-    )
-    session.add(agent)
-    await session.commit()
-    await session.refresh(agent)
-    return agent
+        # Create global inbox agent for this project
+        agent = Agent(
+            project_id=project.id,
+            name=global_inbox_name,
+            program="mcp-mail-system",
+            model="system",
+            task_description=f"Global inbox for project '{project.slug}'.",
+        )
+        session.add(agent)
+        await session.commit()
+        await session.refresh(agent)
+        return agent
 
 
 async def _get_project_by_identifier(identifier: str) -> Project:
@@ -2513,6 +2530,9 @@ EXTENDED_TOOLS = {
     "macro_file_reservation_cycle",
     "install_precommit_guard",
     "uninstall_precommit_guard",
+    "slack_post_message",
+    "slack_list_channels",
+    "slack_get_channel_info",
     "acquire_build_slot",
     "renew_build_slot",
     "release_build_slot",
@@ -2576,6 +2596,12 @@ EXTENDED_TOOL_METADATA = {
     "uninstall_precommit_guard": {
         "category": "infrastructure",
         "description": "Remove pre-commit guard from repository",
+    },
+    "slack_post_message": {"category": "messaging", "description": "Post a message to a Slack channel"},
+    "slack_list_channels": {"category": "messaging", "description": "List available Slack channels"},
+    "slack_get_channel_info": {
+        "category": "messaging",
+        "description": "Get detailed information about a Slack channel",
     },
 }
 
@@ -2789,6 +2815,57 @@ def build_mcp_server() -> FastMCP:
                 commit_panel_text,
             )
         await ctx.info(f"Message {message.id} created by {sender.name} (to {', '.join(recipients_for_archive)})")
+
+        # Send Slack notification if enabled (fire-and-forget, non-blocking)
+        # Capture client reference before async boundary to avoid race condition during shutdown
+        slack_client = _slack_client
+        if settings.slack.enabled and settings.slack.notify_on_message:
+
+            def _slack_done_cb(t: asyncio.Task) -> None:
+                try:
+                    _ = t.result()
+                except Exception as e:
+                    logger.exception("Failed to send Slack notification", exc_info=e)
+
+            # Try Web API client first, fall back to webhook
+            if slack_client:
+
+                async def _send_slack_notification() -> None:
+                    if slack_client is None:
+                        return
+                    await notify_slack_message(
+                        client=slack_client,
+                        settings=settings,
+                        message_id=str(message.id),
+                        subject=subject,
+                        body_md=body_md,
+                        sender_name=sender.name,
+                        recipients=recipients_for_archive,
+                        importance=importance,
+                        thread_id=thread_id,
+                    )
+
+                task = asyncio.create_task(_send_slack_notification())
+                task.add_done_callback(_slack_done_cb)
+            elif settings.slack.webhook_url:
+                # Fallback to webhook URL if no client available
+                from .slack_integration import format_mcp_message_for_slack, post_via_webhook
+
+                async def _post_webhook():
+                    text, blocks = format_mcp_message_for_slack(
+                        subject=subject,
+                        body_md=body_md,
+                        sender_name=sender.name,
+                        recipients=recipients_for_archive,
+                        message_id=str(message.id),
+                        importance=importance,
+                        use_blocks=settings.slack.use_blocks,
+                    )
+                    await post_via_webhook(settings.slack.webhook_url, text, blocks=blocks)
+
+                task = asyncio.create_task(_post_webhook())
+                task.add_done_callback(_slack_done_cb)
+
         if payload is None:
             raise RuntimeError("Message payload was not generated.")
         return payload
@@ -4181,18 +4258,55 @@ def build_mcp_server() -> FastMCP:
             except Exception:
                 pass
         try:
+            settings = get_settings()
             agent = await _get_agent_by_name(agent_name)
-            await _get_message_by_id_global(message_id)
+            message = await _get_message_by_id_global(message_id)
             await _validate_agent_is_recipient(agent, message_id)
             read_ts = await _update_recipient_timestamp(agent, message_id, "read_ts")
             ack_ts = await _update_recipient_timestamp(agent, message_id, "ack_ts")
             await ctx.info(f"Acknowledged message {message_id} for '{agent.name}'.")
-            return {
+            result = {
                 "message_id": message_id,
                 "acknowledged": bool(ack_ts),
                 "acknowledged_at": _iso(ack_ts) if ack_ts else None,
                 "read_at": _iso(read_ts) if read_ts else None,
             }
+            # Fire-and-forget Slack notification for acknowledgements
+            slack_client = _slack_client
+            if settings.slack.enabled and settings.slack.notify_on_ack:
+
+                def _ack_done_cb(task: asyncio.Task) -> None:
+                    try:
+                        task.result()
+                    except Exception as exc:
+                        logger.exception("Failed to send Slack ack notification", exc_info=exc)
+
+                if slack_client:
+
+                    async def _send_ack_notification() -> None:
+                        if slack_client is None:
+                            return
+                        await notify_slack_ack(
+                            client=slack_client,
+                            settings=settings,
+                            message_id=str(message.id),
+                            agent_name=agent.name,
+                            subject=message.subject,
+                        )
+
+                    task = asyncio.create_task(_send_ack_notification())
+                    task.add_done_callback(_ack_done_cb)
+                elif settings.slack.webhook_url:
+                    from .slack_integration import post_via_webhook
+
+                    async def _post_ack_webhook() -> None:
+                        text = f":white_check_mark: {agent.name} acknowledged: {message.subject}"
+                        await post_via_webhook(settings.slack.webhook_url, text)
+
+                    task = asyncio.create_task(_post_ack_webhook())
+                    task.add_done_callback(_ack_done_cb)
+
+            return result
         except Exception as exc:
             if get_settings().tools_log_enabled:
                 try:
@@ -7276,6 +7390,293 @@ def build_mcp_server() -> FastMCP:
 
     # No explicit output-schema transform; the tool returns ToolResult with {"result": ...}
 
+    @mcp.tool(name="slack_post_message")
+    @_instrument_tool("slack_post_message", cluster=CLUSTER_MESSAGING, capabilities={"messaging", "slack", "write"})
+    async def slack_post_message(
+        ctx: Context,
+        channel: str,
+        text: str,
+        thread_ts: str = "",
+    ) -> dict[str, Any]:
+        """
+        Post a message to a Slack channel.
+
+        Purpose
+        -------
+        Send notifications or messages to Slack channels for external visibility
+        or to notify non-MCP team members about important events.
+
+        Parameters
+        ----------
+        channel : str
+            Slack channel ID (e.g., "C1234567890") or name (e.g., "#general")
+        text : str
+            Message text to post (supports Slack mrkdwn formatting)
+        thread_ts : str, optional
+            Thread timestamp to reply in a specific thread
+
+        Returns
+        -------
+        dict
+            {
+              "ok": true,
+              "channel": "C1234567890",
+              "ts": "1503435956.000247",
+              "permalink": "https://example.slack.com/archives/..."
+            }
+
+        Examples
+        --------
+        Post a simple message:
+            slack_post_message(
+                channel="general",
+                text="Deployment to production completed successfully!"
+            )
+
+        Reply in a thread:
+            slack_post_message(
+                channel="C1234567890",
+                text="I've completed the review",
+                thread_ts="1503435956.000247"
+            )
+
+        Raises
+        ------
+        ToolExecutionError
+            - SLACK_DISABLED: Slack integration is not enabled
+            - SLACK_API_ERROR: Failed to post message to Slack
+        """
+        if get_settings().tools_log_enabled:
+            try:
+                import importlib as _imp
+
+                _rc = _imp.import_module("rich.console")
+                _rp = _imp.import_module("rich.panel")
+                Console = _rc.Console
+                Panel = _rp.Panel
+                Console().print(
+                    Panel.fit(
+                        f"channel={channel[:50]}, text={text[:100]}",
+                        title="tool: slack_post_message",
+                        border_style="green",
+                    )
+                )
+            except Exception:
+                # Suppress all exceptions from rich logging to avoid interfering with main tool execution
+                pass
+
+        settings = get_settings()
+        if not settings.slack.enabled or not _slack_client:
+            raise ToolExecutionError(
+                "SLACK_DISABLED",
+                "Slack client is not available (disabled or failed to initialize). "
+                "Verify SLACK_ENABLED/SLACK_BOT_TOKEN and check startup logs.",
+                recoverable=False,
+            )
+
+        try:
+            result = await _slack_client.post_message(
+                channel=channel,
+                text=text,
+                thread_ts=thread_ts if thread_ts else None,
+            )
+
+            # Get permalink for the message
+            permalink = ""
+            if result.get("ok") and result.get("channel") and result.get("ts"):
+                # Permalink retrieval is non-critical; log failures only at debug level
+                try:
+                    permalink = await _slack_client.get_permalink(
+                        channel=result["channel"],
+                        message_ts=result["ts"],
+                    )
+                except Exception as ex:
+                    logger.debug(
+                        "slack_post_message.permalink_failed",
+                        extra={
+                            "channel": result.get("channel"),
+                            "ts": result.get("ts"),
+                            "error": str(ex),
+                        },
+                    )
+
+            await ctx.info(f"Posted message to Slack channel {channel}")
+            return {
+                "ok": True,
+                "channel": result.get("channel", ""),
+                "ts": result.get("ts", ""),
+                "permalink": permalink,
+            }
+
+        except Exception as e:
+            logger.error(f"Slack API error: {e}")
+            raise ToolExecutionError(
+                "SLACK_API_ERROR",
+                f"Failed to post message to Slack: {e}",
+                recoverable=True,
+                data={"channel": channel},
+            ) from e
+
+    @mcp.tool(name="slack_list_channels")
+    @_instrument_tool("slack_list_channels", cluster=CLUSTER_MESSAGING, capabilities={"messaging", "slack", "read"})
+    async def slack_list_channels(ctx: Context) -> dict[str, Any]:
+        """
+        List available Slack channels.
+
+        Purpose
+        -------
+        Discover available Slack channels that the bot has access to,
+        useful for determining where to post messages.
+
+        Returns
+        -------
+        dict
+            {
+              "channels": [
+                {
+                  "id": "C1234567890",
+                  "name": "general",
+                  "is_private": false,
+                  "is_archived": false,
+                  "num_members": 42
+                },
+                ...
+              ],
+              "count": 10
+            }
+
+        Raises
+        ------
+        ToolExecutionError
+            - SLACK_DISABLED: Slack integration is not enabled
+            - SLACK_API_ERROR: Failed to list channels
+        """
+        if get_settings().tools_log_enabled:
+            try:
+                import importlib as _imp
+
+                _rc = _imp.import_module("rich.console")
+                _rp = _imp.import_module("rich.panel")
+                Console = _rc.Console
+                Panel = _rp.Panel
+                Console().print(Panel.fit("", title="tool: slack_list_channels", border_style="green"))
+            except Exception:
+                # Suppress all exceptions from rich logging to avoid interfering with tool execution
+                pass
+
+        settings = get_settings()
+        if not settings.slack.enabled or not _slack_client:
+            raise ToolExecutionError(
+                "SLACK_DISABLED",
+                "Slack client is not available (disabled or failed to initialize). "
+                "Verify SLACK_ENABLED/SLACK_BOT_TOKEN and check startup logs.",
+                recoverable=False,
+            )
+
+        try:
+            channels_data = await _slack_client.list_channels(exclude_archived=True)
+            channels = [
+                {
+                    "id": ch.get("id", ""),
+                    "name": ch.get("name", ""),
+                    "is_private": ch.get("is_private", False),
+                    "is_archived": ch.get("is_archived", False),
+                    "num_members": ch.get("num_members", 0),
+                }
+                for ch in channels_data
+            ]
+
+            await ctx.info(f"Listed {len(channels)} Slack channels")
+            return {
+                "channels": channels,
+                "count": len(channels),
+            }
+
+        except Exception as e:
+            logger.error(f"Slack API error: {e}")
+            raise ToolExecutionError(
+                "SLACK_API_ERROR",
+                f"Failed to list Slack channels: {e}",
+                recoverable=True,
+            ) from e
+
+    @mcp.tool(name="slack_get_channel_info")
+    @_instrument_tool("slack_get_channel_info", cluster=CLUSTER_MESSAGING, capabilities={"messaging", "slack", "read"})
+    async def slack_get_channel_info(ctx: Context, channel: str) -> dict[str, Any]:
+        """
+        Get detailed information about a Slack channel.
+
+        Parameters
+        ----------
+        channel : str
+            Channel ID to lookup
+
+        Returns
+        -------
+        dict
+            {
+              "id": "C1234567890",
+              "name": "general",
+              "is_private": false,
+              "topic": "General discussion",
+              "purpose": "Company-wide announcements",
+              "num_members": 42
+            }
+
+        Raises
+        ------
+        ToolExecutionError
+            - SLACK_DISABLED: Slack integration is not enabled
+            - SLACK_API_ERROR: Failed to get channel info
+        """
+        if get_settings().tools_log_enabled:
+            try:
+                import importlib as _imp
+
+                _rc = _imp.import_module("rich.console")
+                _rp = _imp.import_module("rich.panel")
+                Console = _rc.Console
+                Panel = _rp.Panel
+                Console().print(
+                    Panel.fit(f"channel={channel}", title="tool: slack_get_channel_info", border_style="green")
+                )
+            except Exception:
+                # Ignore all errors in rich logging to avoid interfering with tool execution
+                pass
+
+        settings = get_settings()
+        if not settings.slack.enabled or not _slack_client:
+            raise ToolExecutionError(
+                "SLACK_DISABLED",
+                "Slack client is not available (disabled or failed to initialize). "
+                "Verify SLACK_ENABLED/SLACK_BOT_TOKEN and check startup logs.",
+                recoverable=False,
+            )
+
+        try:
+            channel_info = await _slack_client.get_channel_info(channel)
+
+            result = {
+                "id": channel_info.get("id", ""),
+                "name": channel_info.get("name", ""),
+                "is_private": channel_info.get("is_private", False),
+                "topic": channel_info.get("topic", {}).get("value", ""),
+                "purpose": channel_info.get("purpose", {}).get("value", ""),
+                "num_members": channel_info.get("num_members", 0),
+            }
+
+            await ctx.info(f"Retrieved info for channel {channel}")
+            return result
+
+        except Exception as e:
+            logger.error(f"Slack API error: {e}")
+            raise ToolExecutionError(
+                "SLACK_API_ERROR",
+                f"Failed to get channel info: {e}",
+                recoverable=True,
+                data={"channel": channel},
+            ) from e
+
     # Populate extended tool registry for dynamic invocation via call_extended_tool
     _EXTENDED_TOOL_REGISTRY.update(
         {
@@ -7297,6 +7698,9 @@ def build_mcp_server() -> FastMCP:
             "summarize_thread": summarize_thread,
             "summarize_threads": summarize_threads,
             "uninstall_precommit_guard": uninstall_precommit_guard,
+            "slack_post_message": slack_post_message,
+            "slack_list_channels": slack_list_channels,
+            "slack_get_channel_info": slack_get_channel_info,
         }
     )
 
