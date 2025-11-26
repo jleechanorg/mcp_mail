@@ -25,8 +25,8 @@ from fastmcp.tools.tool import ToolResult  # type: ignore
 from git import Repo
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
 from sqlalchemy import asc, delete, desc, func, or_, select, text, update
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError, NoResultFound, SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from . import rich_logger

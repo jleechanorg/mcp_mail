@@ -64,6 +64,7 @@ def mcp_mail_repo(tmp_path):
 
     return repo_path
 
+
 def write_slack_message(
     repo_path: Path,
     slack_event: dict[str, Any],
