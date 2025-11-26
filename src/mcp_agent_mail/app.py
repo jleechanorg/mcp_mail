@@ -2831,7 +2831,8 @@ def build_mcp_server() -> FastMCP:
             if slack_client:
 
                 async def _send_slack_notification() -> None:
-                    if slack_client is None:
+                    if slack_client is None or slack_client._http_client is None:
+                        logger.debug("Slack client unavailable, skipping notification")
                         return
                     await notify_slack_message(
                         client=slack_client,
@@ -4284,7 +4285,8 @@ def build_mcp_server() -> FastMCP:
                 if slack_client:
 
                     async def _send_ack_notification() -> None:
-                        if slack_client is None:
+                        if slack_client is None or slack_client._http_client is None:
+                            logger.debug("Slack client unavailable, skipping ack notification")
                             return
                         await notify_slack_ack(
                             client=slack_client,
