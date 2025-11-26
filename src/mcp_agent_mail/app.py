@@ -26,6 +26,7 @@ from git import Repo
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
 from sqlalchemy import asc, delete, desc, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, NoResultFound, SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from . import rich_logger
@@ -703,18 +704,18 @@ async def _ensure_project(human_key: str) -> Project:
         project = result.scalars().first()
         if project:
             # Ensure global inbox agent exists for existing project
-            await _ensure_global_inbox_agent(project)
+            await _ensure_global_inbox_agent(project, session)
             return project
         project = Project(slug=slug, human_key=human_key)
         session.add(project)
         await session.commit()
         await session.refresh(project)
         # Create global inbox agent for new project
-        await _ensure_global_inbox_agent(project)
+        await _ensure_global_inbox_agent(project, session)
         return project
 
 
-async def _ensure_global_inbox_agent(project: Project) -> Agent:
+async def _ensure_global_inbox_agent(project: Project, session: AsyncSession | None = None) -> Agent:
     """Ensure the global inbox agent exists for the given project.
 
     Each project gets its own global inbox agent with a project-specific name
@@ -726,30 +727,33 @@ async def _ensure_global_inbox_agent(project: Project) -> Agent:
     global_inbox_name = get_global_inbox_name(project)
 
     await ensure_schema()
-    async with get_session() as session:
-        # Check if global inbox agent already exists for this project
-        result = await session.execute(
-            select(Agent).where(
-                Agent.project_id == project.id,
-                Agent.name == global_inbox_name,
-            )
-        )
-        existing_agent = result.scalars().first()
-        if existing_agent:
-            return existing_agent
+    if session is None:
+        async with get_session() as session_local:
+            return await _ensure_global_inbox_agent(project, session_local)
 
-        # Create global inbox agent for this project
-        agent = Agent(
-            project_id=project.id,
-            name=global_inbox_name,
-            program="mcp-mail-system",
-            model="system",
-            task_description=f"Global inbox for project '{project.slug}'.",
+    # Check if global inbox agent already exists for this project
+    result = await session.execute(
+        select(Agent).where(
+            Agent.project_id == project.id,
+            Agent.name == global_inbox_name,
         )
-        session.add(agent)
-        await session.commit()
-        await session.refresh(agent)
-        return agent
+    )
+    existing_agent = result.scalars().first()
+    if existing_agent:
+        return existing_agent
+
+    # Create global inbox agent for this project
+    agent = Agent(
+        project_id=project.id,
+        name=global_inbox_name,
+        program="mcp-mail-system",
+        model="system",
+        task_description=f"Global inbox for project '{project.slug}'.",
+    )
+    session.add(agent)
+    await session.commit()
+    await session.refresh(agent)
+    return agent
 
 
 async def _get_project_by_identifier(identifier: str) -> Project:
@@ -2474,6 +2478,20 @@ async def _update_recipient_timestamp(
     return now
 
 
+async def _get_recipient_timestamp(agent: Agent, message_id: int, field: str) -> Optional[datetime]:
+    if agent.id is None:
+        raise ValueError("Agent must have an id before reading message state.")
+    await ensure_schema()
+    async with get_session() as session:
+        result = await session.execute(
+            select(getattr(MessageRecipient, field)).where(
+                MessageRecipient.message_id == message_id,
+                MessageRecipient.agent_id == agent.id,
+            )
+        )
+        return result.scalars().first()
+
+
 async def _validate_agent_is_recipient(agent: Agent, message_id: int) -> None:
     """Validate that an agent is a recipient of a message.
 
@@ -2831,7 +2849,7 @@ def build_mcp_server() -> FastMCP:
             if slack_client:
 
                 async def _send_slack_notification() -> None:
-                    if slack_client is None or slack_client._http_client is None:
+                    if slack_client is None or getattr(slack_client, "_http_client", None) is None:
                         logger.debug("Slack client unavailable, skipping notification")
                         return
                     await notify_slack_message(
@@ -4264,6 +4282,7 @@ def build_mcp_server() -> FastMCP:
             message = await _get_message_by_id_global(message_id)
             await _validate_agent_is_recipient(agent, message_id)
             read_ts = await _update_recipient_timestamp(agent, message_id, "read_ts")
+            prev_ack_ts = await _get_recipient_timestamp(agent, message_id, "ack_ts")
             ack_ts = await _update_recipient_timestamp(agent, message_id, "ack_ts")
             await ctx.info(f"Acknowledged message {message_id} for '{agent.name}'.")
             result = {
@@ -4274,7 +4293,7 @@ def build_mcp_server() -> FastMCP:
             }
             # Fire-and-forget Slack notification for acknowledgements
             slack_client = _slack_client
-            if settings.slack.enabled and settings.slack.notify_on_ack:
+            if settings.slack.enabled and settings.slack.notify_on_ack and prev_ack_ts is None and ack_ts:
 
                 def _ack_done_cb(task: asyncio.Task) -> None:
                     try:
@@ -4285,7 +4304,7 @@ def build_mcp_server() -> FastMCP:
                 if slack_client:
 
                     async def _send_ack_notification() -> None:
-                        if slack_client is None or slack_client._http_client is None:
+                        if slack_client is None or getattr(slack_client, "_http_client", None) is None:
                             logger.debug("Slack client unavailable, skipping ack notification")
                             return
                         await notify_slack_ack(

@@ -325,7 +325,7 @@ The SlackBridge agent is auto-created on first Slack message. If missing:
 register_agent(
     project_key="slack-sync",  # Or your project
     agent_name="SlackBridge",
-    program_name="system"
+    program="system"
 )
 ```
 

@@ -735,8 +735,8 @@ async def handle_slack_message_event(
     subject_parts = text.split("\n", 1)
     subject = subject_parts[0][:100] if subject_parts else "Message from Slack"
 
-    # Clean up text (remove Slack formatting)
-    body_md = text.replace("<@", "@").replace(">", "")  # Basic cleanup
+    # Clean up text (remove Slack mention formatting while preserving URLs)
+    body_md = _SLACK_MENTION_PATTERN.sub(r"@\1", text)
 
     logger.info(f"Creating MCP message from Slack: channel={channel_id}, user={user_id}, thread={mcp_thread_id}")
 
