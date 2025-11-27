@@ -1635,9 +1635,7 @@ async def _find_similar_agents(name: str, limit: int = 5) -> list[str]:
 
     async with get_session() as session:
         # Get all active agent names
-        result = await session.execute(
-            select(Agent.name).where(cast(Any, Agent.is_active).is_(True))
-        )
+        result = await session.execute(select(Agent.name).where(cast(Any, Agent.is_active).is_(True)))
         all_names = [row[0] for row in result.all()]
 
     # Strategy 1: Exact case-insensitive match (shouldn't happen, but just in case)
