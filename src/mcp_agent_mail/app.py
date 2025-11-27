@@ -72,7 +72,7 @@ CLUSTER_MACROS = "workflow_macros"
 
 # Global inbox configuration
 def get_global_inbox_name(project: Project) -> str:
-    """Get project-specific global inbox name to ensure per-project isolation."""
+    """Get project-specific global inbox name for message archival organization."""
     return f"global-inbox-{project.slug}"
 
 
@@ -692,7 +692,7 @@ async def _ensure_global_inbox_agent(project: Project, session: Optional[AsyncSe
     """Ensure the global inbox agent exists for the given project.
 
     Each project gets its own global inbox agent with a project-specific name
-    to ensure proper isolation between projects.
+    for organizational purposes and message archival.
     """
     if project.id is None:
         raise ValueError("Project must have an id before creating global inbox agent.")
