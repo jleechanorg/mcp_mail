@@ -1922,6 +1922,68 @@ async def _expire_stale_file_reservations(project_id: int) -> list[FileReservati
     return stale_statuses
 
 
+def _glob_patterns_overlap(pattern_a: str, pattern_b: str) -> bool:
+    """Check if two glob patterns could match overlapping files.
+
+    Handles ** (recursive directory matching) properly using pathlib.
+    """
+    from pathlib import PurePath
+
+    # Normalize: remove leading ./
+    def _norm(s: str) -> str:
+        while s.startswith("./"):
+            s = s[2:]
+        return s
+
+    a = _norm(pattern_a)
+    b = _norm(pattern_b)
+
+    # Exact match
+    if a == b:
+        return True
+
+    # Use pathlib.match for ** support - check both directions
+    # PurePath.match treats the argument as a pattern
+    try:
+        # If a is a concrete path and b is a pattern
+        if "**" in b or "*" in b:
+            if PurePath(a).match(b):
+                return True
+        # If b is a concrete path and a is a pattern
+        if "**" in a or "*" in a:
+            if PurePath(b).match(a):
+                return True
+    except Exception:
+        pass
+
+    # Fallback to fnmatch for simple patterns
+    if fnmatch.fnmatchcase(a, b) or fnmatch.fnmatchcase(b, a):
+        return True
+
+    # Check if patterns share a common prefix that could overlap
+    # e.g., "src/backend/**/*.py" and "src/backend/auth.py"
+    # Split into directory parts and check overlap
+    a_parts = a.split("/")
+    b_parts = b.split("/")
+
+    # Find the first differing part
+    min_len = min(len(a_parts), len(b_parts))
+    for i in range(min_len):
+        ap, bp = a_parts[i], b_parts[i]
+        # If either part is ** or contains wildcards, they could overlap
+        if ap == "**" or bp == "**":
+            return True
+        if "*" in ap or "*" in bp:
+            if fnmatch.fnmatchcase(ap, bp) or fnmatch.fnmatchcase(bp, ap):
+                continue
+            # Wildcards that don't match - check if they're at the divergence point
+            return False
+        if ap != bp:
+            return False
+
+    return True
+
+
 def _file_reservations_conflict(
     existing: FileReservation, candidate_path: str, candidate_exclusive: bool, candidate_agent: Agent
 ) -> bool:
@@ -1931,18 +1993,8 @@ def _file_reservations_conflict(
         return False
     if not existing.exclusive and not candidate_exclusive:
         return False
-    normalized_existing = existing.path_pattern
 
-    # Treat simple directory patterns like "src/*" as inclusive of files under that directory
-    # when comparing against concrete file paths like "src/app.py".
-    def _expand_dir_star(p: str) -> str:
-        if p.endswith("/*"):
-            return p[:-1] + "*"  # "src/*" -> "src/**"-like breadth for fnmatchcase approximation
-        return p
-
-    a = _expand_dir_star(candidate_path)
-    b = _expand_dir_star(normalized_existing)
-    return fnmatch.fnmatchcase(a, b) or fnmatch.fnmatchcase(b, a) or a == b
+    return _glob_patterns_overlap(existing.path_pattern, candidate_path)
 
 
 def _patterns_overlap(a: str, b: str) -> bool:
@@ -3720,10 +3772,39 @@ def build_mcp_server() -> FastMCP:
             unknown: set[str] = set()
 
             async def _route(name_list: list[str], kind: str) -> None:
-                """Simplified routing: look up agents globally by name."""
+                """Routing with cross-project addressing support.
+
+                Supported formats:
+                - Bare name: "AgentName"
+                - project:id#name: "project:/path/to/proj#AgentName" or "project:slug#AgentName"
+                - name@project: "AgentName@/path/to/proj" or "AgentName@slug"
+                """
                 for raw in name_list:
-                    # Strip whitespace and normalize
-                    display_value, key_candidates, canonical = _normalize(raw)
+                    name = (raw or "").strip()
+                    if not name:
+                        continue
+
+                    # Parse cross-project addressing formats
+                    target_name = name
+                    target_project = None
+
+                    # Format 1: "project:<identifier>#<agent-name>"
+                    if name.startswith("project:") and "#" in name:
+                        parts = name.split("#", 1)
+                        if len(parts) == 2:
+                            project_part = parts[0].replace("project:", "", 1)
+                            target_name = parts[1].strip()
+                            target_project = project_part.strip()
+
+                    # Format 2: "<agent-name>@<project-identifier>"
+                    elif "@" in name and not name.startswith("@"):
+                        parts = name.rsplit("@", 1)  # rsplit to handle names with @ in them
+                        if len(parts) == 2:
+                            target_name = parts[0].strip()
+                            target_project = parts[1].strip()
+
+                    # Normalize and get lookup keys for the agent name
+                    display_value, key_candidates, canonical = _normalize(target_name)
                     if not key_candidates or not canonical:
                         unknown.add(raw.strip() if raw else raw)
                         continue
@@ -3738,12 +3819,22 @@ def build_mcp_server() -> FastMCP:
                             all_bcc.append(sender.name)
                         continue
 
-                    # Look up agent globally by name
+                    # Look up agent (cross-project if target_project specified, otherwise global)
                     resolved = None
-                    for key in key_candidates:
-                        resolved = global_lookup.get(key)
-                        if resolved:
-                            break
+                    if target_project:
+                        # Cross-project lookup: resolve project and agent explicitly
+                        try:
+                            proj = await _get_project_by_identifier(target_project)
+                            agent = await _get_agent(proj, target_name)
+                            resolved = agent.name  # Agent names are globally unique
+                        except NoResultFound:
+                            resolved = None
+                    else:
+                        # Global lookup by name (returns canonical name)
+                        for key in key_candidates:
+                            resolved = global_lookup.get(key)
+                            if resolved:
+                                break
 
                     if resolved:
                         if kind == "to":
@@ -3753,7 +3844,7 @@ def build_mcp_server() -> FastMCP:
                         else:
                             all_bcc.append(resolved)
                     else:
-                        unknown.add(display_value or raw.strip() if raw else raw)
+                        unknown.add(name)
 
             await _route(to, "to")
             await _route(cc or [], "cc")
@@ -4860,6 +4951,7 @@ def build_mcp_server() -> FastMCP:
             {
                 "id": row["id"],
                 "subject": row["subject"],
+                "body_md": row["body_md"],
                 "importance": row["importance"],
                 "ack_required": row["ack_required"],
                 "created_ts": _iso(row["created_ts"]),
@@ -4868,12 +4960,8 @@ def build_mcp_server() -> FastMCP:
             }
             for row in rows
         ]
-        try:
-            from fastmcp.tools.tool import ToolResult  # type: ignore
-
-            return ToolResult(structured_content={"result": items})
-        except Exception:
-            return items
+        # Return list directly for simpler client consumption
+        return items
 
     @mcp.tool(name="acquire_build_slot")
     @_instrument_tool(

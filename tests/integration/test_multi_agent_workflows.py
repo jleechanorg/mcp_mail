@@ -559,18 +559,19 @@ async def test_message_search(mcp_client, tmp_path):
         },
     )
 
-    # Search for "authentication"
+    # Search for "authentication" using search_mailbox (core tool)
     search_result = await mcp_client.call_tool(
-        "search_messages",
+        "search_mailbox",
         {
             "project_key": str(project_path),
             "query": "authentication",
             "limit": 10,
+            "include_bodies": True,
         },
     )
 
-    # search_messages returns a list directly in structured_content
-    results = search_result.structured_content
+    # search_mailbox returns results in structured_content["result"]
+    results = search_result.structured_content["result"]
     # Should find 2 messages mentioning authentication
     assert len(results) >= 2
 
