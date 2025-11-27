@@ -1626,8 +1626,10 @@ async def _find_similar_agents(name: str, limit: int = 5) -> list[str]:
 
     Uses multiple strategies to find similar names:
     1. Case variations (exact match with different case)
-    2. Prefix matches (names starting with the same characters)
-    3. Substring matches (names containing the search term)
+    2. Prefix matches (agent names starting with the input, e.g., "BlueLake" for "Blue")
+    3. Reverse prefix matches (agent names that are prefixes of the input, e.g., "Blue" for "BlueLake")
+    4. Substring matches (agent names containing the input, e.g., "BlueLake" for "Lake")
+    5. Reverse substring matches (agent names that are substrings of the input, e.g., "Blue" for "BlueLakeExtra")
     """
     await ensure_schema()
     suggestions: list[str] = []
@@ -1650,7 +1652,7 @@ async def _find_similar_agents(name: str, limit: int = 5) -> list[str]:
         if len(suggestions) >= limit:
             break
 
-    # Strategy 3: Names where input is a prefix of the agent name
+    # Strategy 3: Agent names that are prefixes of the input (e.g., "Blue" when searching "BlueLake")
     if len(suggestions) < limit:
         for agent_name in all_names:
             if name_lower.startswith(agent_name.lower()) and agent_name not in suggestions:
@@ -1666,7 +1668,7 @@ async def _find_similar_agents(name: str, limit: int = 5) -> list[str]:
             if len(suggestions) >= limit:
                 break
 
-    # Strategy 5: Agent name is substring of input (e.g., "BlueL" when searching "BlueLakeExtra")
+    # Strategy 5: Agent names that are substrings of the input (e.g., "Blue" when searching "BlueLakeExtra")
     if len(suggestions) < limit:
         for agent_name in all_names:
             if agent_name.lower() in name_lower and agent_name not in suggestions:
@@ -3361,10 +3363,14 @@ def build_mcp_server() -> FastMCP:
                 "_tip": "Use resource://agents to see all registered agents globally.",
             }
 
+        # Get the agent's actual project for commit history and logging
+        # This matters when agent was found via global fallback (different from requested project)
+        agent_project = await _get_project_by_id(agent.project_id)
+
         profile = _agent_to_dict(agent)
         recent: list[dict[str, Any]] = []
         if include_recent_commits:
-            archive = await ensure_archive(settings, project.slug)
+            archive = await ensure_archive(settings, agent_project.slug)
             repo: Repo = archive.repo
             try:
                 # Limit to archive path; extract last commits
@@ -3380,7 +3386,7 @@ def build_mcp_server() -> FastMCP:
             except Exception:
                 pass
         profile["recent_commits"] = recent
-        await ctx.info(f"whois for '{agent_name}' in '{project.human_key}' returned {len(recent)} commits")
+        await ctx.info(f"whois for '{agent_name}' in '{agent_project.human_key}' returned {len(recent)} commits")
         return profile
 
     @mcp.tool(name="create_agent_identity")

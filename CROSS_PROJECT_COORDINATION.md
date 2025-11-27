@@ -43,13 +43,32 @@ Use `resource://agents` to discover all agents across all projects:
 **Response:**
 ```json
 {
-  "total_agents": 5,
   "agents": [
-    {"name": "BackendDev", "project": "/data/projects/my-app", "model": "opus-4.1", ...},
-    {"name": "FrontendDev", "project": "/data/projects/my-app", "model": "sonnet-4.5", ...},
-    {"name": "DatabaseAdmin", "project": "/data/projects/db-service", "model": "gpt5", ...}
+    {
+      "name": "BackendDev",
+      "program": "claude-code",
+      "model": "opus-4.1",
+      "task_description": "API development",
+      "project_slug": "my-app-abc123",
+      "project_human_key": "/data/projects/my-app",
+      "unread_count": 3
+    },
+    {
+      "name": "FrontendDev",
+      "project_slug": "my-app-abc123",
+      "project_human_key": "/data/projects/my-app",
+      "model": "sonnet-4.5",
+      "unread_count": 0
+    },
+    {
+      "name": "DatabaseAdmin",
+      "project_slug": "db-service-def456",
+      "project_human_key": "/data/projects/db-service",
+      "model": "gpt5",
+      "unread_count": 1
+    }
   ],
-  "_tip": "Agent names are globally unique. Use send_message with any agent name."
+  "total": 3
 }
 ```
 
