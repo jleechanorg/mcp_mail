@@ -355,7 +355,8 @@ class TestGlobalAgentsDirectory:
             assert "total" in data
             agents = data["agents"]
 
-            # Find our test agents (filter out global-inbox agents)
+            # Filter out global-inbox agents - these are system agents auto-created
+            # for each project during ensure_project() and aren't user-registered agents
             test_agents = [a for a in agents if not a["name"].startswith("global-inbox-")]
             agent_names = [a["name"] for a in test_agents]
 
