@@ -1570,7 +1570,7 @@ async def _get_agent(project: Project, name: str) -> Agent:
         if not agent:
             raise NoResultFound(
                 f"Agent '{name}' not registered for project '{project.human_key}'. "
-                f"Tip: Use resource://agents/{project.slug} to discover registered agents."
+                "Tip: Use resource://agents to discover registered agents globally."
             )
         return agent
 
@@ -1631,9 +1631,13 @@ async def _find_similar_agents(name: str, limit: int = 5) -> list[str]:
     4. Substring matches (agent names containing the input, e.g., "BlueLake" for "Lake")
     5. Reverse substring matches (agent names that are substrings of the input, e.g., "Blue" for "BlueLakeExtra")
     """
+    target = (name or "").strip()
+    if not target:
+        return []
+
     await ensure_schema()
     suggestions: list[str] = []
-    name_lower = name.lower()
+    name_lower = target.lower()
 
     async with get_session() as session:
         # Get all active agent names
@@ -4465,7 +4469,7 @@ def build_mcp_server() -> FastMCP:
                             "agent_filter_not_found",
                             (
                                 f"Agent filter '{agent_filter}' was not found. "
-                                "Verify the agent name via resource://agents/{project.human_key}."
+                                "Verify the agent name via resource://agents."
                             ),
                         ) from exc
 
@@ -6615,16 +6619,19 @@ def build_mcp_server() -> FastMCP:
             agents = result.scalars().all()
 
             # Get unread message counts for all agents in one query
-            unread_counts_stmt = (
-                select(MessageRecipient.agent_id, func.count(MessageRecipient.message_id).label("unread_count"))
-                .where(
-                    cast(Any, MessageRecipient.read_ts).is_(None),
-                    cast(Any, MessageRecipient.agent_id).in_([agent.id for agent in agents]),
+            agent_ids = [agent.id for agent in agents if agent.id is not None]
+            unread_counts_map: dict[int, int] = {}
+            if agent_ids:
+                unread_counts_stmt = (
+                    select(MessageRecipient.agent_id, func.count(MessageRecipient.message_id).label("unread_count"))
+                    .where(
+                        cast(Any, MessageRecipient.read_ts).is_(None),
+                        cast(Any, MessageRecipient.agent_id).in_(agent_ids),
+                    )
+                    .group_by(MessageRecipient.agent_id)
                 )
-                .group_by(MessageRecipient.agent_id)
-            )
-            unread_counts_result = await session.execute(unread_counts_stmt)
-            unread_counts_map = {row.agent_id: row.unread_count for row in unread_counts_result}
+                unread_counts_result = await session.execute(unread_counts_stmt)
+                unread_counts_map = {row.agent_id: row.unread_count for row in unread_counts_result}
 
             # Build agent data with unread counts
             agent_data = []

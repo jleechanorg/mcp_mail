@@ -671,9 +671,9 @@ If you encounter issues:
 - `resource://project/{project_key}` - Project details including agents
 - `resource://projects` - List all projects
 - `resource://file_reservations/{project_key}?active_only=true` - Active file reservations
-- `resource://inbox/{agent_name}` - Agent's inbox (global lookup by agent name)
-- `resource://outbox/{agent_name}` - Agent's sent messages (global lookup)
-- `resource://message/{message_id}` - Single message details (globally accessible)
+- `resource://inbox/{agent_name}?project={project_key}` - Agent's inbox (requires project; global lookup works when the name is unique)
+- `resource://outbox/{agent_name}?project={project_key}` - Agent's sent messages (requires project; global lookup works when the name is unique)
+- `resource://message/{message_id}?project={project_key}` - Single message details (project optional when the id is unique globally)
 
 ## Next Steps
 

@@ -121,6 +121,13 @@ class TestFindSimilarAgents:
             assert "Blue" in suggestions
 
     @pytest.mark.asyncio
+    async def test_empty_input_returns_no_suggestions(self, isolated_env):
+        """Ensure empty or whitespace-only input short-circuits without DB work."""
+        # No projects or agents needed; function should return early
+        suggestions = await _find_similar_agents("   ")
+        assert suggestions == []
+
+    @pytest.mark.asyncio
     async def test_limit_parameter_respected(self, isolated_env):
         """Test that the limit parameter restricts the number of suggestions."""
         mcp = build_mcp_server()

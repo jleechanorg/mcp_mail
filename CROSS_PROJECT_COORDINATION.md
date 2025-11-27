@@ -50,21 +50,29 @@ Use `resource://agents` to discover all agents across all projects:
       "model": "opus-4.1",
       "task_description": "API development",
       "project_slug": "my-app-abc123",
-      "project_human_key": "/data/projects/my-app",
+      "project_human_key": "my-app",
+      "inception_ts": "2025-10-25T12:00:00Z",
+      "last_active_ts": "2025-10-25T12:34:56Z",
       "unread_count": 3
     },
     {
       "name": "FrontendDev",
-      "project_slug": "my-app-abc123",
-      "project_human_key": "/data/projects/my-app",
+      "program": "claude-code",
       "model": "sonnet-4.5",
+      "project_slug": "my-app-abc123",
+      "project_human_key": "my-app",
+      "inception_ts": "2025-10-25T11:00:00Z",
+      "last_active_ts": "2025-10-25T12:10:00Z",
       "unread_count": 0
     },
     {
       "name": "DatabaseAdmin",
+      "program": "claude-code",
       "project_slug": "db-service-def456",
-      "project_human_key": "/data/projects/db-service",
+      "project_human_key": "db-service",
       "model": "gpt5",
+      "inception_ts": "2025-10-20T08:15:00Z",
+      "last_active_ts": "2025-10-25T09:45:00Z",
       "unread_count": 1
     }
   ],
@@ -142,9 +150,9 @@ Use multiple projects when you want:
 - **Different Codebases** - Each repository can have its own project
 - **Team Organization** - Organize agents by team or domain
 
-**Example: Monorepo with Logical Separation**
+#### Example: Monorepo with Logical Separation
 
-```
+```text
 Project A: /data/projects/my-app/frontend
   - Agent: "FrontendDev"
   - Archives: UI component discussions
@@ -164,9 +172,9 @@ Use a single shared project when you want:
 - **Simplified Setup** - Single project key for all operations
 - **Shared Thread Context** - All agents see the same thread history
 
-**Example: Unified Project**
+#### Example: Unified Project
 
-```
+```text
 Project: /data/projects/my-app
   - Agent: "FrontendDev"
   - Agent: "BackendDev"

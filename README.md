@@ -1939,7 +1939,7 @@ This section has been removed to keep the README focused. Client code samples be
 - Inline images didn't embed
   - Ensure `convert_images=true`; images are automatically inlined if the compressed WebP size is below the server's `INLINE_IMAGE_MAX_BYTES` threshold (default 64KB). Larger images are stored as attachments instead.
 - Message not found
-  - Message IDs are globally unique. Use `resource://message/{id}` to fetch any message by its ID.
+  - Message IDs may collide across projects. Use `resource://message/{id}?project={project_key}` when in doubt; bare `resource://message/{id}` works only when the id is unique.
 - Inbox empty but messages exist
   - Check `since_ts`, `urgent_only`, and `limit`; verify recipient names match exactly (case-sensitive)
 
@@ -2023,6 +2023,7 @@ This section has been removed to keep the README focused. Client code samples be
 | `resource://tooling/schemas` | — | `{tools: {<name>: {required[], optional[], aliases{}}}}` | Argument hints for tools |
 | `resource://tooling/metrics` | — | `{generated_at, tools[]}` | Aggregated call/error counts per tool |
 | `resource://tooling/locks` | — | `{locks[], summary}` | Active locks and owners (debug only). Categories: `archive` (per-project `.archive.lock`) and `custom` (e.g., repo `.commit.lock`). |
+| `resource://agents` | — | `{agents[], total}` | Global agent directory with project metadata and unread counts |
 | `resource://tooling/capabilities/{agent}{?project}` | listed| `{generated_at, agent, project, capabilities[]}` | Capabilities assigned to the agent (see `deploy/capabilities/agent_capabilities.json`) |
 | `resource://tooling/recent/{window_seconds}{?agent,project}` | listed | `{generated_at, window_seconds, count, entries[]}` | Recent tool usage filtered by agent/project |
 | `resource://projects` | — | `list[project]` | All projects |
