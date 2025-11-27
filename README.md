@@ -1531,24 +1531,31 @@ sequenceDiagram
   - External-content FTS virtual table and triggers index subject/body on insert/update/delete
   - Queries are constrained to the project id and ordered by `created_ts DESC`
 
-## Contact model and "consent-lite" messaging
+## Contact model and global agent namespace
 
-Goal: make coordination "just work" without spam across unrelated agents. The server enforces per-project isolation by default and adds an optional consent layer within a project so agents only contact relevant peers.
+Goal: make coordination "just work" without barriers between agents. Agent names are **globally unique** across all projects, enabling seamless communication.
 
-### Isolation by project
+### Global agent namespace
 
-- All tools require a `project_key`. Agents only see messages addressed to them within that project.
-- An agent working in Project A is invisible to agents in Project B unless explicit cross-project contact is established (see below). This avoids distraction between unrelated repositories.
+- Agent names are **globally unique** (case-insensitive). A name like "BlueLake" can only exist once across the entire system.
+- Agents can discover and message **any other agent** regardless of project boundaries using `resource://agents` (canonical global directory).
+- Projects serve as **organizational containers** for archiving and context, not as access control boundaries.
+
+### Projects as organizational units
+
+- All tools still use a `project_key` for message archival and organization.
+- Messages are stored in project-specific archives for organizational purposes.
+- Agents see messages addressed to them globally, regardless of which project the sender belongs to.
 
 ### Cross-project coordination (frontend vs backend repos)
 
 When two repos represent the same underlying project (e.g., `frontend` and `backend`), you have two options:
 
-1) Use the same `project_key` across both workspaces. Agents in both repos operate under one project namespace and benefit from full inbox/outbox coordination automatically.
+1) Use the same `project_key` across both workspaces. All messages are archived together in one location.
 
-2) Keep separate `project_key`s. Agents can message each other across projects directly using `send_message` with the `project:<slug>#<AgentName>` addressing format.
+2) Keep separate `project_key`s for organizational separation. Agents can still message each other directly by name since agent names are globally unique.
 
-**NOTE:** Contact approval is no longer required for cross-project messaging. Contact enforcement has been removed to enable frictionless collaboration between agents.
+**NOTE:** No special addressing is required for cross-project messaging. Simply use the agent name in the `to` field of `send_message`. The `project:<slug>#<AgentName>` format is still supported for explicit cross-project addressing but is optional.
 
 <!-- Consolidated in API Quick Reference → Tools below to avoid duplication -->
 
@@ -1926,13 +1933,13 @@ This section has been removed to keep the README focused. Client code samples be
 ## Troubleshooting
 
 - "sender_name not registered"
-  - Create the agent first with `register_agent` or `create_agent_identity`, or check the `project_key` you're using matches the sender's project
+  - Create the agent first with `register_agent` or `create_agent_identity`. Agent names are globally unique, so ensure the sender name exists in the system.
 - Pre-commit hook blocks commits
   - Set `AGENT_NAME` to your agent identity; release or wait for conflicting exclusive file reservations; inspect `.git/hooks/pre-commit`
 - Inline images didn't embed
   - Ensure `convert_images=true`; images are automatically inlined if the compressed WebP size is below the server's `INLINE_IMAGE_MAX_BYTES` threshold (default 64KB). Larger images are stored as attachments instead.
 - Message not found
-  - Confirm the `project` disambiguation when using `resource://message/{id}`; ids are unique per project
+  - Message IDs may collide across projects. Use `resource://message/{id}?project={project_key}` when in doubt; bare `resource://message/{id}` works only when the id is unique.
 - Inbox empty but messages exist
   - Check `since_ts`, `urgent_only`, and `limit`; verify recipient names match exactly (case-sensitive)
 
@@ -2016,6 +2023,7 @@ This section has been removed to keep the README focused. Client code samples be
 | `resource://tooling/schemas` | — | `{tools: {<name>: {required[], optional[], aliases{}}}}` | Argument hints for tools |
 | `resource://tooling/metrics` | — | `{generated_at, tools[]}` | Aggregated call/error counts per tool |
 | `resource://tooling/locks` | — | `{locks[], summary}` | Active locks and owners (debug only). Categories: `archive` (per-project `.archive.lock`) and `custom` (e.g., repo `.commit.lock`). |
+| `resource://agents` | — | `{agents[], total}` | Global agent directory with project metadata and unread counts |
 | `resource://tooling/capabilities/{agent}{?project}` | listed| `{generated_at, agent, project, capabilities[]}` | Capabilities assigned to the agent (see `deploy/capabilities/agent_capabilities.json`) |
 | `resource://tooling/recent/{window_seconds}{?agent,project}` | listed | `{generated_at, window_seconds, count, entries[]}` | Recent tool usage filtered by agent/project |
 | `resource://projects` | — | `list[project]` | All projects |

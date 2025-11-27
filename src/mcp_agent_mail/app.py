@@ -72,7 +72,7 @@ CLUSTER_MACROS = "workflow_macros"
 
 # Global inbox configuration
 def get_global_inbox_name(project: Project) -> str:
-    """Get project-specific global inbox name to ensure per-project isolation."""
+    """Get project-specific global inbox name for message archival organization."""
     return f"global-inbox-{project.slug}"
 
 
@@ -692,7 +692,7 @@ async def _ensure_global_inbox_agent(project: Project, session: Optional[AsyncSe
     """Ensure the global inbox agent exists for the given project.
 
     Each project gets its own global inbox agent with a project-specific name
-    to ensure proper isolation between projects.
+    for organizational purposes and message archival.
     """
     if project.id is None:
         raise ValueError("Project must have an id before creating global inbox agent.")
@@ -1570,7 +1570,7 @@ async def _get_agent(project: Project, name: str) -> Agent:
         if not agent:
             raise NoResultFound(
                 f"Agent '{name}' not registered for project '{project.human_key}'. "
-                f"Tip: Use resource://agents/{project.slug} to discover registered agents."
+                "Tip: Use resource://agents to discover registered agents globally."
             )
         return agent
 
@@ -1619,6 +1619,68 @@ async def _get_agent_by_name_optional(name: str) -> Agent | None:
             )
         )
         return result.scalars().first()
+
+
+async def _find_similar_agents(name: str, limit: int = 5) -> list[str]:
+    """Find agent names similar to the given name for suggestions.
+
+    Uses multiple strategies to find similar names:
+    1. Case variations (exact match with different case)
+    2. Prefix matches (agent names starting with the input, e.g., "BlueLake" for "Blue")
+    3. Reverse prefix matches (agent names that are prefixes of the input, e.g., "Blue" for "BlueLake")
+    4. Substring matches (agent names containing the input, e.g., "BlueLake" for "Lake")
+    5. Reverse substring matches (agent names that are substrings of the input, e.g., "Blue" for "BlueLakeExtra")
+    """
+    target = (name or "").strip()
+    if not target:
+        return []
+
+    await ensure_schema()
+    suggestions: list[str] = []
+    name_lower = target.lower()
+
+    async with get_session() as session:
+        # Get all active agent names
+        result = await session.execute(select(Agent.name).where(cast(Any, Agent.is_active).is_(True)))
+        all_names = [row[0] for row in result.all()]
+
+    # Strategy 1: Exact case-insensitive match (shouldn't happen, but just in case)
+    for agent_name in all_names:
+        if agent_name.lower() == name_lower:
+            suggestions.append(agent_name)
+
+    # Strategy 2: Prefix matches (e.g., "Blue" matches "BlueLake")
+    for agent_name in all_names:
+        if agent_name.lower().startswith(name_lower) and agent_name not in suggestions:
+            suggestions.append(agent_name)
+        if len(suggestions) >= limit:
+            break
+
+    # Strategy 3: Agent names that are prefixes of the input (e.g., "Blue" when searching "BlueLake")
+    if len(suggestions) < limit:
+        for agent_name in all_names:
+            if name_lower.startswith(agent_name.lower()) and agent_name not in suggestions:
+                suggestions.append(agent_name)
+            if len(suggestions) >= limit:
+                break
+
+    # Strategy 4: Substring matches (e.g., "Lake" matches "BlueLake")
+    if len(suggestions) < limit:
+        for agent_name in all_names:
+            if name_lower in agent_name.lower() and agent_name not in suggestions:
+                suggestions.append(agent_name)
+            if len(suggestions) >= limit:
+                break
+
+    # Strategy 5: Agent names that are substrings of the input (e.g., "Blue" when searching "BlueLakeExtra")
+    if len(suggestions) < limit:
+        for agent_name in all_names:
+            if agent_name.lower() in name_lower and agent_name not in suggestions:
+                suggestions.append(agent_name)
+            if len(suggestions) >= limit:
+                break
+
+    return suggestions[:limit]
 
 
 async def _create_message(
@@ -3027,6 +3089,13 @@ def build_mcp_server() -> FastMCP:
         """
         Create or update an agent identity within a project and persist its profile to Git.
 
+        IMPORTANT: Global Namespace
+        ---------------------------
+        Agent names are GLOBALLY UNIQUE across all projects. Use `whois` or `resource://agents`
+        to verify agent existence - do NOT rely on project-scoped agent lists for discovery.
+
+        Before choosing a name, check resource://agents to see all existing agents.
+
         When to use
         -----------
         - At the start of a coding session by any automated agent.
@@ -3045,7 +3114,7 @@ def build_mcp_server() -> FastMCP:
         -----------------------------
         - Agent names can be any alphanumeric string (letters and numbers only)
         - Examples: "BlueLake", "streamf", "agent1", "BackendWorker"
-        - Names are globally unique across all projects
+        - Names are globally unique across all projects (case-insensitive)
         - Non-alphanumeric characters are automatically stripped during sanitization
         - Names are limited to 128 characters
         - Best practice: Use memorable, short names that are easy to reference
@@ -3244,9 +3313,17 @@ def build_mcp_server() -> FastMCP:
         """
         Return enriched profile details for an agent, optionally including recent archive commits.
 
+        IMPORTANT: Global Namespace
+        ---------------------------
+        Agent names are GLOBALLY UNIQUE across all projects. Use `whois` or `resource://agents`
+        to verify agent existence - do NOT rely on project-scoped agent lists for discovery.
+
+        This tool first checks the specified project, then falls back to a global search.
+        If no agent is found, it suggests similar agent names that may match your intent.
+
         Discovery
         ---------
-        To discover available agent names, use: resource://agents/{project_key}
+        Use resource://agents (global) to discover all registered agents.
         Agent names are NOT the same as program names or user names.
 
         Parameters
@@ -3254,7 +3331,7 @@ def build_mcp_server() -> FastMCP:
         project_key : str
             Project slug or human key.
         agent_name : str
-            Agent name to look up (use resource://agents/{project_key} to discover names).
+            Agent name to look up (use resource://agents to discover names globally).
         include_recent_commits : bool
             If true, include latest commits touching the project archive authored by the configured git author.
         commit_limit : int
@@ -3264,13 +3341,40 @@ def build_mcp_server() -> FastMCP:
         -------
         dict
             Agent profile augmented with { recent_commits: [{hexsha, summary, authored_ts}] } when requested.
+            If agent not found, returns { "error": "...", "suggestions": [...] }.
         """
         project = await _get_project_by_identifier(project_key)
-        agent = await _get_agent(project, agent_name)
+
+        # First try to find agent in the specified project
+        agent = await _get_agent_optional(project, agent_name)
+
+        # If not found in project, try global lookup
+        if not agent:
+            agent = await _get_agent_by_name_optional(agent_name)
+
+        # If still not found, generate suggestions
+        if not agent:
+            suggestions = await _find_similar_agents(agent_name)
+            suggestion_text = ""
+            if suggestions:
+                suggestion_text = f" Did you mean one of: {suggestions}?"
+            error_msg = f"Agent '{agent_name}' not found.{suggestion_text}"
+            await ctx.warning(error_msg)
+            return {
+                "error": error_msg,
+                "agent_name": agent_name,
+                "suggestions": suggestions,
+                "_tip": "Use resource://agents to see all registered agents globally.",
+            }
+
+        # Get the agent's actual project for commit history and logging
+        # This matters when agent was found via global fallback (different from requested project)
+        agent_project = await _get_project_by_id(agent.project_id)
+
         profile = _agent_to_dict(agent)
         recent: list[dict[str, Any]] = []
         if include_recent_commits:
-            archive = await ensure_archive(settings, project.slug)
+            archive = await ensure_archive(settings, agent_project.slug)
             repo: Repo = archive.repo
             try:
                 # Limit to archive path; extract last commits
@@ -3286,7 +3390,7 @@ def build_mcp_server() -> FastMCP:
             except Exception:
                 pass
         profile["recent_commits"] = recent
-        await ctx.info(f"whois for '{agent_name}' in '{project.human_key}' returned {len(recent)} commits")
+        await ctx.info(f"whois for '{agent_name}' in '{agent_project.human_key}' returned {len(recent)} commits")
         return profile
 
     @mcp.tool(name="create_agent_identity")
@@ -3404,13 +3508,19 @@ def build_mcp_server() -> FastMCP:
         """
         Send a Markdown message to one or more recipients and persist canonical and mailbox copies to Git.
 
-        NOTE: Agent names are globally unique. Recipients can be any registered agent by name,
-        regardless of project boundaries. The project_key parameter is informational only and
-        does not restrict which agents can communicate.
+        IMPORTANT: Global Namespace
+        ---------------------------
+        Agent names are GLOBALLY UNIQUE across all projects. Use `whois` or `resource://agents`
+        to verify agent existence - do NOT rely on project-scoped agent lists for discovery.
+
+        Recipients can be any registered agent by name, regardless of project boundaries.
+        The project_key parameter is informational only and does not restrict which agents
+        can communicate.
 
         Discovery
         ---------
-        To discover available agent names for recipients, use: resource://agents/{project_key}
+        Use resource://agents (global) to discover all registered agents.
+        Use whois(agent_name) to verify a specific agent exists.
         Agent names are NOT the same as program names or user names.
 
         What this does
@@ -4359,7 +4469,7 @@ def build_mcp_server() -> FastMCP:
                             "agent_filter_not_found",
                             (
                                 f"Agent filter '{agent_filter}' was not found. "
-                                "Verify the agent name via resource://agents/{project.human_key}."
+                                "Verify the agent name via resource://agents."
                             ),
                         ) from exc
 
@@ -6340,18 +6450,119 @@ def build_mcp_server() -> FastMCP:
             "agents": [_agent_to_dict(agent) for agent in agents],
         }
 
-    @mcp.resource("resource://agents/{project_key}", mime_type="application/json")
-    async def agents_directory(project_key: str) -> dict[str, Any]:
+    @mcp.resource("resource://agents", mime_type="application/json")
+    async def agents_directory_global() -> dict[str, Any]:
         """
-        List all registered agents in a project for easy agent discovery.
+        List ALL active agents across all projects (global agent directory).
 
-        This is the recommended way to discover other agents working on a project.
+        This is the CANONICAL way to discover agents. Agent names are globally unique,
+        so this endpoint shows the complete namespace of registered agents.
 
         When to use
         -----------
-        - At the start of a coding session to see who else is working on the project.
-        - Before sending messages to discover available recipients.
-        - To check if a specific agent is registered before attempting contact.
+        - ALWAYS use this first when looking for an agent by name.
+        - Before sending messages to verify recipients exist.
+        - At session start to see all active agents across the system.
+        - When cross-project collaboration is needed.
+
+        Returns
+        -------
+        dict
+            {
+              "agents": [
+                {
+                  "name": "BackendDev",
+                  "program": "claude-code",
+                  "model": "sonnet-4.5",
+                  "task_description": "API development",
+                  "project_slug": "backend-abc123",
+                  "project_human_key": "backend",
+                  "inception_ts": "2025-10-25T...",
+                  "last_active_ts": "2025-10-25T...",
+                  "unread_count": 3
+                },
+                ...
+              ],
+              "total": 42
+            }
+
+        Example
+        -------
+        ```json
+        {"jsonrpc":"2.0","id":"r5","method":"resources/read","params":{"uri":"resource://agents"}}
+        ```
+
+        Notes
+        -----
+        - Agent names are globally unique across all projects.
+        - Use whois(agent_name) to get detailed info about a specific agent.
+        - Cross-project messaging is fully supported; project boundaries are informational only.
+        - This is the primary agent discovery endpoint; prefer this over project-scoped views.
+        """
+        await ensure_schema()
+
+        async with get_session() as session:
+            # Join agents with projects to get project info
+            result = await session.execute(
+                select(Agent, Project)
+                .join(Project, Agent.project_id == Project.id)
+                .where(cast(Any, Agent.is_active).is_(True))
+                .order_by(desc(Agent.last_active_ts))
+            )
+            rows = result.all()
+
+            # Get agent IDs for unread count query
+            agent_ids = [row.Agent.id for row in rows]
+
+            # Get unread message counts for all agents in one query
+            unread_counts_map: dict[int, int] = {}
+            if agent_ids:
+                unread_counts_stmt = (
+                    select(MessageRecipient.agent_id, func.count(MessageRecipient.message_id).label("unread_count"))
+                    .where(
+                        cast(Any, MessageRecipient.read_ts).is_(None),
+                        cast(Any, MessageRecipient.agent_id).in_(agent_ids),
+                    )
+                    .group_by(MessageRecipient.agent_id)
+                )
+                unread_counts_result = await session.execute(unread_counts_stmt)
+                unread_counts_map = {row.agent_id: row.unread_count for row in unread_counts_result}
+
+            # Build agent data with project info and unread counts
+            agent_data = []
+            for row in rows:
+                agent = row.Agent
+                project = row.Project
+                agent_dict = _agent_to_dict(agent)
+                agent_dict["project_slug"] = project.slug
+                agent_dict["project_human_key"] = project.human_key
+                agent_dict["unread_count"] = unread_counts_map.get(agent.id, 0)
+                agent_data.append(agent_dict)
+
+        return {
+            "agents": agent_data,
+            "total": len(agent_data),
+        }
+
+    @mcp.resource("resource://agents/{project_key}", mime_type="application/json")
+    async def agents_directory(project_key: str) -> dict[str, Any]:
+        """
+        List agents in a specific project (FILTERED VIEW - prefer resource://agents for discovery).
+
+        DEPRECATION NOTICE
+        ------------------
+        This endpoint returns a project-filtered view only. Agent names are globally unique,
+        so filtering by project may cause you to miss agents you're looking for.
+
+        **Prefer resource://agents for agent discovery.**
+
+        Use this endpoint only when you specifically need to see agents working on a
+        particular project.
+
+        When to use
+        -----------
+        - To see which agents are currently assigned to a specific project.
+        - NOT for general agent discovery (use resource://agents instead).
 
         Parameters
         ----------
@@ -6362,6 +6573,7 @@ def build_mcp_server() -> FastMCP:
         -------
         dict
             {
+              "_notice": "Filtered view only. Use resource://agents for complete global agent list.",
               "project": { "slug": "...", "human_key": "..." },
               "agents": [
                 {
@@ -6387,8 +6599,9 @@ def build_mcp_server() -> FastMCP:
         -----
         - Agent names are NOT the same as your program name or user name.
         - Use the returned names when calling tools like whois(), send_message().
-        - This directory lists agents registered in the specified project.
-        - Note: Agent names are globally unique and cross-project messaging is allowed.
+        - This directory lists agents registered in the specified project ONLY.
+        - Agent names are globally unique; an agent not in this list may still exist elsewhere.
+        - For complete agent discovery, use resource://agents instead.
         """
         project = await _get_project_by_identifier(project_key)
         await ensure_schema()
@@ -6406,16 +6619,19 @@ def build_mcp_server() -> FastMCP:
             agents = result.scalars().all()
 
             # Get unread message counts for all agents in one query
-            unread_counts_stmt = (
-                select(MessageRecipient.agent_id, func.count(MessageRecipient.message_id).label("unread_count"))
-                .where(
-                    cast(Any, MessageRecipient.read_ts).is_(None),
-                    cast(Any, MessageRecipient.agent_id).in_([agent.id for agent in agents]),
+            agent_ids = [agent.id for agent in agents if agent.id is not None]
+            unread_counts_map: dict[int, int] = {}
+            if agent_ids:
+                unread_counts_stmt = (
+                    select(MessageRecipient.agent_id, func.count(MessageRecipient.message_id).label("unread_count"))
+                    .where(
+                        cast(Any, MessageRecipient.read_ts).is_(None),
+                        cast(Any, MessageRecipient.agent_id).in_(agent_ids),
+                    )
+                    .group_by(MessageRecipient.agent_id)
                 )
-                .group_by(MessageRecipient.agent_id)
-            )
-            unread_counts_result = await session.execute(unread_counts_stmt)
-            unread_counts_map = {row.agent_id: row.unread_count for row in unread_counts_result}
+                unread_counts_result = await session.execute(unread_counts_stmt)
+                unread_counts_map = {row.agent_id: row.unread_count for row in unread_counts_result}
 
             # Build agent data with unread counts
             agent_data = []
@@ -6425,6 +6641,7 @@ def build_mcp_server() -> FastMCP:
                 agent_data.append(agent_dict)
 
         return {
+            "_notice": "Filtered view only. Use resource://agents for complete global agent list.",
             "project": {
                 "slug": project.slug,
                 "human_key": project.human_key,

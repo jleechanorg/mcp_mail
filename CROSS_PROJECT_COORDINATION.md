@@ -6,16 +6,18 @@ This guide explains how to coordinate agents working across different parts of a
 
 **Example Format**: Code examples use simplified pseudo-JSON for clarity. Your MCP client library handles the actual JSON-RPC protocol - focus on understanding the tool calls and architectural patterns shown here.
 
-## Current State: Project Isolation
+## Current State: Global Agent Namespace
 
-**IMPORTANT:** In the current implementation, **projects are isolated namespaces**. This means:
+**IMPORTANT:** Agent names are **globally unique** across ALL projects (case-insensitive).
 
-- Agents registered in different projects **cannot see each other**
-- Agents in different projects **cannot send messages to each other**
-- File reservations are scoped to a single project
-- Inbox/outbox are per-project
+This means:
 
-**Example of what DOES NOT work:**
+- An agent named "BlueLake" can only exist **once** across the entire system
+- Agents can discover and message **any other agent** regardless of project boundaries
+- Projects serve as **organizational containers** for archiving and context, not as access control boundaries
+- `resource://agents` is the **canonical endpoint** for discovering all agents globally
+
+**Example of how agents work:**
 
 ```
 Project A: /data/projects/frontend
@@ -24,493 +26,327 @@ Project A: /data/projects/frontend
 Project B: /data/projects/backend
   - Agent: "BackendDev"
 
-Result: FrontendDev and BackendDev CANNOT communicate.
+Result: FrontendDev and BackendDev CAN communicate freely!
+        Both appear in resource://agents (global directory)
 ```
 
-## Recommended Approach: Single Shared Project
+## Agent Discovery
 
-For most use cases, especially monorepos or tightly coupled frontend/backend codebases, **use a single shared project** for all agents.
+### Primary Method: Global Agent Directory (RECOMMENDED)
 
-### Pattern 1: Monorepo (Recommended)
+Use `resource://agents` to discover all agents across all projects:
 
-Use when frontend and backend are in the same repository:
-
+```json
+{"resource": "resource://agents", "method": "read"}
 ```
+
+**Response:**
+```json
+{
+  "agents": [
+    {
+      "name": "BackendDev",
+      "program": "claude-code",
+      "model": "opus-4.1",
+      "task_description": "API development",
+      "project_slug": "my-app-abc123",
+      "project_human_key": "my-app",
+      "inception_ts": "2025-10-25T12:00:00Z",
+      "last_active_ts": "2025-10-25T12:34:56Z",
+      "unread_count": 3
+    },
+    {
+      "name": "FrontendDev",
+      "program": "claude-code",
+      "model": "sonnet-4.5",
+      "project_slug": "my-app-abc123",
+      "project_human_key": "my-app",
+      "inception_ts": "2025-10-25T11:00:00Z",
+      "last_active_ts": "2025-10-25T12:10:00Z",
+      "unread_count": 0
+    },
+    {
+      "name": "DatabaseAdmin",
+      "program": "claude-code",
+      "project_slug": "db-service-def456",
+      "project_human_key": "db-service",
+      "model": "gpt5",
+      "inception_ts": "2025-10-20T08:15:00Z",
+      "last_active_ts": "2025-10-25T09:45:00Z",
+      "unread_count": 1
+    }
+  ],
+  "total": 3
+}
+```
+
+### Secondary Method: Project-Scoped View (Deprecated)
+
+`resource://agents/{project_key}` still works but shows a filtered view only:
+
+```json
+{"resource": "resource://agents/my-app", "method": "read"}
+```
+
+**Note:** This endpoint is **deprecated**. Use `resource://agents` for complete discovery.
+
+## Messaging Across Projects
+
+### Direct Messaging (RECOMMENDED)
+
+Agents can message any other agent directly by name:
+
+```json
+{
+  "tool": "send_message",
+  "arguments": {
+    "project_key": "/data/projects/frontend",
+    "sender_name": "FrontendDev",
+    "to": ["BackendDev"],
+    "subject": "API contract question",
+    "body_md": "What's the format for the /api/users response?"
+  }
+}
+```
+
+**Key Points:**
+- The `to` field accepts any registered agent name
+- No need for project prefixes or special addressing
+- Messages are delivered regardless of which project the recipient is registered in
+
+### Cross-Project Addressing (Alternative)
+
+For explicit cross-project messaging, you can use the `project:slug#AgentName` format:
+
+```json
+{
+  "tool": "send_message",
+  "arguments": {
+    "project_key": "/data/projects/frontend",
+    "sender_name": "FrontendDev",
+    "to": ["project:backend#BackendDev"],
+    "subject": "Need API coordination",
+    "body_md": "Let's discuss the upcoming changes..."
+  }
+}
+```
+
+**Note:** This format is optional - simple agent names work just as well since agents are globally unique.
+
+## Projects: Organizational Containers
+
+Projects now serve primarily as:
+
+1. **Archive Organization** - Messages and agent profiles are stored in project-specific directories
+2. **Contextual Grouping** - Helps organize agents working on related codebases
+3. **Human-Readable Identification** - The `human_key` provides meaningful project names
+4. **Git History** - Each project has its own archive with commit history
+
+### When to Use Multiple Projects
+
+Use multiple projects when you want:
+
+- **Logical Separation** - Keep frontend and backend message archives separate
+- **Different Codebases** - Each repository can have its own project
+- **Team Organization** - Organize agents by team or domain
+
+#### Example: Monorepo with Logical Separation
+
+```text
+Project A: /data/projects/my-app/frontend
+  - Agent: "FrontendDev"
+  - Archives: UI component discussions
+
+Project B: /data/projects/my-app/backend
+  - Agent: "BackendDev"
+  - Archives: API development discussions
+
+Both agents can freely communicate!
+```
+
+### When to Use a Single Project
+
+Use a single shared project when you want:
+
+- **Unified Archive** - All messages in one place
+- **Simplified Setup** - Single project key for all operations
+- **Shared Thread Context** - All agents see the same thread history
+
+#### Example: Unified Project
+
+```text
 Project: /data/projects/my-app
-Repository Structure:
-  /data/projects/my-app/
-    ├── frontend/          (React, Vue, etc.)
-    ├── backend/           (FastAPI, Express, etc.)
-    ├── database/          (migrations, schemas)
-    └── docs/
+  - Agent: "FrontendDev"
+  - Agent: "BackendDev"
+  - Agent: "DatabaseAdmin"
+  - Agent: "DevOpsEngineer"
 
-Agents:
-  - FrontendDev     → Works on frontend/
-  - BackendDev      → Works on backend/
-  - DatabaseAdmin   → Works on database/
-  - DevOpsEngineer  → Works on CI/CD across all directories
+All agents share the same archive.
 ```
 
-**Setup:**
+## Registration Patterns
+
+### Pattern 1: Separate Projects, Global Communication
 
 ```json
-// All agents use the SAME project_key
-
-// FrontendDev registers:
+// FrontendDev registers in frontend project
 {
-  "tool": "ensure_project",
-  "arguments": {"human_key": "/data/projects/my-app"}
+  "tool": "register_agent",
+  "arguments": {
+    "project_key": "/data/projects/frontend",
+    "name": "FrontendDev",
+    "program": "claude-code",
+    "model": "sonnet-4.5",
+    "task_description": "React UI development"
+  }
 }
+
+// BackendDev registers in backend project
+{
+  "tool": "register_agent",
+  "arguments": {
+    "project_key": "/data/projects/backend",
+    "name": "BackendDev",
+    "program": "codex-cli",
+    "model": "gpt5-codex",
+    "task_description": "API development"
+  }
+}
+
+// They can now communicate directly!
+{
+  "tool": "send_message",
+  "arguments": {
+    "sender_name": "FrontendDev",
+    "to": ["BackendDev"],
+    "subject": "API question"
+  }
+}
+```
+
+### Pattern 2: Single Project, Multiple Agents
+
+```json
+// Both agents register in the same project
 {
   "tool": "register_agent",
   "arguments": {
     "project_key": "/data/projects/my-app",
     "name": "FrontendDev",
-    "task_description": "React components and UI"
+    "task_description": "React UI components"
   }
 }
 
-// BackendDev registers:
-{
-  "tool": "ensure_project",
-  "arguments": {"human_key": "/data/projects/my-app"}
-}
 {
   "tool": "register_agent",
   "arguments": {
     "project_key": "/data/projects/my-app",
     "name": "BackendDev",
-    "task_description": "API endpoints and business logic"
-  }
-}
-
-// Now they can communicate!
-```
-
-**Benefits:**
-- ✅ Agents can discover each other via `resource://agents/my-app`
-- ✅ Agents can send messages to coordinate
-- ✅ Thread discussions can include all stakeholders
-- ✅ File reservations work across the entire codebase
-- ✅ Shared project archive for all communication history
-
-**Considerations:**
-- All agents share the same agent namespace (agent names must be unique within the project)
-- All agents CAN message all other agents in the project (unless contact policies restrict this)
-- Agents only see messages addressed to them or sent by them (privacy is maintained)
-- File reservations need careful path specification to avoid conflicts
-
-### Pattern 2: Polyrepo with Shared Project
-
-Use when frontend and backend are separate repositories but need coordination:
-
-```
-Repositories:
-  /data/projects/frontend-repo/     (separate git repo)
-  /data/projects/backend-repo/      (separate git repo)
-
-MCP Agent Mail Project:
-  /data/projects/my-app-coordination/
-
-Agents:
-  - FrontendDev     → Works on /data/projects/frontend-repo/
-  - BackendDev      → Works on /data/projects/backend-repo/
-  - Both registered in project: /data/projects/my-app-coordination/
-```
-
-**Setup:**
-
-```json
-// Create a coordination project separate from code repos
-
-// FrontendDev:
-{
-  "tool": "ensure_project",
-  "arguments": {"human_key": "/data/projects/my-app-coordination"}
-}
-{
-  "tool": "register_agent",
-  "arguments": {
-    "project_key": "/data/projects/my-app-coordination",
-    "name": "FrontendDev",
-    "task_description": "Frontend development"
-  }
-}
-
-// BackendDev:
-{
-  "tool": "register_agent",
-  "arguments": {
-    "project_key": "/data/projects/my-app-coordination",
-    "name": "BackendDev",
-    "task_description": "Backend development"
+    "task_description": "API endpoints"
   }
 }
 ```
-
-**Benefits:**
-- ✅ Coordination possible despite separate code repositories
-- ✅ Message archive is in a dedicated location
-- ✅ Clear separation between coordination and code
-
-**Considerations:**
-- File reservations won't prevent conflicts across different repos (use messages to coordinate instead)
-- Need to manage multiple git repositories
-
-## When to Use Separate Projects
-
-Use separate, isolated projects when:
-
-1. **Completely independent teams** - Teams that rarely or never coordinate
-2. **Different organizations** - External contractors, vendors, etc.
-3. **Security/privacy requirements** - Need hard isolation between teams
-4. **Long-term projects with rare interaction** - Separate concerns that don't need real-time coordination
-
-**Example: Agency with Multiple Clients**
-
-```
-Project A: /data/projects/client-acme
-  Agents: AcmeFrontend, AcmeBackend, AcmeDevOps
-
-Project B: /data/projects/client-globex
-  Agents: GlobexFrontend, GlobexBackend, GlobexDevOps
-
-Result: Complete isolation between client projects.
-```
-
-**Important:** Agents in separate projects **cannot** currently communicate. This is by design for security and privacy.
-
-## Migration Guide
-
-If you currently have agents in separate projects that need to coordinate, here's how to migrate:
-
-### Scenario: Frontend and Backend in Separate Projects
-
-**Current state (NOT working):**
-
-```
-Project A: /data/projects/frontend
-  - Agent: FrontendDev
-
-Project B: /data/projects/backend
-  - Agent: BackendDev
-
-Problem: Can't communicate!
-```
-
-**Solution: Merge into single project**
-
-```json
-// Step 1: Create new shared project
-{
-  "tool": "ensure_project",
-  "arguments": {"human_key": "/data/projects/my-app"}
-}
-
-// Step 2: Re-register FrontendDev in new project
-{
-  "tool": "register_agent",
-  "arguments": {
-    "project_key": "/data/projects/my-app",
-    "name": "FrontendDev",
-    "task_description": "Frontend development"
-  }
-}
-
-// Step 3: Re-register BackendDev in new project
-{
-  "tool": "register_agent",
-  "arguments": {
-    "project_key": "/data/projects/my-app",
-    "name": "BackendDev",
-    "task_description": "Backend development"
-  }
-}
-
-// Step 4: Both agents now use project_key="/data/projects/my-app" for all operations
-```
-
-**Note:** Historical messages from the old projects won't automatically migrate. If you need message history:
-
-1. Archive old project messages using `resource://inbox/{old-project}/{agent}`
-2. Reference them in new messages if needed
-3. Old messages remain in Git history under the old project archives
 
 ## Best Practices
 
-### DO: Use Shared Projects for Coordinating Teams
-
-✅ **Good:** Single project for frontend, backend, database, DevOps teams working on the same product
-
-```
-Project: /data/projects/product-abc
-Agents: FrontendTeam, BackendTeam, DatabaseTeam, DevOpsTeam
-```
-
-### DON'T: Use Separate Projects for Teams That Need to Coordinate
-
-❌ **Bad:** Separate projects for tightly coupled components
-
-```
-Project A: /data/projects/frontend
-Project B: /data/projects/backend
-Result: Teams can't coordinate!
-```
-
-### DO: Use Descriptive Agent Names
-
-✅ **Good:** Names that indicate role and domain
-
-```
-Agents:
-  - FrontendUIComponents
-  - BackendAPIServices
-  - DatabaseMigrations
-  - DevOpsCICD
-```
-
-❌ **Bad:** Generic or ambiguous names
-
-```
-Agents:
-  - Claude
-  - Agent1
-  - Helper
-```
-
-### DO: Use File Reservations to Signal Editing Intent
-
-When multiple agents work on the same codebase, use file reservations to avoid conflicts:
+### DO: Use resource://agents for Discovery
 
 ```json
-// FrontendDev reserves UI files
+// Good: Global discovery
+{"resource": "resource://agents"}
+```
+
+### DO: Use Descriptive, Globally Unique Names
+
+```json
+// Good: Clear, unique names
+"FrontendUIComponents", "BackendAPIServices", "DatabaseMigrations"
+```
+
+### DON'T: Use Generic Names
+
+```json
+// Bad: Will conflict with other users
+"Claude", "Agent1", "Helper"
+```
+
+### DO: Use whois for Agent Verification
+
+```json
+{
+  "tool": "whois",
+  "arguments": {
+    "project_key": "/data/projects/my-app",
+    "agent_name": "BackendDev"
+  }
+}
+```
+
+The `whois` tool searches globally and provides helpful suggestions if the agent isn't found.
+
+## File Reservations
+
+File reservations are **project-scoped** for organizational purposes, but agents can coordinate across projects via messaging:
+
+```json
+// FrontendDev reserves UI files in frontend project
 {
   "tool": "file_reservation_paths",
   "arguments": {
-    "paths": ["src/components/*.tsx", "src/styles/*.css"],
-    "exclusive": true,
-    "reason": "Redesigning user profile page"
+    "project_key": "/data/projects/frontend",
+    "agent_name": "FrontendDev",
+    "paths": ["src/components/*.tsx"],
+    "reason": "Redesigning user profile"
   }
 }
 
-// BackendDev reserves API files
+// BackendDev reserves API files in backend project
 {
   "tool": "file_reservation_paths",
   "arguments": {
-    "paths": ["api/users/*.py", "api/auth/*.py"],
-    "exclusive": true,
+    "project_key": "/data/projects/backend",
+    "agent_name": "BackendDev",
+    "paths": ["api/users/*.py"],
     "reason": "Adding OAuth support"
   }
 }
-```
 
-### DO: Use Threads for Related Discussions
-
-Keep related messages in the same thread:
-
-```json
-// Initial message creates thread
-{"tool": "send_message", "arguments": {
-  "subject": "API contract for user service",
-  // Returns: {"thread_id": "msg-123", ...}
-}}
-
-// Reply keeps same thread
-{"tool": "reply_message", "arguments": {
-  "message_id": 123,
-  // Automatically preserves thread_id
-}}
-
-// Later: Summarize the entire discussion
-{"tool": "summarize_thread", "arguments": {
-  "thread_id": "msg-123"
-}}
-```
-
-## Examples
-
-### Example 1: Fullstack Web Application
-
-**Architecture:**
-- Monorepo with frontend (React) and backend (FastAPI)
-- Shared database
-- CI/CD pipeline
-
-**Setup:**
-
-```json
+// Coordinate via messaging if there's overlap
 {
-  "tool": "ensure_project",
-  "arguments": {"human_key": "/data/projects/webapp"}
+  "tool": "send_message",
+  "arguments": {
+    "sender_name": "FrontendDev",
+    "to": ["BackendDev"],
+    "subject": "Coordinating shared types",
+    "body_md": "I'm updating UserProfile component - let me know when API changes are done."
+  }
 }
-
-// Register 4 agents in the same project
-["FrontendDev", "BackendDev", "DatabaseAdmin", "DevOpsEngineer"].forEach(name => {
-  {"tool": "register_agent", "arguments": {
-    "project_key": "/data/projects/webapp",
-    "name": name
-  }}
-})
 ```
 
-**Coordination Example:**
+## Sibling Projects (UI Feature)
 
-```json
-// FrontendDev sends message to BackendDev
-{"tool": "send_message", "arguments": {
-  "project_key": "/data/projects/webapp",
-  "sender_name": "FrontendDev",
-  "to": ["BackendDev"],
-  "subject": "New feature: user avatars",
-  "body_md": "Adding avatar upload. Need API endpoint: POST /api/users/{id}/avatar"
-}}
+The web dashboard can identify potentially related projects and display them with badges for easier navigation:
 
-// BackendDev reserves API files
-{"tool": "file_reservation_paths", "arguments": {
-  "project_key": "/data/projects/webapp",
-  "agent_name": "BackendDev",
-  "paths": ["backend/api/users.py"],
-  "reason": "Adding avatar upload endpoint"
-}}
-
-// BackendDev replies when done
-{"tool": "reply_message", "arguments": {
-  "project_key": "/data/projects/webapp",
-  "sender_name": "BackendDev",
-  "body_md": "Done! Endpoint accepts multipart/form-data. See backend/api/users.py:145"
-}}
-
-// FrontendDev releases backend reservation, reserves frontend
-{"tool": "file_reservation_paths", "arguments": {
-  "project_key": "/data/projects/webapp",
-  "agent_name": "FrontendDev",
-  "paths": ["frontend/src/components/UserProfile.tsx"],
-  "reason": "Integrating avatar upload UI"
-}}
-```
-
-### Example 2: Microservices (Separate Repos, Shared Coordination)
-
-**Architecture:**
-- 3 microservices in separate repositories
-- Each service can be deployed independently
-- Need to coordinate API contracts
-
-**Setup:**
-
-```json
-// Create coordination project (not a code repo)
-{"tool": "ensure_project", "arguments": {
-  "human_key": "/data/projects/microservices-platform-coordination"
-}}
-
-// Register agents for each service
-{"tool": "register_agent", "arguments": {
-  "project_key": "/data/projects/microservices-platform-coordination",
-  "name": "UserServiceDev",
-  "task_description": "User authentication service"
-}}
-
-{"tool": "register_agent", "arguments": {
-  "project_key": "/data/projects/microservices-platform-coordination",
-  "name": "PaymentServiceDev",
-  "task_description": "Payment processing service"
-}}
-
-{"tool": "register_agent", "arguments": {
-  "project_key": "/data/projects/microservices-platform-coordination",
-  "name": "NotificationServiceDev",
-  "task_description": "Email/SMS notification service"
-}}
-```
-
-**Coordination Example:**
-
-```json
-// UserServiceDev announces API change
-{"tool": "send_message", "arguments": {
-  "project_key": "/data/projects/microservices-platform-coordination",
-  "sender_name": "UserServiceDev",
-  "to": ["PaymentServiceDev", "NotificationServiceDev"],
-  "cc": [],
-  "subject": "BREAKING: User API v2 migration",
-  "body_md": "Upgrading to v2 API. Old /users/{id} → /v2/users/{uuid}. Migration by Dec 1.",
-  "importance": "high"
-}}
-
-// PaymentServiceDev acknowledges
-{"tool": "reply_message", "arguments": {
-  "sender_name": "PaymentServiceDev",
-  "body_md": "Acknowledged. Will update payment service by Nov 25."
-}}
-
-// Later: Check who hasn't acknowledged
-{"tool": "fetch_inbox", "arguments": {
-  "agent_name": "UserServiceDev",
-  // Check for ack_required messages
-}}
-```
-
-## Troubleshooting
-
-### Problem: Agents can't see each other
-
-**Symptoms:**
-```
-Error: Agent 'FrontendDev' not registered for project '/data/projects/backend'
-```
-
-**Diagnosis:**
-```json
-// Check which project each agent is in
-{"resource": "resource://projects"}
-// Returns list of all projects
-
-{"resource": "resource://agents/backend-abc"}
-// Check agents in backend project
-
-{"resource": "resource://agents/frontend-xyz"}
-// Check agents in frontend project
-```
-
-**Solution:**
-Re-register all agents in a single shared project (see Migration Guide above).
-
-### Problem: Message not received
-
-**Symptoms:**
-- Sent message but recipient's inbox is empty
-
-**Diagnosis:**
-```json
-// Verify both agents are in same project
-{"resource": "resource://agents/{project}"}
-
-// Check sender's outbox
-{"resource": "resource://outbox/{project}/{sender}"}
-
-// Check recipient's inbox
-{"resource": "resource://inbox/{project}/{recipient}"}
-```
-
-**Common causes:**
-1. Agents in different projects
-2. Wrong recipient name (typo)
+- **Sibling suggestions** appear based on naming patterns and AI analysis
+- **Confirming a sibling link** adds navigation badges (UI convenience only)
+- **This does NOT affect messaging** - agents can always communicate regardless of sibling status
 
 ## Summary
 
-**Current Best Practice:**
-- ✅ Use a **single shared project** for all agents that need to coordinate
-- ✅ Choose a descriptive project name (e.g., `/data/projects/my-product`)
-- ✅ Register all agents in the same project
-- ✅ Use file reservations to signal editing intent and avoid conflicts
-- ✅ Use threads to organize related discussions
+**Key Changes from Previous Versions:**
+
+| Feature | Previous | Current |
+|---------|----------|---------|
+| Agent Names | Per-project unique | **Globally unique** |
+| Cross-Project Messaging | Not supported | **Fully supported** |
+| Agent Discovery | `resource://agents/{project}` | **`resource://agents`** (global) |
+| Projects | Isolation boundaries | **Organizational containers** |
 
 **When in doubt:**
-- If agents need to coordinate → Same project
-- If agents should be isolated → Separate projects
+- Use `resource://agents` to find agents
+- Send messages directly to agent names (no project prefix needed)
+- Projects are for organization, not access control
 
 For more information:
 - [AGENT_ONBOARDING.md](./AGENT_ONBOARDING.md) - Step-by-step agent workflows
-- [ROOT_CAUSE_ANALYSIS.md](./ROOT_CAUSE_ANALYSIS.md) - Understanding coordination failures
 - [README.md](./README.md) - Full system documentation
