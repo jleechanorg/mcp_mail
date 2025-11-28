@@ -1946,13 +1946,11 @@ def _glob_patterns_overlap(pattern_a: str, pattern_b: str) -> bool:
     # PurePath.match treats the argument as a pattern
     try:
         # If a is a concrete path and b is a pattern
-        if "**" in b or "*" in b:
-            if PurePath(a).match(b):
-                return True
+        if ("**" in b or "*" in b) and PurePath(a).match(b):
+            return True
         # If b is a concrete path and a is a pattern
-        if "**" in a or "*" in a:
-            if PurePath(b).match(a):
-                return True
+        if ("**" in a or "*" in a) and PurePath(b).match(a):
+            return True
     except Exception:
         pass
 
@@ -3804,7 +3802,7 @@ def build_mcp_server() -> FastMCP:
                             target_project = parts[1].strip()
 
                     # Normalize and get lookup keys for the agent name
-                    display_value, key_candidates, canonical = _normalize(target_name)
+                    _display_value, key_candidates, canonical = _normalize(target_name)
                     if not key_candidates or not canonical:
                         unknown.add(raw.strip() if raw else raw)
                         continue
