@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": null,
+  "id": 58,
+  "inception_ts": "2025-11-21T14:27:30.664159+00:00",
+  "is_active": true,
+  "last_active_ts": "2025-11-21T14:27:30.664168+00:00",
+  "model": "gpt-5",
+  "name": "ufv",
+  "program": "codex-cli",
+  "project_id": 8,
+  "task_description": "PR coordination and bead updates"
+}

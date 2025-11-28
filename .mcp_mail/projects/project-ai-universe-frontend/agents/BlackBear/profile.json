@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": "2025-11-18T11:57:37.577316+00:00",
+  "id": 9,
+  "inception_ts": "2025-11-18T11:44:21.126319+00:00",
+  "is_active": false,
+  "last_active_ts": "2025-11-18T11:44:57.335793+00:00",
+  "model": "sonnet-4.5",
+  "name": "BlackBear",
+  "program": "claude-code",
+  "project_id": 3,
+  "task_description": "Frontend conversation navigation bug investigation"
+}

@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": null,
+  "id": 23,
+  "inception_ts": "2025-11-19T14:46:43.260328+00:00",
+  "is_active": true,
+  "last_active_ts": "2025-11-19T14:46:43.260336+00:00",
+  "model": "sonnet-4.5",
+  "name": "FrontendDev",
+  "program": "claude-code",
+  "project_id": 7,
+  "task_description": "React UI development"
+}

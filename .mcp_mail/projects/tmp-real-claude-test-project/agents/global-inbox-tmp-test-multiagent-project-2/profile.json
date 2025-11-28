@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": null,
+  "id": 5,
+  "inception_ts": "2025-11-19T11:24:26.334840+00:00",
+  "is_active": true,
+  "last_active_ts": "2025-11-19T11:24:26.334845+00:00",
+  "model": "system",
+  "name": "global-inbox-tmp-test-multiagent-project-2",
+  "program": "mcp-mail-system",
+  "project_id": 2,
+  "task_description": "Global inbox for project 'tmp-test-multiagent-project-2'."
+}

@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": null,
+  "id": 85,
+  "inception_ts": "2025-11-27T04:09:25.555224+00:00",
+  "is_active": true,
+  "last_active_ts": "2025-11-27T04:09:25.555230+00:00",
+  "model": "opus-4.5",
+  "name": "FuchsiaMountain",
+  "program": "claude-code",
+  "project_id": 22,
+  "task_description": "WorldAI service refactor: integrating services into world_logic.py"
+}
