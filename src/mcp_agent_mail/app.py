@@ -3020,9 +3020,27 @@ def build_mcp_server() -> FastMCP:
 
         try:
             if hasattr(tool_func, "run"):
-                return await tool_func.run(arguments or {})
-            result = await tool_func(ctx, **(arguments or {}))
-            return result
+                result = await tool_func.run(arguments or {})
+            else:
+                result = await tool_func(ctx, **(arguments or {}))
+
+            # If result is a ToolResult object, extract the data
+            # Check the actual class name since the type might not have the attribute yet
+            if type(result).__name__ == "ToolResult":
+                # Access the internal content attribute instead of data
+                if hasattr(result, "content"):
+                    result = result.content
+                elif hasattr(result, "data"):
+                    result = result.data
+                else:
+                    # Try to get the first content item
+                    try:
+                        result = list(result)[0] if result else None
+                    except (TypeError, IndexError):
+                        result = None
+
+            # Wrap result in dict format for consistent API
+            return {"result": result}
         except TypeError as e:
             # Invalid arguments
             raise ValueError(f"Invalid arguments for {tool_name}: {e!s}") from e
