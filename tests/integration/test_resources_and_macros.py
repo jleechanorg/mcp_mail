@@ -454,12 +454,13 @@ async def test_delete_agent(mcp_client, tmp_path):
     assert delete_result.data is not None
     assert "result" in delete_result.data
     delete_payload = delete_result.data["result"]
+    # Extended tool may wrap result in [{"text": json_string}] format
     if isinstance(delete_payload, list):
         first_item = delete_payload[0] if delete_payload else {}
         if isinstance(first_item, dict) and "text" in first_item:
             try:
                 delete_payload = json.loads(first_item["text"])
-            except Exception:
+            except (json.JSONDecodeError, ValueError):
                 delete_payload = first_item
     assert isinstance(delete_payload, dict)
     assert "agent_name" in delete_payload, "delete_agent response missing 'agent_name'"
@@ -479,7 +480,7 @@ async def test_delete_agent(mcp_client, tmp_path):
         assert "not found" in str(whois_after.data["error"]).lower()
     else:
         # If agent still exists in some form, it should be marked inactive
-        assert whois_after.data.get("is_active", False) is False
+        assert whois_after.data.get("is_active", True) is False
 
 
 @pytest.mark.asyncio

@@ -1927,7 +1927,9 @@ def _glob_patterns_overlap(pattern_a: str, pattern_b: str) -> bool:
 
     Handles ** (recursive directory matching) properly using pathlib. The
     determination is intentionally conservative: shared prefixes combined with
-    trailing wildcards are treated as potentially overlapping.
+    trailing wildcards are treated as potentially overlapping. The conservatism
+    is intentional for reservation checks: when in doubt, treat patterns as
+    overlapping rather than risk a false negative.
     """
     from pathlib import PurePath
 
@@ -3037,19 +3039,23 @@ def build_mcp_server() -> FastMCP:
                 result = await tool_func(ctx, **(arguments or {}))
 
             # If result is a ToolResult object, extract the data
-            # Check the actual class name since the type might not have the attribute yet
-            if type(result).__name__ == "ToolResult":
-                # Access the internal content attribute instead of data
-                if hasattr(result, "content"):
-                    result = result.content
-                elif hasattr(result, "data"):
-                    result = result.data
-                else:
+            if isinstance(result, ToolResult):
+                payload: Any = getattr(result, "structured_content", None)
+                if payload is None and hasattr(result, "content"):
+                    payload = result.content
+                elif payload is None and hasattr(result, "data"):
+                    payload = result.data
+                if payload is None:
                     # Try to get the first content item
                     try:
-                        result = next(iter(result)) if result else None
-                    except (TypeError, IndexError):
-                        result = None
+                        payload = next(iter(result)) if result else None
+                    except (TypeError, IndexError, StopIteration):
+                        payload = None
+                result = payload
+
+            # Avoid double-wrapping results already in the expected shape
+            if isinstance(result, dict) and set(result.keys()) == {"result"}:
+                return result
 
             # Wrap result in dict format for consistent API
             return {"result": result}
@@ -4912,8 +4918,9 @@ def build_mcp_server() -> FastMCP:
 
         Returns
         -------
-        list[dict]
-            Each entry: { id, subject, importance, ack_required, created_ts, thread_id, from }
+        dict
+            { "result": list[dict] } where each entry includes id, subject, body_md,
+            importance, ack_required, created_ts, thread_id, and from.
 
         Example
         -------
