@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": null,
+  "id": 50,
+  "inception_ts": "2025-11-20T16:19:28.367928+00:00",
+  "is_active": true,
+  "last_active_ts": "2025-11-20T16:19:28.367946+00:00",
+  "model": "gpt-5",
+  "name": "ufdeployv",
+  "program": "codex-cli",
+  "project_id": 13,
+  "task_description": "Review status, coordination, PR split prioritization"
+}

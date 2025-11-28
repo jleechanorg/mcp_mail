@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": null,
+  "id": 77,
+  "inception_ts": "2025-11-25T12:33:39.808808+00:00",
+  "is_active": true,
+  "last_active_ts": "2025-11-25T12:33:39.808825+00:00",
+  "model": "gemini-1.5-pro",
+  "name": "bpg",
+  "program": "gemini",
+  "project_id": 19,
+  "task_description": "Anti-gravity Gemini agent"
+}

@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": null,
+  "id": 86,
+  "inception_ts": "2025-11-27T04:09:27.143674+00:00",
+  "is_active": true,
+  "last_active_ts": "2025-11-28T06:16:09.784357+00:00",
+  "model": "gpt-5-codex",
+  "name": "RefactorV",
+  "program": "codex-cli",
+  "project_id": 21,
+  "task_description": "PR review and service refactor verification"
+}

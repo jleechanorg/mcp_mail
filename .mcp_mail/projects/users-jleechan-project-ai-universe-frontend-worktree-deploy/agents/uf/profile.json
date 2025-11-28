@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": null,
+  "id": 59,
+  "inception_ts": "2025-11-21T14:27:49.218233+00:00",
+  "is_active": true,
+  "last_active_ts": "2025-11-21T14:27:49.218239+00:00",
+  "model": "claude-sonnet-4.5",
+  "name": "uf",
+  "program": "claude-code",
+  "project_id": 8,
+  "task_description": "backendLogger security audit - found CRITICAL vulnerability"
+}

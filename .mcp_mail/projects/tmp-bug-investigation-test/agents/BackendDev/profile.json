@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": null,
+  "id": 8,
+  "inception_ts": "2025-11-19T13:34:07.498696+00:00",
+  "is_active": true,
+  "last_active_ts": "2025-11-19T13:34:07.498710+00:00",
+  "model": "test-model",
+  "name": "BackendDev",
+  "program": "test-program",
+  "project_id": 3,
+  "task_description": "Backend testing"
+}
