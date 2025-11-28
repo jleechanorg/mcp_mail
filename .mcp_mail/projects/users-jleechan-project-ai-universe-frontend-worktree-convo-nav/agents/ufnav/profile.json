@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": null,
+  "id": 28,
+  "inception_ts": "2025-11-18T15:49:34.226313+00:00",
+  "is_active": true,
+  "last_active_ts": "2025-11-18T16:56:01.768094+00:00",
+  "model": "opus-4.1",
+  "name": "ufnav",
+  "program": "claude-code",
+  "project_id": 9,
+  "task_description": "Frontend navigation and auth fixes"
+}

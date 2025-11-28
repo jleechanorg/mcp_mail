@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": null,
+  "id": 3,
+  "inception_ts": "2025-11-19T04:57:59.805799+00:00",
+  "is_active": true,
+  "last_active_ts": "2025-11-19T04:57:59.805806+00:00",
+  "model": "test-model",
+  "name": "Bob",
+  "program": "test",
+  "project_id": 1,
+  "task_description": "Test agent Bob"
+}

@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": "2025-11-20T13:54:14.577154+00:00",
+  "id": 45,
+  "inception_ts": "2025-11-20T12:52:49.493742+00:00",
+  "is_active": false,
+  "last_active_ts": "2025-11-20T12:57:53.339680+00:00",
+  "model": "claude-sonnet-4-5",
+  "name": "ufdeploy",
+  "program": "claude-code",
+  "project_id": 11,
+  "task_description": "Frontend deployment and bug investigation"
+}

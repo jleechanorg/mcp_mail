@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": null,
+  "id": 67,
+  "inception_ts": "2025-11-23T08:33:38.160664+00:00",
+  "is_active": true,
+  "last_active_ts": "2025-11-23T08:33:38.160671+00:00",
+  "model": "claude-sonnet-4-5-20250929",
+  "name": "monitoring",
+  "program": "claude-code",
+  "project_id": 15,
+  "task_description": "PR review and bug fixes for monitoring_followup branch - GCP metrics validation"
+}

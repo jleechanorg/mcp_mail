@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": "2025-11-28T06:19:03.504078+00:00",
+  "id": 88,
+  "inception_ts": "2025-11-27T04:18:55.118651+00:00",
+  "is_active": false,
+  "last_active_ts": "2025-11-27T05:02:37.693708+00:00",
+  "model": "opus-4.5",
+  "name": "refactor",
+  "program": "claude-code",
+  "project_id": 22,
+  "task_description": "WorldAI service refactor: integrating services into world_logic.py"
+}

@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": null,
+  "id": 89,
+  "inception_ts": "2025-11-28T06:19:03.741590+00:00",
+  "is_active": true,
+  "last_active_ts": "2025-11-28T06:42:14.582589+00:00",
+  "model": "sonnet-4.5",
+  "name": "refactor",
+  "program": "claude-code",
+  "project_id": 21,
+  "task_description": "PR #2115 complete - fixed double-wrapping, inline imports, game_state regression, status code preservation"
+}
