@@ -1966,8 +1966,13 @@ def _glob_patterns_overlap(pattern_a: str, pattern_b: str) -> bool:
     a_parts = a.split("/")
     b_parts = b.split("/")
 
+    # Handle empty parts (e.g., empty pattern after normalization)
+    if not a_parts or not b_parts:
+        return False
+
     # Find the first differing part
     min_len = min(len(a_parts), len(b_parts))
+    diverged = False
     for i in range(min_len):
         ap, bp = a_parts[i], b_parts[i]
         # If either part is ** or contains wildcards, they could overlap
@@ -1977,12 +1982,18 @@ def _glob_patterns_overlap(pattern_a: str, pattern_b: str) -> bool:
             if fnmatch.fnmatchcase(ap, bp) or fnmatch.fnmatchcase(bp, ap):
                 continue
             # Wildcards that don't match - patterns diverge
+            diverged = True
             break
         elif ap != bp:
+            diverged = True
             break
 
-    # If we exited the loop without returning True, check if shorter pattern
-    # ends with a wildcard that could match files in subdirectories
+    # If patterns diverged at some point, they don't overlap
+    if diverged:
+        return False
+
+    # All compared parts matched - check if one pattern is a prefix of the other
+    # and ends with wildcards
     if len(a_parts) < len(b_parts):
         last_part = a_parts[-1]
         # If last part is a wildcard or "**", overlap is possible
