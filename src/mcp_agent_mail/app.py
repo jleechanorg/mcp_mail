@@ -1952,6 +1952,8 @@ def _glob_patterns_overlap(pattern_a: str, pattern_b: str) -> bool:
         if ("**" in a or "*" in a) and PurePath(b).match(a):
             return True
     except Exception:
+        # Suppress exceptions from PurePath.match (e.g., invalid patterns or paths).
+        # Fallback to fnmatch for simple pattern matching below.
         pass
 
     # Fallback to fnmatch for simple patterns
@@ -1979,7 +1981,20 @@ def _glob_patterns_overlap(pattern_a: str, pattern_b: str) -> bool:
         if ap != bp:
             return False
 
-    return True
+    # All parts up to min_len matched - check if patterns can still overlap
+    # "src/backend" does NOT overlap with "src/backend/test/file.py" unless the
+    # shorter pattern ends with a wildcard (*, **) that matches deeper paths
+    def _has_wildcard(part: str) -> bool:
+        """Check if a pattern part contains wildcards."""
+        return part == "**" or "*" in part
+
+    if len(a_parts) < len(b_parts):
+        return _has_wildcard(a_parts[-1])
+    elif len(b_parts) < len(a_parts):
+        return _has_wildcard(b_parts[-1])
+    else:
+        # Same length, all parts matched, so it's an exact match
+        return True
 
 
 def _file_reservations_conflict(
@@ -3035,8 +3050,8 @@ def build_mcp_server() -> FastMCP:
                 else:
                     # Try to get the first content item
                     try:
-                        result = list(result)[0] if result else None
-                    except (TypeError, IndexError):
+                        result = next(iter(result)) if result else None
+                    except (TypeError, StopIteration):
                         result = None
 
             # Wrap result in dict format for consistent API

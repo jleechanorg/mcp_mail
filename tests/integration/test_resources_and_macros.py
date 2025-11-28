@@ -450,8 +450,10 @@ async def test_delete_agent(mcp_client, tmp_path):
     )
 
     # Extended tool returns result in data - check it succeeded
+    # delete_agent returns a dict with agent_name, agent_id, and deletion statistics
     assert delete_result.data is not None
-    assert "agent_name" in delete_result.data or "agent_id" in delete_result.data
+    assert "agent_name" in delete_result.data, "delete_agent response missing 'agent_name'"
+    assert delete_result.data["agent_name"] == agent, f"Expected agent_name '{agent}', got '{delete_result.data['agent_name']}'"
 
     # Verify agent is no longer active - whois should return error or inactive status
     whois_after = await mcp_client.call_tool(
@@ -464,7 +466,7 @@ async def test_delete_agent(mcp_client, tmp_path):
     # After deletion, whois returns an error response OR shows agent as inactive
     if "error" in whois_after.data:
         # Agent not found error is acceptable
-        assert "not found" in whois_after.data["error"].lower()
+        assert "not found" in str(whois_after.data["error"]).lower()
     else:
         # If agent still exists in some form, it should be marked inactive
         assert whois_after.data.get("is_active") is False
