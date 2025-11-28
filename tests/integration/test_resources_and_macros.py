@@ -453,7 +453,7 @@ async def test_delete_agent(mcp_client, tmp_path):
     assert delete_result.data is not None
     # Check for the exact expected structure of the delete_agent response
     assert "agent_name" in delete_result.data, "delete_agent response missing 'agent_name'"
-    assert delete_result.data["agent_name"] == agent, f"Expected agent_name '{agent}', got '{delete_result.data['agent_name']}'"
+    assert delete_result.data["agent_name"] == agent, f"Expected agent_name '{agent}', got '{delete_result.data.get('agent_name')}'"
 
     # Verify agent is no longer active - whois should return error or inactive status
     whois_after = await mcp_client.call_tool(
