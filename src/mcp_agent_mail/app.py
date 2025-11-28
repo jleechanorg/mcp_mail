@@ -3879,6 +3879,7 @@ def build_mcp_server() -> FastMCP:
             await _route(bcc or [], "bcc")
 
             if unknown:
+
                 def _is_simple_name(value: str) -> bool:
                     # Only bare agent names (no cross-project syntax) are eligible for auto-registration
                     return not (value.startswith("project:") or "@" in value)
