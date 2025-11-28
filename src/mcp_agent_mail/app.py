@@ -1952,6 +1952,8 @@ def _glob_patterns_overlap(pattern_a: str, pattern_b: str) -> bool:
         if ("**" in a or "*" in a) and PurePath(b).match(a):
             return True
     except Exception:
+        # Suppress exceptions from PurePath.match (e.g., invalid patterns or paths).
+        # Fallback to fnmatch for simple pattern matching below.
         pass
 
     # Fallback to fnmatch for simple patterns
@@ -1964,8 +1966,13 @@ def _glob_patterns_overlap(pattern_a: str, pattern_b: str) -> bool:
     a_parts = a.split("/")
     b_parts = b.split("/")
 
+    # Handle empty parts (e.g., empty pattern after normalization)
+    if not a_parts or not b_parts:
+        return False
+
     # Find the first differing part
     min_len = min(len(a_parts), len(b_parts))
+    diverged = False
     for i in range(min_len):
         ap, bp = a_parts[i], b_parts[i]
         # If either part is ** or contains wildcards, they could overlap
@@ -1974,12 +1981,29 @@ def _glob_patterns_overlap(pattern_a: str, pattern_b: str) -> bool:
         if "*" in ap or "*" in bp:
             if fnmatch.fnmatchcase(ap, bp) or fnmatch.fnmatchcase(bp, ap):
                 continue
-            # Wildcards that don't match - check if they're at the divergence point
-            return False
-        if ap != bp:
-            return False
+            # Wildcards that don't match - patterns diverge
+            diverged = True
+            break
+        elif ap != bp:
+            diverged = True
+            break
 
-    return True
+    # If patterns diverged at some point, they don't overlap
+    if diverged:
+        return False
+
+    # All compared parts matched - check if one pattern is a prefix of the other
+    # and ends with wildcards
+    if len(a_parts) < len(b_parts):
+        last_part = a_parts[-1]
+        # If last part is a wildcard or "**", overlap is possible
+        return last_part == "**" or "*" in last_part
+    elif len(b_parts) < len(a_parts):
+        last_part = b_parts[-1]
+        return last_part == "**" or "*" in last_part
+    else:
+        # Same length, all parts matched, so it's an exact match
+        return True
 
 
 def _file_reservations_conflict(
