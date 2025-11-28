@@ -1946,14 +1946,14 @@ def _glob_patterns_overlap(pattern_a: str, pattern_b: str) -> bool:
     # PurePath.match treats the argument as a pattern
     try:
         # If a is a concrete path and b is a pattern
-        if "**" in b or "*" in b:
-            if PurePath(a).match(b):
-                return True
+        if ("**" in b or "*" in b) and PurePath(a).match(b):
+            return True
         # If b is a concrete path and a is a pattern
-        if "**" in a or "*" in a:
-            if PurePath(b).match(a):
-                return True
+        if ("**" in a or "*" in a) and PurePath(b).match(a):
+            return True
     except Exception:
+        # Suppress exceptions from PurePath.match (e.g., invalid patterns or paths).
+        # Fallback to fnmatch for simple pattern matching below.
         pass
 
     # Fallback to fnmatch for simple patterns
@@ -1976,12 +1976,23 @@ def _glob_patterns_overlap(pattern_a: str, pattern_b: str) -> bool:
         if "*" in ap or "*" in bp:
             if fnmatch.fnmatchcase(ap, bp) or fnmatch.fnmatchcase(bp, ap):
                 continue
-            # Wildcards that don't match - check if they're at the divergence point
-            return False
-        if ap != bp:
-            return False
+            # Wildcards that don't match - patterns diverge
+            break
+        elif ap != bp:
+            break
 
-    return True
+    # If we exited the loop without returning True, check if shorter pattern
+    # ends with a wildcard that could match files in subdirectories
+    if len(a_parts) < len(b_parts):
+        last_part = a_parts[-1]
+        # If last part is a wildcard or "**", overlap is possible
+        return last_part == "**" or "*" in last_part
+    elif len(b_parts) < len(a_parts):
+        last_part = b_parts[-1]
+        return last_part == "**" or "*" in last_part
+    else:
+        # Same length, all parts matched, so it's an exact match
+        return True
 
 
 def _file_reservations_conflict(
