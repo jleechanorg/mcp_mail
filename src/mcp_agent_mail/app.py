@@ -1925,7 +1925,9 @@ async def _expire_stale_file_reservations(project_id: int) -> list[FileReservati
 def _glob_patterns_overlap(pattern_a: str, pattern_b: str) -> bool:
     """Check if two glob patterns could match overlapping files.
 
-    Handles ** (recursive directory matching) properly using pathlib.
+    Handles ** (recursive directory matching) properly using pathlib. The
+    determination is intentionally conservative: shared prefixes combined with
+    trailing wildcards are treated as potentially overlapping.
     """
     from pathlib import PurePath
 
@@ -1952,6 +1954,8 @@ def _glob_patterns_overlap(pattern_a: str, pattern_b: str) -> bool:
         if ("**" in a or "*" in a) and PurePath(b).match(a):
             return True
     except Exception:
+        # Suppress exceptions from PurePath.match (e.g., invalid patterns or paths) and
+        # fall back to fnmatch handling below.
         pass
 
     # Fallback to fnmatch for simple patterns
@@ -1974,12 +1978,20 @@ def _glob_patterns_overlap(pattern_a: str, pattern_b: str) -> bool:
         if "*" in ap or "*" in bp:
             if fnmatch.fnmatchcase(ap, bp) or fnmatch.fnmatchcase(bp, ap):
                 continue
-            # Wildcards that don't match - check if they're at the divergence point
-            return False
+            break
         if ap != bp:
-            return False
+            break
+    else:
+        # All compared parts matched; allow overlap only if the shorter pattern ends
+        # with a wildcard (otherwise a strict directory prefix does not overlap).
+        if len(a_parts) == len(b_parts):
+            return True
 
-    return True
+        shorter = a_parts if len(a_parts) < len(b_parts) else b_parts
+        last_part = shorter[-1]
+        return last_part == "**" or "*" in last_part
+
+    return False
 
 
 def _file_reservations_conflict(
@@ -3035,7 +3047,7 @@ def build_mcp_server() -> FastMCP:
                 else:
                     # Try to get the first content item
                     try:
-                        result = list(result)[0] if result else None
+                        result = next(iter(result)) if result else None
                     except (TypeError, IndexError):
                         result = None
 
@@ -3820,13 +3832,13 @@ def build_mcp_server() -> FastMCP:
                             target_project = parts[1].strip()
 
                     # Normalize and get lookup keys for the agent name
-                    _display_value, key_candidates, canonical = _normalize(target_name)
+                    _, key_candidates, canonical = _normalize(target_name)
                     if not key_candidates or not canonical:
                         unknown.add(raw.strip() if raw else raw)
                         continue
 
                     # Allow self-send
-                    if sender_candidate_keys.intersection(key_candidates):
+                    if not target_project and sender_candidate_keys.intersection(key_candidates):
                         if kind == "to":
                             all_to.append(sender.name)
                         elif kind == "cc":
@@ -3867,11 +3879,17 @@ def build_mcp_server() -> FastMCP:
             await _route(bcc or [], "bcc")
 
             if unknown:
+                def _is_simple_name(value: str) -> bool:
+                    # Only bare agent names (no cross-project syntax) are eligible for auto-registration
+                    return not (value.startswith("project:") or "@" in value)
+
                 # Auto-register missing recipients if enabled
                 if getattr(settings_local, "messaging_auto_register_recipients", True):
                     # Best effort: try to register any unknown recipients with sane defaults
                     newly_registered: set[str] = set()
                     for missing in list(unknown):
+                        if not _is_simple_name(missing):
+                            continue
                         try:
                             _ = await _get_or_create_agent(
                                 project,
@@ -4976,8 +4994,8 @@ def build_mcp_server() -> FastMCP:
             }
             for row in rows
         ]
-        # Return list directly for simpler client consumption
-        return items
+        # Return list wrapped for extended tool compatibility
+        return {"result": items}
 
     @mcp.tool(name="acquire_build_slot")
     @_instrument_tool(

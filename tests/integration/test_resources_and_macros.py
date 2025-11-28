@@ -9,6 +9,7 @@ These tests validate:
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -449,9 +450,20 @@ async def test_delete_agent(mcp_client, tmp_path):
         },
     )
 
-    # Extended tool returns result in data - check it succeeded
+    # Extended tool wraps result payload under "result"
     assert delete_result.data is not None
-    assert "agent_name" in delete_result.data or "agent_id" in delete_result.data
+    assert "result" in delete_result.data
+    delete_payload = delete_result.data["result"]
+    if isinstance(delete_payload, list):
+        first_item = delete_payload[0] if delete_payload else {}
+        if isinstance(first_item, dict) and "text" in first_item:
+            try:
+                delete_payload = json.loads(first_item["text"])
+            except Exception:
+                delete_payload = first_item
+    assert isinstance(delete_payload, dict)
+    assert "agent_name" in delete_payload, "delete_agent response missing 'agent_name'"
+    assert delete_payload["agent_name"] == agent
 
     # Verify agent is no longer active - whois should return error or inactive status
     whois_after = await mcp_client.call_tool(
@@ -464,10 +476,10 @@ async def test_delete_agent(mcp_client, tmp_path):
     # After deletion, whois returns an error response OR shows agent as inactive
     if "error" in whois_after.data:
         # Agent not found error is acceptable
-        assert "not found" in whois_after.data["error"].lower()
+        assert "not found" in str(whois_after.data["error"]).lower()
     else:
         # If agent still exists in some form, it should be marked inactive
-        assert whois_after.data.get("is_active") is False
+        assert whois_after.data.get("is_active", False) is False
 
 
 @pytest.mark.asyncio
