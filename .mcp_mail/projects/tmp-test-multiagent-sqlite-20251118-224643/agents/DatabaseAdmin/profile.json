@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": null,
+  "id": 25,
+  "inception_ts": "2025-11-19T14:46:43.561970+00:00",
+  "is_active": true,
+  "last_active_ts": "2025-11-19T14:46:43.561977+00:00",
+  "model": "gpt5-codex",
+  "name": "DatabaseAdmin",
+  "program": "codex-cli",
+  "project_id": 7,
+  "task_description": "PostgreSQL database management"
+}

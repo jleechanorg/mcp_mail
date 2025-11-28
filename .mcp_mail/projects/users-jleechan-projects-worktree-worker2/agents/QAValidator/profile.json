@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": null,
+  "id": 24,
+  "inception_ts": "2025-11-18T13:54:13.763008+00:00",
+  "is_active": true,
+  "last_active_ts": "2025-11-18T13:54:13.763016+00:00",
+  "model": "claude-sonnet-4.5",
+  "name": "QAValidator",
+  "program": "claude-code",
+  "project_id": 8,
+  "task_description": "GCP MCP endpoint testing and validation"
+}

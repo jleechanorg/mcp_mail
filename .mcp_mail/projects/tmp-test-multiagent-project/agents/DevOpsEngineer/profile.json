@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": null,
+  "id": 9,
+  "inception_ts": "2025-11-19T12:29:19.951066+00:00",
+  "is_active": true,
+  "last_active_ts": "2025-11-19T12:29:19.951074+00:00",
+  "model": "opus-4",
+  "name": "DevOpsEngineer",
+  "program": "claude-code",
+  "project_id": 2,
+  "task_description": "CI/CD and infrastructure"
+}
