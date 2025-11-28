@@ -1984,13 +1984,14 @@ def _glob_patterns_overlap(pattern_a: str, pattern_b: str) -> bool:
     # All parts up to min_len matched - check if patterns can still overlap
     # "src/backend" does NOT overlap with "src/backend/test/file.py" unless the
     # shorter pattern ends with a wildcard (*, **) that matches deeper paths
+    def _has_wildcard(part: str) -> bool:
+        """Check if a pattern part contains wildcards."""
+        return part == "**" or "*" in part
+
     if len(a_parts) < len(b_parts):
-        last_part = a_parts[-1]
-        # If last part is a wildcard or "**", overlap is possible
-        return last_part == "**" or "*" in last_part
+        return _has_wildcard(a_parts[-1])
     elif len(b_parts) < len(a_parts):
-        last_part = b_parts[-1]
-        return last_part == "**" or "*" in last_part
+        return _has_wildcard(b_parts[-1])
     else:
         # Same length, all parts matched, so it's an exact match
         return True
