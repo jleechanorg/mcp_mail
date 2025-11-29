@@ -132,7 +132,7 @@ def products_ensure(
     # Prefer server tool to ensure consistent uid policy
     settings = get_settings()
     server_url = f"http://{settings.http.host}:{settings.http.port}{settings.http.path}"
-    bearer = settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
+    bearer = settings.http.bearer_token or ""
     resp_data: dict[str, Any] = {}
     try:
         with httpx.Client(timeout=5.0) as client:
@@ -156,7 +156,8 @@ def products_ensure(
             result = (data or {}).get("result") or {}
             if result:
                 resp_data = result
-    except Exception:
+    except (httpx.HTTPError, ValueError, json.JSONDecodeError) as exc:
+        console.print(f"[dim]Server unavailable ({exc}); falling back to local DB.[/dim]")
         resp_data = {}
     if not resp_data:
         # Fallback to local DB with the same strict uid policy
@@ -207,6 +208,7 @@ def products_ensure(
         if hasattr(_created, "isoformat"):
             _created = _created.isoformat()
     except Exception:
+        # If _created is not ISO-serializable, keep the raw value for display.
         pass
     table.add_row("created_at", str(_created))
     console.print(table)
@@ -372,7 +374,7 @@ def products_inbox(
     """
     settings = get_settings()
     server_url = f"http://{settings.http.host}:{settings.http.port}{settings.http.path}"
-    bearer = settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
+    bearer = settings.http.bearer_token or ""
     # Try server first
     try:
         with httpx.Client(timeout=5.0) as client:
@@ -399,7 +401,8 @@ def products_inbox(
             data = resp.json()
             result = (data or {}).get("result")
             rows = result if isinstance(result, list) else []
-    except Exception:
+    except (httpx.HTTPError, ValueError, json.JSONDecodeError) as exc:
+        console.print(f"[dim]Server unavailable ({exc}); using local DB fallback.[/dim]")
         rows = []
     if not rows:
         # Fallback: local DB
@@ -454,6 +457,7 @@ def products_inbox(
                             since_dt = _dt.fromisoformat(s)
                             stmt = stmt.where(Message.created_ts > since_dt)
                         except Exception:
+                            # Ignore invalid timestamp formats; fallback is to not filter by date.
                             pass
                     res = await session.execute(stmt)
                     for msg, kind, sender_name in res.all():
@@ -470,8 +474,9 @@ def products_inbox(
                         if include_bodies:
                             payload["body_md"] = msg.body_md
                         items.append(payload)
-                # Sort desc by created_ts
-                items.sort(key=lambda r: r.get("created_ts") or 0, reverse=True)
+                # Sort desc by created_ts, falling back to epoch
+                epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+                items.sort(key=lambda r: r.get("created_ts") or epoch, reverse=True)
                 return items[: max(0, int(limit))]
 
         rows = asyncio.run(_fallback())
@@ -517,7 +522,7 @@ def products_summarize_thread(
     """
     settings = get_settings()
     server_url = f"http://{settings.http.host}:{settings.http.port}{settings.http.path}"
-    bearer = settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
+    bearer = settings.http.bearer_token or ""
     # Try server
     try:
         with httpx.Client(timeout=8.0) as client:
@@ -542,7 +547,8 @@ def products_summarize_thread(
             resp = client.post(server_url, json=req, headers=headers)
             data = resp.json()
             result = (data or {}).get("result") or {}
-    except Exception:
+    except (httpx.HTTPError, ValueError, json.JSONDecodeError) as exc:
+        console.print(f"[dim]Server unavailable ({exc}); summarization requires the server tool.[/dim]")
         result = {}
     if not result:
         console.print(
@@ -1857,7 +1863,6 @@ def list_projects(
     """List known projects."""
 
     settings = get_settings()
-    settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
 
     async def _collect() -> list[tuple[Project, int]]:
         await ensure_schema(settings)
@@ -2109,12 +2114,6 @@ def am_run(
     settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
     guard_mode = (os.environ.get("AGENT_MAIL_GUARD_MODE", "block") or "block").strip().lower()
     worktrees_enabled = bool(settings.worktrees_enabled)
-
-    def _safe_component(value: str) -> str:
-        s = value.strip()
-        for ch in ("/", "\\\\", ":", "*", "?", '"', "<", ">", "|", " "):
-            s = s.replace(ch, "_")
-        return s or "unknown"
 
     async def _ensure_slot_paths() -> Path:
         archive = await ensure_archive(settings, slug, project_key=str(p))

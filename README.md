@@ -335,7 +335,7 @@ If a blank repo feels daunting, follow the field-tested workflow we documented i
 - **Spin up the swarm:** Launch multiple Codex panes (or any agent mix), register each identity with Agent Mail, and have them acknowledge `AGENTS.md`, the plan document, and the Beads backlog before touching code.
 - **Keep everyone fed:** Reuse the canned instruction cadence from the tweet thread or, better yet, let the commercial Companion app's Message Stacks broadcast those prompts automatically so you never hand-feed panes again.
 
-Watch the full 23-minute walkthrough (https://youtu.be/68VVcqMEDrs?si=pCm6AiJAndtZ6u7q) to see the loop in action.
+Watch the full 23-minute walkthrough ([YouTube link](https://youtu.be/68VVcqMEDrs?si=pCm6AiJAndtZ6u7q)) to see the loop in action.
 
 ## Productivity Math & Automation Loop
 
@@ -351,7 +351,7 @@ Result: you invest 1–2 hours of human supervision, but dozens of agent-hours e
 ### One-line installer
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/mcp_agent_mail/main/scripts/install.sh | bash -s -- --yes
+curl -fsSL https://raw.githubusercontent.com/jleechanorg/mcp_mail/main/scripts/install.sh | bash -s -- --yes
 ```
 
 What this does:
@@ -372,7 +372,7 @@ Already have Beads installed or want to handle it yourself? Append `--skip-beads
 
 ```bash
 # Install with custom port
-curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/mcp_agent_mail/main/scripts/install.sh | bash -s -- --port 9000 --yes
+curl -fsSL https://raw.githubusercontent.com/jleechanorg/mcp_mail/main/scripts/install.sh | bash -s -- --port 9000 --yes
 
 # Or use the CLI command after installation
 uv run python -m mcp_agent_mail.cli config set-port 9000
@@ -388,8 +388,8 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 
 # Clone the repo
-git clone https://github.com/Dicklesworthstone/mcp_agent_mail
-cd mcp_agent_mail
+git clone https://github.com/jleechanorg/mcp_mail
+cd mcp_mail
 
 # Create a Python 3.14 virtual environment and install dependencies
 uv python install 3.14

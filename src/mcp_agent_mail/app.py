@@ -100,7 +100,6 @@ def _resolve_project_identity(target_path: str) -> dict[str, Any]:
 
     Returns dict with 'project_uid' key.
     """
-    import hashlib
     import re
     import subprocess
 
@@ -110,6 +109,13 @@ def _resolve_project_identity(target_path: str) -> dict[str, Any]:
     committed_marker = path / ".agent-mail-project-id"
     if committed_marker.exists():
         uid = committed_marker.read_text(encoding="utf-8").strip()
+        if uid:
+            return {"project_uid": uid}
+
+    # 1b. Private marker at conventional .git path
+    direct_private_marker = path / ".git" / "agent-mail" / "project-id"
+    if direct_private_marker.exists():
+        uid = direct_private_marker.read_text(encoding="utf-8").strip()
         if uid:
             return {"project_uid": uid}
 
@@ -125,11 +131,12 @@ def _resolve_project_identity(target_path: str) -> dict[str, Any]:
         if not git_common_dir.startswith("/"):
             git_common_dir = str(path / git_common_dir)
 
-        private_marker = Path(git_common_dir) / "agent-mail" / "project-id"
-        if private_marker.exists():
-            uid = private_marker.read_text(encoding="utf-8").strip()
-            if uid:
-                return {"project_uid": uid}
+        private_candidates = [Path(git_common_dir) / "agent-mail" / "project-id", path / ".git" / "agent-mail" / "project-id"]
+        for private_marker in private_candidates:
+            if private_marker.exists():
+                uid = private_marker.read_text(encoding="utf-8").strip()
+                if uid:
+                    return {"project_uid": uid}
     except (subprocess.CalledProcessError, FileNotFoundError):
         pass
 
@@ -151,6 +158,7 @@ def _resolve_project_identity(target_path: str) -> dict[str, Any]:
         normalized = re.sub(r"^git@([^:]+):", r"\1/", normalized)
 
         # Get default branch (fallback to 'main' if not found)
+        default_branch = "main"
         try:
             result = subprocess.run(
                 ["git", "-C", str(path), "symbolic-ref", "refs/remotes/origin/HEAD"],
@@ -158,9 +166,11 @@ def _resolve_project_identity(target_path: str) -> dict[str, Any]:
                 text=True,
                 check=True,
             )
-            default_branch = result.stdout.strip().split("/")[-1]
+            branch_guess = result.stdout.strip().split("/")[-1]
+            if branch_guess and branch_guess != "master":
+                default_branch = branch_guess
         except (subprocess.CalledProcessError, IndexError):
-            default_branch = "main"
+            pass
 
         # Create fingerprint and hash it
         fingerprint = f"{normalized}@{default_branch}"
@@ -508,107 +518,6 @@ def _ensure_utc(dt: Optional[datetime]) -> Optional[datetime]:
     if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
-
-
-def _resolve_project_identity(target_path: str) -> dict[str, Any]:
-    """Resolve project identity from a filesystem path."""
-    path = Path(target_path).expanduser().resolve()
-
-    # 1. Committed marker
-    marker = path / ".agent-mail-project-id"
-    if marker.exists():
-        try:
-            uid = marker.read_text(encoding="utf-8").strip()
-            if uid:
-                return {
-                    "project_uid": uid,
-                    "source": "committed_marker",
-                    "path": str(marker),
-                    "mode": "committed",
-                }
-        except Exception:
-            pass
-
-    # 2. Private marker (git-common-dir)
-    try:
-        repo = Repo(path, search_parent_directories=True)
-        if repo.git_dir:
-            git_dir = Path(repo.git_dir)
-            # Handle worktrees by checking git-common-dir if available
-            try:
-                common_dir = repo.git.rev_parse("--git-common-dir")
-                if common_dir:
-                    if Path(common_dir).is_absolute():
-                        git_dir = Path(common_dir)
-                    else:
-                        git_dir = (Path(repo.git_dir) / common_dir).resolve()
-            except Exception:
-                pass
-
-            private_marker = git_dir / "agent-mail" / "project-id"
-            if private_marker.exists():
-                uid = private_marker.read_text(encoding="utf-8").strip()
-                if uid:
-                    return {
-                        "project_uid": uid,
-                        "source": "private_marker",
-                        "path": str(private_marker),
-                        "mode": "private",
-                    }
-    except (InvalidGitRepositoryError, NoSuchPathError):
-        pass
-    except Exception:
-        pass
-
-    # 3. Fallback: Remote fingerprint
-    try:
-        repo = Repo(path, search_parent_directories=True)
-        remotes = {r.name: r.url for r in repo.remotes}
-        url = remotes.get("origin") or next(iter(remotes.values()), None)
-
-        if url:
-            # Normalize URL: remove protocol, user, .git suffix
-            normalized = url
-            if "://" in normalized:
-                normalized = normalized.split("://", 1)[1]
-            if "@" in normalized:
-                normalized = normalized.split("@", 1)[1]
-            if ":" in normalized and "/" not in normalized.split(":", 1)[0]:
-                # SCP style: host:path -> host/path
-                host, path_part = normalized.split(":", 1)
-                normalized = f"{host}/{path_part}"
-            if normalized.endswith(".git"):
-                normalized = normalized[:-4]
-
-            # Default branch resolve may fail; code falls back to 'main'
-            branch = "main"
-            try:
-                # Try to get the default branch if possible, or current branch
-                if not repo.head.is_detached:
-                    branch = repo.active_branch.name
-            except Exception:
-                pass
-
-            fingerprint = f"{normalized}@{branch}"
-            uid = hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()[:20]
-
-            return {
-                "project_uid": uid,
-                "source": "remote_fingerprint",
-                "fingerprint": fingerprint,
-                "mode": "fingerprint",
-            }
-    except Exception:
-        pass
-
-    # 4. Last resort: path hash
-    path_uid = hashlib.sha1(str(path).encode("utf-8")).hexdigest()[:20]
-    return {
-        "project_uid": path_uid,
-        "source": "path_hash",
-        "path": str(path),
-        "mode": "path",
-    }
 
 
 def _max_datetime(*timestamps: Optional[datetime]) -> Optional[datetime]:
