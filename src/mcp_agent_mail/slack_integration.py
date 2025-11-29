@@ -22,7 +22,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import json
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -123,7 +125,46 @@ class SlackClient:
         if self._http_client:
             await self._http_client.aclose()
             self._http_client = None
-            logger.info("Slack client closed")
+
+
+# --- Simple webhook mirroring (outbound, optional) --------------------------------------------
+
+
+def _post_webhook(url: str, payload: dict[str, Any]) -> str:
+    data = json.dumps(payload).encode("utf-8")
+    req = httpx.Request("POST", url, content=data, headers={"Content-Type": "application/json"})
+    with httpx.Client(timeout=10.0) as client:
+        resp = client.send(req)
+        resp.raise_for_status()
+        return resp.text
+
+
+def mirror_message_to_slack(frontmatter: dict[str, Any], body_md: str) -> str | None:
+    """Mirror an MCP message to Slack via incoming webhook when configured.
+
+    Controlled by env vars:
+    - SLACK_MCP_MAIL_WEBHOOK_URL (primary)
+    - SLACK_WEBHOOK_URL (fallback)
+    - SLACK_MIRROR_ENABLED (default: true). Set to '0'/'false' to disable.
+
+    Returns the response body when sent, or None if skipped.
+    """
+    enabled_raw = os.getenv("SLACK_MIRROR_ENABLED", "true").strip().lower()
+    enabled = enabled_raw not in {"0", "false", "no"}
+    webhook = os.getenv("SLACK_MCP_MAIL_WEBHOOK_URL") or os.getenv("SLACK_WEBHOOK_URL")
+    if not enabled or not webhook:
+        return None
+
+    project = frontmatter.get("project", "")
+    subject = frontmatter.get("subject", "")
+    thread = frontmatter.get("thread_id")
+    title = f"{project} | {subject}".strip(" |")
+    if thread:
+        title = f"{title} (thread {thread})"
+
+    text = f"*{title}*\n{body_md}"
+    payload = {"text": text}
+    return _post_webhook(webhook, payload)
 
     def _check_client(self) -> None:
         """Ensure client is connected."""

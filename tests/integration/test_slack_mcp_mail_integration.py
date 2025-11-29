@@ -12,10 +12,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib import request
 
 import pytest
 
@@ -152,6 +154,32 @@ def commit_messages(repo_path: Path, message_description: str = "Add messages"):
     )
 
 
+def _send_live_slack_message(text: str) -> str:
+    """Send a live Slack message when explicitly enabled via env vars.
+
+    Guarded by:
+    - SLACK_LIVE_TEST=1
+    - SLACK_MCP_MAIL_WEBHOOK_URL set to the target webhook
+    """
+    webhook = os.getenv("SLACK_MCP_MAIL_WEBHOOK_URL")
+    enabled = os.getenv("SLACK_LIVE_TEST") == "1"
+    if not (enabled and webhook):
+        return "skipped"
+
+    payload = json.dumps({"text": text}).encode("utf-8")
+    req = request.Request(
+        webhook,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with request.urlopen(req, timeout=10) as resp:
+        body = resp.read().decode("utf-8", errors="ignore")
+        if resp.status != 200 or "ok" not in body.lower():
+            raise RuntimeError(f"Slack live send failed: status={resp.status}, body={body}")
+        return body.strip()
+
+
 @pytest.mark.asyncio
 async def test_slack_message_creates_mcp_mail_entry(mcp_mail_repo):
     """Test that incoming Slack message creates entry in .mcp_mail/."""
@@ -192,6 +220,11 @@ async def test_slack_message_creates_mcp_mail_entry(mcp_mail_repo):
         check=True,
     )
     assert "deployment help" in result.stdout
+
+    # Optional: send a live Slack message to #mcp-mail when explicitly enabled
+    live_status = _send_live_slack_message("MCP Mail Slack test: deployment help flow")
+    if live_status != "skipped":
+        assert "ok" in live_status.lower()
 
 
 @pytest.mark.asyncio

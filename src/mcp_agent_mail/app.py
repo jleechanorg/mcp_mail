@@ -2832,6 +2832,14 @@ def build_mcp_server() -> FastMCP:
                 attachment_files,
                 commit_panel_text,
             )
+
+            # Optional Slack mirror via incoming webhook (env-driven)
+            try:
+                from .slack_integration import mirror_message_to_slack
+
+                mirror_message_to_slack(frontmatter, body_md)
+            except Exception:
+                logger.exception("Slack mirror failed (non-blocking)")
         await ctx.info(f"Message {message.id} created by {sender.name} (to {', '.join(recipients_for_archive)})")
 
         # Send Slack notification if enabled (fire-and-forget, non-blocking)
