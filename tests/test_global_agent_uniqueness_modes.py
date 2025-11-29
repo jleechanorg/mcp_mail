@@ -319,10 +319,16 @@ async def test_reusing_name_retires_previous_agent(isolated_env):
             proj_a = (await session.execute(select(Project).where(Project.human_key == proj_a_key))).scalars().first()
             assert proj_a is not None
             agents_a = (
-                await session.execute(
-                    select(Agent).where(Agent.project_id == proj_a.id, func.lower(Agent.name).not_like("global-inbox%"))
+                (
+                    await session.execute(
+                        select(Agent).where(
+                            Agent.project_id == proj_a.id, func.lower(Agent.name).not_like("global-inbox%")
+                        )
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             assert len(agents_a) == 1
             retired = agents_a[0]
             assert retired.is_active is False
