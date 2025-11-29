@@ -632,7 +632,7 @@ async def handle_slack_message_event(
         "thread_id": mcp_thread_id,
         "slack_channel": channel_id,
         "slack_ts": message_ts,
-        "slack_thread_ts": thread_ts,
+        "slack_thread_ts": thread_ts or message_ts,
         "mentioned_users": mentioned_users,
     }
 

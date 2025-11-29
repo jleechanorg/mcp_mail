@@ -127,3 +127,65 @@ async def test_slack_webhook_thread_mapping(monkeypatch):
         message = result.scalars().first()
     assert message is not None
     assert message.thread_id == "slack_CCHAN123_1234567890.111111"
+
+
+@pytest.mark.asyncio
+async def test_slack_webhook_records_thread_mapping_for_top_level(monkeypatch):
+    """Top-level Slack messages should map threads using the message ts when bot client is available."""
+
+    class DummySlackClient:
+        def __init__(self) -> None:
+            self.mappings: list[tuple[str, str, str]] = []
+
+        async def map_thread(self, mcp_thread_id: str, slack_channel_id: str, slack_thread_ts: str) -> None:
+            self.mappings.append((mcp_thread_id, slack_channel_id, slack_thread_ts))
+
+    monkeypatch.setenv("SLACK_ENABLED", "1")
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test-token")
+    monkeypatch.setenv("SLACK_SIGNING_SECRET", "test-secret")
+    monkeypatch.setenv("SLACK_SYNC_ENABLED", "1")
+    monkeypatch.setenv("SLACK_SYNC_CHANNELS", "CCHAN321")
+    monkeypatch.setenv("SLACK_SYNC_PROJECT_NAME", "slack-sync-test-top-level")
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+    settings = get_settings()
+    app = build_http_app(settings)
+    await ensure_schema()
+
+    payload = {
+        "type": "event_callback",
+        "event": {
+            "type": "message",
+            "channel": "CCHAN321",
+            "user": "U555",
+            "text": "Top level message",
+            "ts": "5555555555.555555",
+        },
+    }
+    body = json.dumps(payload)
+    timestamp = str(int(time.time()))
+    signature = _slack_signature(settings.slack.signing_secret or "", timestamp, body)
+
+    dummy_client = DummySlackClient()
+    import mcp_agent_mail.app as app_module
+
+    app_module._slack_client = dummy_client
+    try:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/slack/events",
+                content=body,
+                headers={
+                    "X-Slack-Request-Timestamp": timestamp,
+                    "X-Slack-Signature": signature,
+                    "Content-Type": "application/json",
+                },
+            )
+    finally:
+        app_module._slack_client = None
+
+    assert resp.status_code == 200
+    assert dummy_client.mappings == [
+        ("slack_CCHAN321_5555555555.555555", "CCHAN321", "5555555555.555555"),
+    ]
