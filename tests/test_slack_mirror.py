@@ -18,16 +18,25 @@ def test_mirror_message_to_slack_posts_when_enabled(monkeypatch):
 
     monkeypatch.setattr("mcp_agent_mail.slack_integration._post_webhook", fake_post)
 
-    frontmatter = {"project": "proj", "subject": "subj", "thread_id": "tid"}
+    frontmatter = {
+        "project": "proj",
+        "subject": "subj",
+        "thread_id": "tid",
+        "from": "SenderAgent",
+        "to": ["RecipientAgent"],
+    }
     body = "hello body"
     resp = mirror_message_to_slack(frontmatter, body)
 
     assert resp == "ok"
     assert captured["url"] == "https://hooks.slack.com/services/test"
-    assert "proj" in captured["payload"]["text"]
-    assert "subj" in captured["payload"]["text"]
-    assert "tid" in captured["payload"]["text"]
-    assert "hello body" in captured["payload"]["text"]
+    text = captured["payload"]["text"]
+    assert "proj" in text
+    assert "subj" in text
+    assert "tid" in text
+    assert "hello body" in text
+    assert "SenderAgent" in text
+    assert "RecipientAgent" in text
 
 
 def test_mirror_message_to_slack_skips_when_disabled(monkeypatch):

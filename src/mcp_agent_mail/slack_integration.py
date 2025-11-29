@@ -318,12 +318,21 @@ def mirror_message_to_slack(frontmatter: dict[str, Any], body_md: str) -> str | 
 
     project = frontmatter.get("project", "")
     subject = frontmatter.get("subject", "")
+    sender_name = frontmatter.get("from", "")
+    recipients = [*frontmatter.get("to", []), *frontmatter.get("cc", []), *frontmatter.get("bcc", [])]
     thread = frontmatter.get("thread_id")
     title = f"{project} | {subject}".strip(" |")
     if thread:
         title = f"{title} (thread {thread})"
 
-    text = f"*{title}*\n{body_md}"
+    lines = [f"*{title}*"]
+    if sender_name:
+        lines.append(f"*From:* {sender_name}")
+    if recipients:
+        lines.append(f"*To:* {', '.join(recipients)}")
+    lines.append(body_md)
+
+    text = "\n".join(lines)
     payload = {"text": text}
     return _post_webhook(webhook, payload)
 
