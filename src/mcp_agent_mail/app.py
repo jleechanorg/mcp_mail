@@ -1471,15 +1471,16 @@ async def _get_or_create_agent(
                     )
                     # Verify retirement cleared the conflict; otherwise provide a clear path
                     if await _agent_name_exists_globally(sanitized):
-                        if mode == "strict":
-                            raise ToolExecutionError(
-                                "NAME_TAKEN",
-                                f"Agent name '{sanitized}' is still in use after attempting retirement.",
-                                recoverable=True,
-                                data={"name": sanitized, "conflict": "residual_or_race"},
-                            )
-                        # Fallback to auto-generate a unique name
-                        desired_name = await _generate_unique_agent_name(project, settings, None)
+                        raise ToolExecutionError(
+                            "NAME_TAKEN",
+                            f"Agent name '{sanitized}' is still in use after attempting retirement.",
+                            recoverable=True,
+                            data={
+                                "name": sanitized,
+                                "conflict": "residual_or_race",
+                                "hint": "Retry with force_reclaim=True if this persists",
+                            },
+                        )
                     else:
                         desired_name = sanitized
             else:
@@ -3364,9 +3365,9 @@ def build_mcp_server() -> FastMCP:
         Parameters
         ----------
         project_key : str
-            Any string identifier for your project. The project will be automatically created
-            if it doesn't exist. Common patterns include absolute paths, repo names, or custom
-            project identifiers (e.g., "/data/projects/backend", "my-repo", "project-alpha").
+            Any string identifier for your project. Informational only for agent lookup; agents are
+            global. The project will be automatically created if it doesn't exist. Common patterns
+            include absolute paths, repo names, or custom project identifiers.
         program : str
             The agent program (e.g., "codex-cli", "claude-code").
         model : str
@@ -3780,9 +3781,9 @@ def build_mcp_server() -> FastMCP:
         Parameters
         ----------
         project_key : str
-            Project identifier (same used with `ensure_project`/`register_agent`).
+            Project identifier (informational only for agent lookup; agents are global).
         sender_name : str
-            Must match an agent registered in the project.
+            Must match an existing agent name (agents are global).
         to : list[str]
             Primary recipients (agent names). At least one of to/cc/bcc must be non-empty.
         subject : str
