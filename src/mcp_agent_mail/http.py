@@ -10,6 +10,7 @@ import importlib
 import json
 import logging
 import re
+from collections import deque
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -56,6 +57,10 @@ from .storage import (
     write_file_reservation_record,
     write_message_bundle,
 )
+
+# Slack webhook dedupe cache (in-memory best-effort)
+_slack_event_cache: set[tuple[str, str]] = set()
+_slack_event_cache_order: deque[tuple[str, str]] = deque(maxlen=5000)
 
 
 async def _project_slug_from_id(pid: int | None) -> str | None:
@@ -1007,6 +1012,19 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 message_info = await handle_slack_message_event(event, settings)
 
                 if message_info:
+                    # Idempotency: skip duplicates on slack_ts + channel (best-effort, in-memory)
+                    slack_ts = message_info.get("slack_ts")
+                    slack_channel = message_info.get("slack_channel")
+                    if slack_ts and slack_channel:
+                        key = (slack_channel, slack_ts)
+                        if key in _slack_event_cache:
+                            logger.info(
+                                "slack_message_duplicate_skipped",
+                                slack_ts=slack_ts,
+                                channel=slack_channel,
+                            )
+                            return JSONResponse({"ok": True, "message": "Duplicate Slack event skipped"})
+
                     # Create MCP message from Slack event
                     try:
                         # Ensure project exists
@@ -1074,7 +1092,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                             attachments=[],
                         )
 
-                        # Write message to archive
+                        # Write message to archive in background to avoid webhook timeout
                         to_agents = [r[0] for r in recipients_list if r[1] == "to"]
                         cc_agents = [r[0] for r in recipients_list if r[1] == "cc"]
                         bcc_agents = [r[0] for r in recipients_list if r[1] == "bcc"]
@@ -1087,16 +1105,57 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                             bcc_agents=bcc_agents,
                             attachments=[],
                         )
-                        # Get archive and write message bundle
-                        archive = await ensure_archive(settings, project.slug)
-                        await write_message_bundle(
-                            archive=archive,
-                            message=frontmatter,
-                            body_md=message.body_md,
-                            sender=sender_agent.name,
-                            recipients=[agent.name for agent in recipient_agents],
-                            extra_paths=[],
-                        )
+
+                        async def _persist_archive() -> None:
+                            try:
+                                archive = await ensure_archive(settings, project.slug)
+                                await write_message_bundle(
+                                    archive=archive,
+                                    message=frontmatter,
+                                    body_md=message.body_md,
+                                    sender=sender_agent.name,
+                                    recipients=[agent.name for agent in recipient_agents],
+                                    extra_paths=[],
+                                )
+                            except Exception as exc:
+                                logger.error("slack_archive_write_failed", error=str(exc))
+
+                        _archive_task = asyncio.create_task(_persist_archive())
+                        _ = _archive_task
+
+                        # Record dedupe key after successful creation
+                        if slack_ts and slack_channel:
+                            key = (slack_channel, slack_ts)
+                            _slack_event_cache.add(key)
+                            _slack_event_cache_order.append(key)
+                            # Trim cache if over capacity (deque handles oldest eviction)
+                            while len(_slack_event_cache_order) > _slack_event_cache_order.maxlen:
+                                old = _slack_event_cache_order.popleft()
+                                _slack_event_cache.discard(old)
+
+                        # Capture thread mapping so outbound replies stay in the same Slack thread
+                        slack_client_ref = None
+                        try:
+                            from .app import _slack_client as _global_slack_client  # lazy import to avoid cycles
+
+                            slack_client_ref = _global_slack_client
+                        except Exception:
+                            slack_client_ref = None
+
+                        if (
+                            slack_client_ref
+                            and message_info.get("thread_id")
+                            and message_info.get("slack_thread_ts")
+                            and message_info.get("slack_channel")
+                        ):
+                            try:
+                                await slack_client_ref.map_thread(
+                                    mcp_thread_id=message_info["thread_id"],
+                                    slack_channel_id=message_info["slack_channel"],
+                                    slack_thread_ts=message_info["slack_thread_ts"],
+                                )
+                            except Exception as exc:  # best-effort; do not block ingestion
+                                logger.warning("slack_thread_map_failed", error=str(exc))
 
                         logger.info(
                             "slack_message_created",
