@@ -2,6 +2,8 @@
 
 Claude Code (or Claude Desktop) must assume the MCP Agent Mail server is already running in the background before it connects. Always start/refresh the server with a background `bash -lc` call so you capture the PID and tee logs to a safe location.
 
+**Before committing:** run `./scripts/ensure_git_hooks.sh` once per clone/session to force `core.hooksPath=.githooks` so Ruff/ty/Bandit hooks run automatically on commits.
+
 ## Running from PyPI Package (Recommended)
 
 Use the published PyPI package for production use:

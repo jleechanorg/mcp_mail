@@ -62,6 +62,18 @@ async def _project_slug_from_id(pid: int | None) -> str | None:
         return res[0] if res and res[0] else None
 
 
+async def _project_identifiers_from_id(pid: int | None) -> tuple[str | None, str | None]:
+    """Return (slug, human_key) for a project id, or (None, None) if missing."""
+    if pid is None:
+        return None, None
+    async with get_session() as session:
+        row = await session.execute(text("SELECT slug, human_key FROM projects WHERE id = :pid"), {"pid": pid})
+        res = row.fetchone()
+        if not res:
+            return None, None
+        return (res[0], res[1])
+
+
 __all__ = ["build_http_app", "main"]
 
 
@@ -600,9 +612,15 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                                     hid2 = hid_row2.scalar_one_or_none()
                                                     if isinstance(hid2, int):
                                                         holder_agent_id = hid2
+                                                        (
+                                                            project_slug,
+                                                            project_human_key,
+                                                        ) = await _project_identifiers_from_id(project_id)
                                                         # Write profile.json to archive
                                                         archive = await ensure_archive(
-                                                            settings, (await _project_slug_from_id(project_id)) or ""
+                                                            settings,
+                                                            project_slug or "",
+                                                            project_key=project_human_key,
                                                         )
                                                         async with archive_write_lock(archive):
                                                             await write_agent_profile(
@@ -612,10 +630,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                                                     "name": settings.ack_escalation_claim_holder_name,
                                                                     "program": "ops",
                                                                     "model": "system",
-                                                                    "project_slug": (
-                                                                        await _project_slug_from_id(project_id)
-                                                                    )
-                                                                    or "",
+                                                                    "project_slug": project_slug or "",
                                                                     "inception_ts": now.astimezone().isoformat(),
                                                                     "inception_iso": now.astimezone().isoformat(),
                                                                     "task": "ops-escalation",
@@ -642,8 +657,10 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                             )
                                             await s2.commit()
                                         # Also write JSON artifact to archive
-                                        project_slug = (await _project_slug_from_id(project_id)) or ""
-                                        archive = await ensure_archive(settings, project_slug)
+                                        project_slug, project_human_key = await _project_identifiers_from_id(project_id)
+                                        archive = await ensure_archive(
+                                            settings, project_slug or "", project_key=project_human_key
+                                        )
                                         expires_at = now + _dt.timedelta(
                                             seconds=settings.ack_escalation_claim_ttl_seconds
                                         )
@@ -1732,7 +1749,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             commit_sha = None
             try:
                 settings = get_settings()
-                archive = await ensure_archive(settings, prow[1])
+                archive = await ensure_archive(settings, prow[1], project_key=prow[2])
                 commit_sha = await get_message_commit_sha(archive, mid)
             except Exception:
                 pass  # Commit SHA is optional
@@ -2389,7 +2406,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     from .storage import ensure_archive, write_message_bundle
 
                     settings = get_settings()
-                    archive = await ensure_archive(settings, project_slug)
+                    archive = await ensure_archive(settings, project_slug, project_key=project_human_key)
 
                     # Build message dict for Git
                     message_dict = {
@@ -2639,8 +2656,16 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             if not _validate_project_slug(project):
                 return await _render("error.html", message="Invalid project identifier")
 
+            async with get_session() as session:
+                human_row = (
+                    await session.execute(
+                        text("SELECT human_key FROM projects WHERE slug = :s OR human_key = :s"), {"s": project}
+                    )
+                ).fetchone()
+                project_human_key = human_row[0] if human_row else None
+
             settings = get_settings()
-            archive = await ensure_archive(settings, project)
+            archive = await ensure_archive(settings, project, project_key=project_human_key)
             tree = await get_archive_tree(archive, path)
 
             return await _render("archive_browser.html", tree=tree, project=project, path=path)
@@ -2653,8 +2678,15 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 raise HTTPException(status_code=400, detail="Invalid project identifier")
 
             try:
+                async with get_session() as session:
+                    human_row = (
+                        await session.execute(
+                            text("SELECT human_key FROM projects WHERE slug = :s OR human_key = :s"), {"s": project}
+                        )
+                    ).fetchone()
+                    project_human_key = human_row[0] if human_row else None
                 settings = get_settings()
-                archive = await ensure_archive(settings, project)
+                archive = await ensure_archive(settings, project, project_key=project_human_key)
                 content = await get_file_content(archive, path)
 
                 if content is None:
@@ -2761,7 +2793,14 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             try:
                 # Get project archive
                 settings = get_settings()
-                repo = await ensure_archive(settings, project)
+                async with get_session() as session:
+                    human_row = (
+                        await session.execute(
+                            text("SELECT human_key FROM projects WHERE slug = :s OR human_key = :s"), {"s": project}
+                        )
+                    ).fetchone()
+                    project_human_key = human_row[0] if human_row else None
+                repo = await ensure_archive(settings, project, project_key=project_human_key)
 
                 # Get historical snapshot
                 snapshot = await get_historical_inbox_snapshot(repo, agent, timestamp, limit=200)
