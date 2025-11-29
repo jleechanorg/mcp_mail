@@ -14,6 +14,9 @@ cd "$ROOT_DIR"
 echo "==> Installing dependencies (uv sync)"
 uv sync --dev
 
+echo "==> Setting git core.hooksPath to .githooks"
+git config core.hooksPath .githooks
+
 if [ ! -f .env ]; then
   echo "==> No .env found; copying from deploy/env/example.env"
   cp deploy/env/example.env .env

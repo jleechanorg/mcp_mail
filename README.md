@@ -281,6 +281,9 @@ uv run python -m mcp_agent_mail.http
 
 # Messages stored in ./mcp_mail/projects/<slug>/messages/
 # Commit to share: git add .mcp_mail && git commit -m "Add agent coordination messages"
+
+# Ensure git hooks are installed (enforces Ruff/ty/Bandit on commit)
+./scripts/ensure_git_hooks.sh
 ```
 
 **🔒 Want private messages?** Use global storage instead:
