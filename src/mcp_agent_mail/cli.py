@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+# ruff: noqa: B008
 import asyncio
 import hashlib
 import json
@@ -119,7 +120,7 @@ def _iso(dt: Optional[datetime]) -> str:
 
 @products_app.command("ensure")
 def products_ensure(
-    product_key: Annotated[Optional[str], typer.Argument(None, help="Product uid or name")],
+    product_key: Annotated[Optional[str], typer.Argument(help="Product uid or name")] = None,
     name: Annotated[Optional[str], typer.Option(..., "--name", "-n", help="Product display name")] = None,
 ) -> None:
     """
@@ -213,8 +214,8 @@ def products_ensure(
 
 @products_app.command("link")
 def products_link(
-    product_key: Annotated[str, typer.Argument(..., help="Product uid or name")],
-    project: Annotated[str, typer.Argument(..., help="Project slug or path")],
+    product_key: Annotated[str, typer.Argument(help="Product uid or name")],
+    project: Annotated[str, typer.Argument(help="Project slug or path")],
 ) -> None:
     """
     Link a project into a product (idempotent).
@@ -246,7 +247,7 @@ def products_link(
 
 @products_app.command("status")
 def products_status(
-    product_key: Annotated[str, typer.Argument(..., help="Product uid or name")],
+    product_key: Annotated[str, typer.Argument(help="Product uid or name")],
 ) -> None:
     """
     Show product metadata and linked projects.
@@ -287,17 +288,14 @@ def products_status(
 
 @products_app.command("search")
 def products_search(
-    product_key: Annotated[str, typer.Argument(..., help="Product uid or name")],
-    query: Annotated[str, typer.Argument(..., help="FTS query")],
-    limit: Annotated[
-        int,
-        typer.Option(
-            20,
-            "--limit",
-            "-l",
-            help="Max results",
-        ),
-    ] = 20,
+    product_key: Annotated[str, typer.Argument(help="Product uid or name")],
+    query: Annotated[str, typer.Argument(help="FTS query")],
+    limit: int = typer.Option(
+        20,
+        "--limit",
+        "-l",
+        help="Max results",
+    ),
 ) -> None:
     """
     Full-text search over messages for all projects linked to a product.
@@ -356,20 +354,17 @@ def products_search(
 
 @products_app.command("inbox")
 def products_inbox(
-    product_key: Annotated[str, typer.Argument(..., help="Product uid or name")],
-    agent: Annotated[str, typer.Argument(..., help="Agent name")],
-    limit: Annotated[
-        int,
-        typer.Option(
-            20,
-            "--limit",
-            "-l",
-            help="Max messages",
-        ),
-    ] = 20,
+    product_key: Annotated[str, typer.Argument(help="Product uid or name")],
+    agent: Annotated[str, typer.Argument(help="Agent name")],
+    limit: int = typer.Option(
+        20,
+        "--limit",
+        "-l",
+        help="Max messages",
+    ),
     urgent_only: Annotated[bool, typer.Option(..., "--urgent-only/--all", help="Only high/urgent")] = False,
     include_bodies: Annotated[bool, typer.Option(..., "--include-bodies/--no-bodies", help="Include body_md")] = False,
-    since_ts: Annotated[Optional[str], typer.Option(None, "--since-ts", help="ISO-8601 timestamp filter")] = None,
+    since_ts: Optional[str] = typer.Option(None, "--since-ts", help="ISO-8601 timestamp filter"),
 ) -> None:
     """
     Fetch recent inbox messages for an agent across all projects in a product.
@@ -507,17 +502,14 @@ def products_inbox(
 
 @products_app.command("summarize-thread")
 def products_summarize_thread(
-    product_key: Annotated[str, typer.Argument(..., help="Product uid or name")],
-    thread_id: Annotated[str, typer.Argument(..., help="Thread id or key")],
-    per_thread_limit: Annotated[
-        int,
-        typer.Option(
-            50,
-            "--per-thread-limit",
-            "-n",
-            help="Max messages per thread",
-        ),
-    ] = 50,
+    product_key: Annotated[str, typer.Argument(help="Product uid or name")],
+    thread_id: Annotated[str, typer.Argument(help="Thread id or key")],
+    per_thread_limit: int = typer.Option(
+        50,
+        "--per-thread-limit",
+        "-n",
+        help="Max messages per thread",
+    ),
     no_llm: Annotated[bool, typer.Option(..., "--no-llm", help="Disable LLM refinement")] = False,
 ) -> None:
     """
@@ -670,59 +662,44 @@ def share_export(
             help="Launch an interactive wizard (future enhancement; currently prints guidance).",
         ),
     ] = False,
-    projects: Annotated[
-        list[str] | None, typer.Option(None, "--project", "-p", help="Limit export to specific project slugs or human keys.")
-    ] = None,
-    inline_threshold: Annotated[
-        int,
-        typer.Option(
-            INLINE_ATTACHMENT_THRESHOLD,
-            "--inline-threshold",
-            help="Inline attachments ≤ this many bytes as data URIs.",
-            min=0,
-            show_default=True,
-        ),
-    ] = INLINE_ATTACHMENT_THRESHOLD,
-    detach_threshold: Annotated[
-        int,
-        typer.Option(
-            DETACH_ATTACHMENT_THRESHOLD,
-            "--detach-threshold",
-            help="Mark attachments ≥ this many bytes as external (not bundled).",
-            min=0,
-            show_default=True,
-        ),
-    ] = DETACH_ATTACHMENT_THRESHOLD,
-    scrub_preset: Annotated[
-        str,
-        typer.Option(
-            "standard",
-            "--scrub-preset",
-            help="Redaction preset to apply (e.g., standard, strict).",
-            case_sensitive=False,
-            show_default=True,
-        ),
-    ] = "standard",
-    chunk_threshold: Annotated[
-        int,
-        typer.Option(
-            DEFAULT_CHUNK_THRESHOLD,
-            "--chunk-threshold",
-            help="Chunk the SQLite database when it exceeds this size (bytes).",
-            min=0,
-            show_default=True,
-        ),
-    ] = DEFAULT_CHUNK_THRESHOLD,
-    chunk_size: Annotated[
-        int,
-        typer.Option(
-            DEFAULT_CHUNK_SIZE,
-            "--chunk-size",
-            help="Chunk size in bytes when chunking is enabled.",
-            min=1024,
-            show_default=True,
-        ),
-    ] = DEFAULT_CHUNK_SIZE,
+    projects: list[str] | None = typer.Option(
+        None, "--project", "-p", help="Limit export to specific project slugs or human keys."
+    ),
+    inline_threshold: int = typer.Option(
+        INLINE_ATTACHMENT_THRESHOLD,
+        "--inline-threshold",
+        help="Inline attachments ≤ this many bytes as data URIs.",
+        min=0,
+        show_default=True,
+    ),
+    detach_threshold: int = typer.Option(
+        DETACH_ATTACHMENT_THRESHOLD,
+        "--detach-threshold",
+        help="Mark attachments ≥ this many bytes as external (not bundled).",
+        min=0,
+        show_default=True,
+    ),
+    scrub_preset: str = typer.Option(
+        "standard",
+        "--scrub-preset",
+        help="Redaction preset to apply (e.g., standard, strict).",
+        case_sensitive=False,
+        show_default=True,
+    ),
+    chunk_threshold: int = typer.Option(
+        DEFAULT_CHUNK_THRESHOLD,
+        "--chunk-threshold",
+        help="Chunk the SQLite database when it exceeds this size (bytes).",
+        min=0,
+        show_default=True,
+    ),
+    chunk_size: int = typer.Option(
+        DEFAULT_CHUNK_SIZE,
+        "--chunk-size",
+        help="Chunk size in bytes when chunking is enabled.",
+        min=1024,
+        show_default=True,
+    ),
     dry_run: Annotated[
         bool,
         typer.Option(
@@ -741,20 +718,15 @@ def share_export(
             show_default=True,
         ),
     ] = True,
-    signing_key: Annotated[
-        Optional[Path], typer.Option(None, "--signing-key", help="Path to Ed25519 signing key (32-byte seed).")
-    ] = None,
-    signing_public_out: Annotated[
-        Optional[Path], typer.Option(None, "--signing-public-out", help="Write public key to this file after signing.")
-    ] = None,
-    age_recipients: Annotated[
-        Optional[list[str]],
-        typer.Option(
-            None,
-            "--age-recipient",
-            help="Encrypt the ZIP archive with age using the provided recipient(s). May be passed multiple times.",
-        ),
-    ] = None,
+    signing_key: Optional[Path] = typer.Option(None, "--signing-key", help="Path to Ed25519 signing key (32-byte seed)."),
+    signing_public_out: Optional[Path] = typer.Option(
+        None, "--signing-public-out", help="Write public key to this file after signing."
+    ),
+    age_recipients: Optional[list[str]] = typer.Option(
+        None,
+        "--age-recipient",
+        help="Encrypt the ZIP archive with age using the provided recipient(s). May be passed multiple times.",
+    ),
 ) -> None:
     """Export the MCP Agent Mail mailbox into a shareable static bundle (snapshot + scaffolding prototype)."""
 
@@ -1180,58 +1152,43 @@ def share_update(
     bundle: Annotated[
         str, typer.Argument(help="Path to the existing bundle directory (e.g., your GitHub Pages repo).")
     ],
-    projects: Annotated[
-        list[str] | None,
-        typer.Option(
-            None,
-            "--project",
-            "-p",
-            help="Override project scope for this update (slugs or human keys). May be provided multiple times.",
-        ),
-    ] = None,
-    inline_threshold_override: Annotated[
-        Optional[int],
-        typer.Option(None, "--inline-threshold", help="Override inline attachment threshold (bytes).", min=0),
-    ] = None,
-    detach_threshold_override: Annotated[
-        Optional[int],
-        typer.Option(None, "--detach-threshold", help="Override detach attachment threshold (bytes).", min=0),
-    ] = None,
-    chunk_threshold_override: Annotated[
-        Optional[int],
-        typer.Option(None, "--chunk-threshold", help="Override chunking threshold (bytes).", min=0),
-    ] = None,
-    chunk_size_override: Annotated[
-        Optional[int],
-        typer.Option(None, "--chunk-size", help="Override chunk size when chunking is enabled.", min=1024),
-    ] = None,
-    scrub_preset_override: Annotated[
-        Optional[str],
-        typer.Option(
-            None,
-            "--scrub-preset",
-            help="Override scrub preset (standard, strict, ...).",
-            case_sensitive=False,
-        ),
-    ] = None,
+    projects: list[str] | None = typer.Option(
+        None,
+        "--project",
+        "-p",
+        help="Override project scope for this update (slugs or human keys). May be provided multiple times.",
+    ),
+    inline_threshold_override: Optional[int] = typer.Option(
+        None, "--inline-threshold", help="Override inline attachment threshold (bytes).", min=0
+    ),
+    detach_threshold_override: Optional[int] = typer.Option(
+        None, "--detach-threshold", help="Override detach attachment threshold (bytes).", min=0
+    ),
+    chunk_threshold_override: Optional[int] = typer.Option(
+        None, "--chunk-threshold", help="Override chunking threshold (bytes).", min=0
+    ),
+    chunk_size_override: Optional[int] = typer.Option(
+        None, "--chunk-size", help="Override chunk size when chunking is enabled.", min=1024
+    ),
+    scrub_preset_override: Optional[str] = typer.Option(
+        None,
+        "--scrub-preset",
+        help="Override scrub preset (standard, strict, ...).",
+        case_sensitive=False,
+    ),
     zip_bundle: Annotated[
         bool,
         typer.Option(..., "--zip/--no-zip", help="Package the updated bundle into a ZIP archive.", show_default=True),
     ] = False,
-    signing_key: Annotated[
-        Optional[Path], typer.Option(None, "--signing-key", help="Path to Ed25519 signing key (32-byte seed).")
-    ] = None,
-    signing_public_out: Annotated[
-        Optional[Path], typer.Option(None, "--signing-public-out", help="Write public key to this file after signing.")
-    ] = None,
-    age_recipients: Annotated[
-        Optional[list[str]],
-        typer.Option(
-            None,
-            "--age-recipient",
-            help="Encrypt the ZIP archive with age using the provided recipient(s). May be passed multiple times.",
-        ),
-    ] = None,
+    signing_key: Optional[Path] = typer.Option(None, "--signing-key", help="Path to Ed25519 signing key (32-byte seed)."),
+    signing_public_out: Optional[Path] = typer.Option(
+        None, "--signing-public-out", help="Write public key to this file after signing."
+    ),
+    age_recipients: Optional[list[str]] = typer.Option(
+        None,
+        "--age-recipient",
+        help="Encrypt the ZIP archive with age using the provided recipient(s). May be passed multiple times.",
+    ),
 ) -> None:
     """Refresh an existing static mailbox bundle using the previous export settings."""
 
@@ -1465,12 +1422,11 @@ def share_update(
 @share_app.command("preview")
 def share_preview(
     bundle: Annotated[str, typer.Argument(help="Path to the exported bundle directory.")],
-    host: Annotated[str, typer.Option("--host", help="Host interface for the preview server.")] = "127.0.0.1",
-    port: Annotated[int, typer.Option("--port", help="Port for the preview server.")] = 9000,
-    open_browser: Annotated[
-        bool,
-        typer.Option("--open-browser/--no-open-browser", help="Automatically open the bundle in a browser."),
-    ] = False,
+    host: str = typer.Option("127.0.0.1", "--host", help="Host interface for the preview server."),
+    port: int = typer.Option(9000, "--port", help="Port for the preview server."),
+    open_browser: bool = typer.Option(
+        False, "--open-browser/--no-open-browser", help="Automatically open the bundle in a browser."
+    ),
 ) -> None:
     """Serve a static export bundle locally for inspection."""
 
@@ -1569,15 +1525,12 @@ def share_decrypt(
             help="Path to age identity file (private key). Mutually exclusive with --passphrase.",
         ),
     ] = None,
-    passphrase: Annotated[
-        bool,
-        typer.Option(
-            False,
-            "--passphrase",
-            "-p",
-            help="Prompt for passphrase interactively. Mutually exclusive with --identity.",
-        ),
-    ] = False,
+    passphrase: bool = typer.Option(
+        False,
+        "--passphrase",
+        "-p",
+        help="Prompt for passphrase interactively. Mutually exclusive with --identity.",
+    ),
 ) -> None:
     """Decrypt an age-encrypted bundle using identity file or passphrase."""
     from .share import decrypt_with_age
@@ -1960,7 +1913,7 @@ def list_projects(
 @guard_app.command("install")
 def guard_install(
     project: str,
-    repo: Annotated[Path, typer.Argument(..., help="Path to git repo")],
+    repo: Annotated[Path, typer.Argument(help="Path to git repo")],
     prepush: Annotated[
         bool,
         typer.Option(
@@ -1999,7 +1952,7 @@ def guard_install(
 
 @guard_app.command("uninstall")
 def guard_uninstall(
-    repo: Annotated[Path, typer.Argument(..., help="Path to git repo")],
+    repo: Annotated[Path, typer.Argument(help="Path to git repo")],
 ) -> None:
     """Remove the advisory pre-commit guard from the repository."""
 
@@ -2062,15 +2015,12 @@ def file_reservations_list(
 
 @app.command("amctl-env")
 def amctl_env(
-    project_path: Annotated[
-        Path,
-        typer.Option(
-            ".",
-            "--path",
-            "-p",
-            help="Path to repo/worktree",
-        ),
-    ] = Path(),
+    project_path: Path = typer.Option(
+        Path(),
+        "--path",
+        "-p",
+        help="Path to repo/worktree",
+    ),
     agent: Annotated[Optional[str], typer.Option(..., "--agent", "-a", help="Agent name (defaults to $AGENT_NAME)")] = None,
 ) -> None:
     """
@@ -2113,16 +2063,13 @@ def amctl_env(
 @app.command(name="am-run")
 def am_run(
     slot: Annotated[str, typer.Argument(help="Build slot name (e.g., frontend-build)")],
-    cmd: Annotated[list[str], typer.Argument(..., help="Command to run")],
-    project_path: Annotated[
-        Path,
-        typer.Option(
-            ".",
-            "--path",
-            "-p",
-            help="Path to repo/worktree",
-        ),
-    ] = Path(),
+    cmd: Annotated[list[str], typer.Argument(help="Command to run")],
+    project_path: Path = typer.Option(
+        Path(),
+        "--path",
+        "-p",
+        help="Path to repo/worktree",
+    ),
     agent: Annotated[Optional[str], typer.Option(..., "--agent", "-a", help="Agent name (defaults to $AGENT_NAME)")] = None,
 ) -> None:
     """
@@ -2277,7 +2224,7 @@ def am_run(
 def mail_status(
     project_path: Annotated[
         Path,
-        typer.Argument(..., help="Absolute path to a repo/worktree directory (use '.' for current)."),
+        typer.Argument(help="Absolute path to a repo/worktree directory (use '.' for current)."),
     ],
 ) -> None:
     """
@@ -2352,7 +2299,7 @@ def mail_status(
 
 @guard_app.command("status")
 def guard_status(
-    repo: Annotated[Path, typer.Argument(..., help="Path to git repo")],
+    repo: Annotated[Path, typer.Argument(help="Path to git repo")],
 ) -> None:
     """
     Print guard status: gate/mode, resolved hooks directory, and presence of hooks.
@@ -2404,8 +2351,8 @@ def guard_status(
 
 @projects_app.command("adopt")
 def projects_adopt(
-    source: Annotated[str, typer.Argument(..., help="Old project slug or human key")],
-    target: Annotated[str, typer.Argument(..., help="New project slug or project_uid (future)")],
+    source: Annotated[str, typer.Argument(help="Old project slug or human key")],
+    target: Annotated[str, typer.Argument(help="New project slug or project_uid (future)")],
     dry_run: Annotated[bool, typer.Option(..., "--dry-run/--apply", help="Show plan without applying changes.")] = True,
 ) -> None:
     """
@@ -3170,15 +3117,12 @@ def docs_insert_blurbs(
     ] = None,
     yes: Annotated[bool, typer.Option(..., "--yes", help="Automatically confirm insertion for each file.")] = False,
     dry_run: Annotated[bool, typer.Option(..., "--dry-run", help="Show actions without modifying files.")] = False,
-    max_depth: Annotated[
-        int,
-        typer.Option(
-            6,
-            "--max-depth",
-            min=1,
-            help="Maximum directory depth to explore under each scan root (default: 6).",
-        ),
-    ] = 6,
+    max_depth: int = typer.Option(
+        6,
+        "--max-depth",
+        min=1,
+        help="Maximum directory depth to explore under each scan root (default: 6).",
+    ),
 ) -> None:
     """Detect AGENTS.md/CLAUDE.md files and append the latest Agent Mail + Beads blurbs."""
 
