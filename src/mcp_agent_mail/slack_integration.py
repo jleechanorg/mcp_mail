@@ -40,6 +40,8 @@ logger = logging.getLogger(__name__)
 
 # Regex pattern for extracting Slack user mentions (e.g., <@U123|name>)
 _SLACK_MENTION_PATTERN = re.compile(r"<@([A-Z0-9]+)(?:\|[^>]+)?>")
+# Thread id format: slack_<channel_id>_<thread_ts> or slackbox_<channel_id>_<thread_ts>
+_SLACK_THREAD_ID_PATTERN = re.compile(r"^(?:slack|slackbox)_([^_]+)_(.+)$")
 
 
 @dataclass
@@ -475,11 +477,18 @@ async def notify_slack_message(
         # Check for existing thread mapping (fallback to message_id for new threads)
         slack_thread_ts: Optional[str] = None
         thread_key = thread_id or message_id
+        thread_mapping: SlackThreadMapping | None = None
         if thread_key:
             thread_mapping = await client.get_slack_thread(thread_key)
             if thread_mapping:
                 slack_thread_ts = thread_mapping.slack_thread_ts
                 channel = thread_mapping.slack_channel_id
+            else:
+                match = _SLACK_THREAD_ID_PATTERN.match(thread_key)
+                if match:
+                    derived_channel, derived_ts = match.groups()
+                    slack_thread_ts = derived_ts
+                    channel = derived_channel
 
         # Post to Slack
         response = await client.post_message(
@@ -489,12 +498,12 @@ async def notify_slack_message(
             thread_ts=slack_thread_ts,
         )
 
-        # If this is a new thread, create mapping
-        if thread_key and not slack_thread_ts:
-            msg_ts = response.get("ts")
-            channel_id = response.get("channel")
-            if msg_ts and channel_id:
-                await client.map_thread(thread_key, channel_id, msg_ts)
+        # If this is a new thread or mapping was missing, create mapping
+        if thread_key and not thread_mapping:
+            mapped_ts = slack_thread_ts or response.get("ts")
+            channel_id = response.get("channel") or channel
+            if mapped_ts and channel_id:
+                await client.map_thread(thread_key, channel_id, mapped_ts)
 
         logger.info(f"Sent Slack notification for message {message_id[:8]} to channel {channel}")
         return response
@@ -638,7 +647,7 @@ async def handle_slack_message_event(
         "thread_id": mcp_thread_id,
         "slack_channel": channel_id,
         "slack_ts": message_ts,
-        "slack_thread_ts": thread_ts,
+        "slack_thread_ts": thread_ts or message_ts,
         "mentioned_users": mentioned_users,
     }
 
