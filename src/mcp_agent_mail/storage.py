@@ -310,6 +310,7 @@ def _resolve_repo_root(settings: Settings, project_key: str | None, slug: str) -
             )
 
         project_path = Path(project_key).expanduser().resolve()
+
         def _build_prompt(reason: str) -> dict[str, Any]:
             options: list[dict[str, Any]] = []
             if settings.storage.local_archive_enabled:

@@ -612,9 +612,10 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                                     hid2 = hid_row2.scalar_one_or_none()
                                                     if isinstance(hid2, int):
                                                         holder_agent_id = hid2
-                                                        project_slug, project_human_key = await _project_identifiers_from_id(
-                                                            project_id
-                                                        )
+                                                        (
+                                                            project_slug,
+                                                            project_human_key,
+                                                        ) = await _project_identifiers_from_id(project_id)
                                                         # Write profile.json to archive
                                                         archive = await ensure_archive(
                                                             settings,
