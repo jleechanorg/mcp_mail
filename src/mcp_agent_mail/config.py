@@ -134,6 +134,12 @@ class SlackSettings:
     use_blocks: bool  # Use Slack Block Kit for rich formatting
     include_attachments: bool  # Include MCP message attachments in Slack
     webhook_url: str | None  # Optional incoming webhook URL (legacy)
+    # Slackbox (legacy outgoing webhook ingestion)
+    slackbox_enabled: bool  # Accept Slack outgoing webhook payloads
+    slackbox_token: str | None  # Verification token from Slack outgoing webhook
+    slackbox_channels: list[str]  # Allowed channel IDs or names
+    slackbox_sender_name: str  # Name for the synthetic sender agent
+    slackbox_subject_prefix: str  # Prefix to apply to Slackbox-derived subjects
 
 
 @dataclass(slots=True, frozen=True)
@@ -349,6 +355,11 @@ def get_settings() -> Settings:
         use_blocks=_bool(_decouple_config("SLACK_USE_BLOCKS", default="true"), default=True),
         include_attachments=_bool(_decouple_config("SLACK_INCLUDE_ATTACHMENTS", default="true"), default=True),
         webhook_url=_decouple_config("SLACK_WEBHOOK_URL", default="") or None,
+        slackbox_enabled=_bool(_decouple_config("SLACKBOX_ENABLED", default="false"), default=False),
+        slackbox_token=_decouple_config("SLACKBOX_TOKEN", default="") or None,
+        slackbox_channels=_csv("SLACKBOX_CHANNELS", default=""),
+        slackbox_sender_name=_decouple_config("SLACKBOX_SENDER_NAME", default="Slackbox"),
+        slackbox_subject_prefix=_decouple_config("SLACKBOX_SUBJECT_PREFIX", default="[Slackbox]"),
     )
 
     def _agent_name_mode(value: str) -> str:
