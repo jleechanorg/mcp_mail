@@ -1054,9 +1054,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         if cache_key:
             _slack_event_cache.add(cache_key)
             _slack_event_cache_order.append(cache_key)
-            while len(_slack_event_cache_order) > _slack_event_cache_order.maxlen:
-                old = _slack_event_cache_order.popleft()
-                _slack_event_cache.discard(old)
+            _slack_event_cache.clear()
+            _slack_event_cache.update(_slack_event_cache_order)
 
         slack_client_ref = None
         try:
