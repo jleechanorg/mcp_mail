@@ -431,7 +431,7 @@ offer_doc_blurbs() {
 
   echo
   echo "Would you like to automatically detect your code projects and insert the relevant blurbs for Agent Mail into your AGENTS.md and CLAUDE.md files?"
-  echo "You will be able to confirm for each detecting project if you want to do that. Otherwise, just skip that, but be sure to add the blurbs yourself manually for the system to work properly."
+  echo "You will be able to confirm for each detected project if you want to do that. Otherwise, just skip that, but be sure to add the blurbs yourself manually for the system to work properly."
   read -r -p "[y/N] " doc_choice
   doc_choice=$(printf '%s' "${doc_choice}" | tr -d '[:space:]')
   case "${doc_choice}" in

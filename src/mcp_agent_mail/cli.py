@@ -207,6 +207,7 @@ def products_ensure(
         if hasattr(_created, "isoformat"):
             _created = _created.isoformat()
     except Exception:
+        # If _created is not a datetime or lacks isoformat, just use its string representation.
         pass
     table.add_row("created_at", str(_created))
     console.print(table)
@@ -454,6 +455,7 @@ def products_inbox(
                             since_dt = _dt.fromisoformat(s)
                             stmt = stmt.where(Message.created_ts > since_dt)
                         except Exception:
+                            # Ignore invalid timestamp formats; fallback is to not filter by date.
                             pass
                     res = await session.execute(stmt)
                     for msg, kind, sender_name in res.all():
@@ -2054,7 +2056,6 @@ def amctl_env(
             branch = "unknown"
     # Compute cache key and artifact dir
     settings = get_settings()
-    settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
     cache_key = f"am-cache-{project_uid}-{agent_name}-{branch}"
     artifact_dir = (
         Path(settings.storage.root).expanduser().resolve() / "projects" / slug / "artifacts" / agent_name / branch
@@ -2106,15 +2107,8 @@ def am_run(
         except Exception:
             branch = "unknown"
     settings = get_settings()
-    settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
     guard_mode = (os.environ.get("AGENT_MAIL_GUARD_MODE", "block") or "block").strip().lower()
     worktrees_enabled = bool(settings.worktrees_enabled)
-
-    def _safe_component(value: str) -> str:
-        s = value.strip()
-        for ch in ("/", "\\\\", ":", "*", "?", '"', "<", ">", "|", " "):
-            s = s.replace(ch, "_")
-        return s or "unknown"
 
     async def _ensure_slot_paths() -> Path:
         archive = await ensure_archive(settings, slug, project_key=str(p))
