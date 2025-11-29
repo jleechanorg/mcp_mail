@@ -341,6 +341,60 @@ async def test_regular_agent_not_marked_as_placeholder(isolated_env):
 
 
 @pytest.mark.asyncio
+async def test_send_to_existing_agent_does_not_create_placeholder(isolated_env):
+    """
+    Sending to an already registered agent should not create or require a placeholder.
+    """
+
+    server = build_mcp_server()
+    async with Client(server) as client:
+        await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "/test/project",
+                "program": "sender-program",
+                "model": "sender-model",
+                "name": "ExistingSender",
+            },
+        )
+
+        await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "/test/project",
+                "program": "existing-program",
+                "model": "existing-model",
+                "name": "ExistingRecipient",
+            },
+        )
+
+        send_result = await client.call_tool(
+            "send_message",
+            {
+                "project_key": "/test/project",
+                "sender_name": "ExistingSender",
+                "to": ["ExistingRecipient"],
+                "subject": "Hello",
+                "body_md": "Message to existing agent.",
+            },
+        )
+
+        deliveries = send_result.data.get("deliveries") or []
+        assert len(deliveries) == 1
+        assert send_result.data.get("count") == 1
+
+        whois_result = await client.call_tool(
+            "whois",
+            {
+                "project_key": "/test/project",
+                "agent_name": "ExistingRecipient",
+            },
+        )
+
+        assert whois_result.data.get("is_placeholder") is False
+
+
+@pytest.mark.asyncio
 async def test_placeholder_inherits_sender_program_model(isolated_env):
     """
     Test that placeholder agents inherit the sender's program and model.

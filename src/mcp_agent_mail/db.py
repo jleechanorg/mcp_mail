@@ -382,4 +382,3 @@ def _ensure_agent_active_columns(connection) -> None:
         connection.exec_driver_sql("ALTER TABLE agents ADD COLUMN is_placeholder INTEGER NOT NULL DEFAULT 0")
     connection.exec_driver_sql("UPDATE agents SET is_active = 1 WHERE is_active IS NULL")
     connection.exec_driver_sql("UPDATE agents SET contact_policy = 'auto' WHERE contact_policy IS NULL")
-    connection.exec_driver_sql("UPDATE agents SET is_placeholder = 0 WHERE is_placeholder IS NULL")

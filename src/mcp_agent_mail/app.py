@@ -1333,28 +1333,39 @@ async def _get_or_create_agent(
                 # Claim the placeholder: update its details and mark as non-placeholder
                 await ensure_schema()
                 async with get_session() as session:
-                    result = await session.execute(select(Agent).where(Agent.id == placeholder.id))
+                    result = await session.execute(
+                        select(Agent).where(
+                            Agent.id == placeholder.id,
+                            cast(Any, Agent.is_placeholder).is_(True),
+                            cast(Any, Agent.is_active).is_(True),
+                        )
+                    )
                     agent = result.scalars().first()
                     if agent:
-                        # Update placeholder to claim it
-                        agent.project_id = project.id
-                        agent.program = program
-                        agent.model = model
-                        agent.task_description = task_description
-                        agent.last_active_ts = datetime.now(timezone.utc)
-                        agent.is_placeholder = False
-                        # Reactivate if previously retired
-                        if not getattr(agent, "is_active", True):
-                            agent.is_active = True
-                            agent.deleted_ts = None
-                        session.add(agent)
-                        await session.commit()
-                        await session.refresh(agent)
-                        # Write updated profile to archive
-                        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-                        async with _archive_write_lock(archive):
-                            await write_agent_profile(archive, _agent_to_dict(agent))
-                        return agent
+                        # Race condition check: verify it's still a placeholder
+                        if not getattr(agent, "is_placeholder", False):
+                            # Already claimed by another process, fall through to regular logic
+                            pass
+                        else:
+                            # Update placeholder to claim it
+                            agent.project_id = project.id
+                            agent.program = program
+                            agent.model = model
+                            agent.task_description = task_description
+                            agent.last_active_ts = datetime.now(timezone.utc)
+                            agent.is_placeholder = False
+                            # Reactivate if previously retired
+                            if not getattr(agent, "is_active", True):
+                                agent.is_active = True
+                                agent.deleted_ts = None
+                            session.add(agent)
+                            await session.commit()
+                            await session.refresh(agent)
+                            # Write updated profile to archive
+                            archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+                            async with _archive_write_lock(archive):
+                                await write_agent_profile(archive, _agent_to_dict(agent))
+                            return agent
                 # If we couldn't find the agent, fall through to regular logic
             # Check if the user-provided name is globally unique
             if await _agent_name_exists_globally(sanitized):
@@ -1518,7 +1529,9 @@ async def _create_placeholder_agent(
         )
         existing = result.scalars().first()
         if existing:
-            return existing  # Already exists, return as-is
+            if not getattr(existing, "is_placeholder", False):
+                raise ValueError(f"Agent '{sanitized}' already exists and is not a placeholder")
+            return existing  # Placeholder already exists
 
         agent = Agent(
             project_id=project.id,
@@ -1533,7 +1546,7 @@ async def _create_placeholder_agent(
         try:
             await session.commit()
             await session.refresh(agent)
-        except IntegrityError:
+        except IntegrityError as exc:
             # Race condition: name was taken between check and commit
             await session.rollback()
             # Try to fetch the existing agent
@@ -1545,8 +1558,12 @@ async def _create_placeholder_agent(
             )
             existing = result.scalars().first()
             if existing:
+                if not getattr(existing, "is_placeholder", False):
+                    raise ValueError(
+                        f"Agent '{sanitized}' was created as non-placeholder during race condition"
+                    ) from exc
                 return existing
-            raise ValueError(f"Failed to create placeholder agent: {sanitized}") from None
+            raise ValueError(f"Failed to create placeholder agent: {sanitized}") from exc
 
     # Write placeholder profile to archive
     archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
@@ -3858,15 +3875,17 @@ def build_mcp_server() -> FastMCP:
                 canonical = sanitized or (trimmed if trimmed else None)
                 return trimmed or value, keys, canonical
 
-            unknown: set[str] = set()
+            unknown: dict[str, set[str]] = {}
 
             async def _route(name_list: list[str], kind: str) -> None:
                 """Simplified routing: look up agents globally by name."""
                 for raw in name_list:
                     # Strip whitespace and normalize
                     display_value, key_candidates, canonical = _normalize(raw)
+                    unknown_key = canonical or (display_value.strip() if display_value else (raw.strip() if raw else raw))
                     if not key_candidates or not canonical:
-                        unknown.add(raw.strip() if raw else raw)
+                        if unknown_key is not None:
+                            unknown.setdefault(unknown_key, set()).add(kind)
                         continue
 
                     # Allow self-send
@@ -3894,7 +3913,8 @@ def build_mcp_server() -> FastMCP:
                         else:
                             all_bcc.append(resolved)
                     else:
-                        unknown.add(display_value or raw.strip() if raw else raw)
+                        if unknown_key is not None:
+                            unknown.setdefault(unknown_key, set()).add(kind)
 
             await _route(to, "to")
             await _route(cc or [], "cc")
@@ -3906,8 +3926,8 @@ def build_mcp_server() -> FastMCP:
                     # Best effort: create placeholder agents for unknown recipients.
                     # Placeholder agents can receive messages and be "claimed" later
                     # when the real agent registers with that name.
-                    newly_registered: set[str] = set()
-                    for missing in list(unknown):
+                    newly_registered: list[tuple[str, set[str]]] = []
+                    for missing in list(unknown.keys()):
                         try:
                             placeholder = await _create_placeholder_agent(
                                 project,
@@ -3916,7 +3936,8 @@ def build_mcp_server() -> FastMCP:
                                 sender.model,
                                 settings_local,
                             )
-                            newly_registered.add(missing)
+                            newly_registered.append((missing, unknown.get(missing, set())))
+                            unknown.pop(missing, None)
                             # Add the newly created placeholder to global_lookup so _route can find it
                             canonical_name = placeholder.name
                             sanitized_canonical = sanitize_agent_name(canonical_name) or canonical_name
@@ -3924,10 +3945,16 @@ def build_mcp_server() -> FastMCP:
                                 global_lookup.setdefault(key, canonical_name)
                         except Exception:
                             pass
-                    unknown.difference_update(newly_registered)
                     # Re-run routing for any that were registered
                     if newly_registered:
-                        await _route(list(newly_registered), "to")
+                        for name, kinds in newly_registered:
+                            route_kinds = kinds or {"to"}
+                            if "to" in route_kinds:
+                                await _route([name], "to")
+                            if "cc" in route_kinds:
+                                await _route([name], "cc")
+                            if "bcc" in route_kinds:
+                                await _route([name], "bcc")
 
                 # If still have unknown recipients, raise error
                 if unknown:
