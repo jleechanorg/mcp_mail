@@ -47,12 +47,13 @@ echo "==> Ensuring storage archive exists"
 uv run python - <<'PY'
 import asyncio
 from mcp_agent_mail.config import get_settings
-from mcp_agent_mail.storage import ensure_archive_root
+from mcp_agent_mail.storage import ensure_archive
 
 
 async def _main() -> None:
     settings = get_settings()
-    repo_root, _repo = await ensure_archive_root(settings)
+    archive = await ensure_archive(settings, slug="bootstrap", project_key=None)
+    repo_root = archive.repo_root
     print(f"Storage archive ready at {repo_root}")
 
 
