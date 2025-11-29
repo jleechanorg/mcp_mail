@@ -1636,7 +1636,7 @@ def am_run(
     worktrees_enabled = bool(getattr(settings, "worktrees_enabled", False))
 
     async def _ensure_slot_paths() -> Path:
-        archive = await ensure_archive(settings, slug)
+        archive = await ensure_archive(settings, slug, project_key=str(p))
         slot_dir = archive.root / "build_slots" / safe_filesystem_component(slot)
         slot_dir.mkdir(parents=True, exist_ok=True)
         return slot_dir
@@ -1927,8 +1927,8 @@ def projects_adopt(
     settings = get_settings()
     from .storage import ensure_archive as _ensure_archive
 
-    src_archive = asyncio.run(_ensure_archive(settings, src.slug))
-    dst_archive = asyncio.run(_ensure_archive(settings, dst.slug))
+    src_archive = asyncio.run(_ensure_archive(settings, src.slug, project_key=src.human_key))
+    dst_archive = asyncio.run(_ensure_archive(settings, dst.slug, project_key=dst.human_key))
     plan.append(f"Move Git artifacts: {src_archive.root} -> {dst_archive.root}")
     plan.append("Re-key DB rows: source project_id -> target project_id (messages, agents, file_reservations, etc.)")
     plan.append("Write aliases.json under target 'projects/<slug>/' with former_slugs")
@@ -1961,8 +1961,8 @@ def projects_adopt(
         # local import to minimize top-level churn and keep ordering stable
         from .storage import AsyncFileLock as _AsyncFileLock, ensure_archive as _ensure_archive  # type: ignore
 
-        src_archive = asyncio.run(_ensure_archive(settings, src.slug))
-        dst_archive = asyncio.run(_ensure_archive(settings, dst.slug))
+        src_archive = asyncio.run(_ensure_archive(settings, src.slug, project_key=src.human_key))
+        dst_archive = asyncio.run(_ensure_archive(settings, dst.slug, project_key=dst.human_key))
         moved_relpaths: list[str] = []
         for path in sorted(src_archive.root.rglob("*"), key=str):
             if not path.is_file():

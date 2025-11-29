@@ -42,6 +42,7 @@ from .slots import (
 )
 from .storage import (
     ProjectArchive,
+    ProjectStorageResolutionError,
     archive_write_lock,
     collect_lock_status,
     ensure_archive,
@@ -217,6 +218,17 @@ def _instrument_tool(
                 _record_tool_error(tool_name, exc)
                 error = exc
                 raise
+            except ProjectStorageResolutionError as exc:
+                metrics["errors"] += 1
+                _record_tool_error(tool_name, exc)
+                wrapped_exc = ToolExecutionError(
+                    "PROJECT_STORAGE",
+                    str(exc),
+                    recoverable=False,
+                    data={"tool": tool_name, "project": project_value},
+                )
+                error = wrapped_exc
+                raise wrapped_exc from exc
             except NoResultFound as exc:
                 # Handle agent/project not found errors with helpful messages
                 metrics["errors"] += 1
@@ -1408,7 +1420,7 @@ async def _get_or_create_agent(
                         "hint": "Retry the operation; if it persists, call register_agent with force_reclaim=True",
                     },
                 ) from exc
-    archive = await ensure_archive(settings, project.slug)
+    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
     async with _archive_write_lock(archive):
         await write_agent_profile(archive, _agent_to_dict(agent))
     return agent
@@ -1478,7 +1490,7 @@ async def _delete_agent(project: Project, name: str, settings: Settings) -> dict
         await session.execute(delete(Agent).where(Agent.id == agent_id))
 
     # Write deletion marker to Git archive
-    archive = await ensure_archive(settings, project.slug)
+    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
     async with _archive_write_lock(archive):
         await write_agent_deletion_marker(archive, agent_name, stats)
 
@@ -1530,7 +1542,7 @@ async def _retire_agent(agent: Agent, project: Project, settings: Settings) -> A
         await session.refresh(db_agent)
         agent = db_agent
 
-    archive = await ensure_archive(settings, project.slug)
+    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
     async with _archive_write_lock(archive):
         await write_agent_profile(archive, _agent_to_dict(agent))
     return agent
@@ -2208,7 +2220,7 @@ def _canonical_relpath_for_message(project: Project, message: Message, archive) 
 
 async def _commit_info_for_message(settings: Settings, project: Project, message: Message) -> dict[str, Any] | None:
     """Fetch commit metadata for the canonical message file (hexsha, summary, authored_ts, stats)."""
-    archive = await ensure_archive(settings, project.slug)
+    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
     relpath = _canonical_relpath_for_message(project, message, archive)
     if not relpath:
         return None
@@ -2722,7 +2734,7 @@ def build_mcp_server() -> FastMCP:
         recipient_records.extend((agent, "cc") for agent in cc_agents)
         recipient_records.extend((agent, "bcc") for agent in bcc_agents)
 
-        archive = await ensure_archive(settings, project.slug)
+        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
         convert_markdown = (
             convert_images_override if convert_images_override is not None else settings.storage.convert_images
         )
@@ -3060,7 +3072,7 @@ def build_mcp_server() -> FastMCP:
         """
         await ctx.info(f"Ensuring project for key '{human_key}'.")
         project = await _ensure_project(human_key)
-        await ensure_archive(settings, project.slug)
+        await ensure_archive(settings, project.slug, project_key=project.human_key)
         return _project_to_dict(project)
 
     @mcp.tool(name="register_agent")
@@ -3169,7 +3181,7 @@ def build_mcp_server() -> FastMCP:
         """
         # Auto-create project if it doesn't exist (allows any string as project_key)
         project = await _ensure_project(project_key)
-        await ensure_archive(settings, project.slug)
+        await ensure_archive(settings, project.slug, project_key=project.human_key)
 
         if settings.tools_log_enabled:
             try:
@@ -3374,7 +3386,7 @@ def build_mcp_server() -> FastMCP:
         profile = _agent_to_dict(agent)
         recent: list[dict[str, Any]] = []
         if include_recent_commits:
-            archive = await ensure_archive(settings, agent_project.slug)
+            archive = await ensure_archive(settings, agent_project.slug, project_key=agent_project.human_key)
             repo: Repo = archive.repo
             try:
                 # Limit to archive path; extract last commits
@@ -3475,7 +3487,7 @@ def build_mcp_server() -> FastMCP:
                 await session.commit()
                 await session.refresh(db_agent)
                 agent = db_agent
-        archive = await ensure_archive(settings, project.slug)
+        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
         async with _archive_write_lock(archive):
             await write_agent_profile(archive, _agent_to_dict(agent))
         await ctx.info(f"Created new agent identity '{agent.name}' for project '{project.human_key}'.")
@@ -5357,7 +5369,7 @@ def build_mcp_server() -> FastMCP:
 
         granted: list[dict[str, Any]] = []
         conflicts: list[dict[str, Any]] = []
-        archive = await ensure_archive(settings, project.slug)
+        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
         async with _archive_write_lock(archive):
             for path in paths:
                 conflicting_holders: list[dict[str, Any]] = []
@@ -5782,7 +5794,7 @@ def build_mcp_server() -> FastMCP:
             await session.commit()
 
         # Update Git artifacts for the renewed file_reservations
-        archive = await ensure_archive(settings, project.slug)
+        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
         async with _archive_write_lock(archive):
             for file_reservation_info in updated:
                 payload = {
@@ -7365,7 +7377,7 @@ def build_mcp_server() -> FastMCP:
         # Attach recent commit summaries touching the archive (best-effort)
         commits_index: dict[str, dict[str, str]] = {}
         try:
-            archive = await ensure_archive(settings, project_obj.slug)
+            archive = await ensure_archive(settings, project_obj.slug, project_key=project_obj.human_key)
             repo: Repo = archive.repo
             for commit in repo.iter_commits(paths=["."], max_count=200):
                 # Heuristic: extract message id from commit summary when present in canonical subject format

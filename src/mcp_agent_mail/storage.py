@@ -48,6 +48,10 @@ _PROCESS_LOCKS: dict[tuple[int, str], asyncio.Lock] = {}
 _PROCESS_LOCK_OWNERS: dict[tuple[int, str], int] = {}
 
 
+class ProjectStorageResolutionError(RuntimeError):
+    """Raised when project-key storage cannot resolve a repository root."""
+
+
 class AsyncFileLock:
     """Async-friendly wrapper around SoftFileLock with metadata tracking."""
 
@@ -288,15 +292,70 @@ def collect_lock_status(settings: Settings) -> dict[str, Any]:
     return {"locks": locks, "summary": summary}
 
 
-async def ensure_archive_root(settings: Settings) -> tuple[Path, Repo]:
-    repo_root = Path(settings.storage.root).expanduser().resolve()
+def _resolve_repo_root(settings: Settings, project_key: str | None, slug: str) -> Path:
+    """Determine where the archive Git repo should live."""
+
+    default_root = Path(settings.storage.root).expanduser().resolve()
+
+    if settings.storage.project_key_storage_enabled:
+        if not project_key:
+            raise ProjectStorageResolutionError(
+                "Project-key storage is enabled, but no project_key was provided. "
+                "Pass the human project key (ideally an absolute repo path), or disable "
+                "STORAGE_PROJECT_KEY_ENABLED to use the default .mcp_mail archive."
+            )
+
+        project_path = Path(project_key).expanduser().resolve()
+        if not project_path.exists():
+            raise ProjectStorageResolutionError(
+                f"Project-key storage is enabled, but the project path {project_path} does not exist. "
+                "Provide a valid git repo path or disable STORAGE_PROJECT_KEY_ENABLED to keep using the "
+                f"default archive at {default_root}."
+            )
+        if not project_path.is_dir():
+            raise ProjectStorageResolutionError(
+                f"Project-key storage is enabled, but the project path {project_path} is not a directory. "
+                "Point project_key at a git repository root, or disable STORAGE_PROJECT_KEY_ENABLED to "
+                f"use the default archive at {default_root}."
+            )
+
+        try:
+            repo = Repo(str(project_path), search_parent_directories=True)
+        except Exception as exc:  # pragma: no cover - git error path
+            raise ProjectStorageResolutionError(
+                f"Project-key storage requires a git repo, but {project_path} is not a git repository. "
+                "Initialize git there or disable STORAGE_PROJECT_KEY_ENABLED to use the default archive."
+            ) from exc
+
+        worktree_root = Path(repo.working_tree_dir or repo.common_dir).resolve()
+        if worktree_root != project_path:
+            raise ProjectStorageResolutionError(
+                f"Project-key storage expects the project_key to be the git repo root. "
+                f"Provided: {project_path} ; repo root: {worktree_root}. "
+                "Set project_key to the repo root or disable STORAGE_PROJECT_KEY_ENABLED."
+            )
+
+        return project_path / ".mcp_mail"
+
+    if not settings.storage.local_archive_enabled:
+        raise ProjectStorageResolutionError(
+            "Local .mcp_mail storage is disabled (STORAGE_LOCAL_ARCHIVE_ENABLED=false) and "
+            "project-key storage is not enabled. Enable project-key storage or re-enable "
+            "local archive support."
+        )
+
+    return default_root
+
+
+async def ensure_archive_root(settings: Settings, project_key: str | None, slug: str) -> tuple[Path, Repo]:
+    repo_root = _resolve_repo_root(settings, project_key, slug)
     await _to_thread(repo_root.mkdir, parents=True, exist_ok=True)
     repo = await _ensure_repo(repo_root, settings)
     return repo_root, repo
 
 
-async def ensure_archive(settings: Settings, slug: str) -> ProjectArchive:
-    repo_root, repo = await ensure_archive_root(settings)
+async def ensure_archive(settings: Settings, slug: str, *, project_key: str | None = None) -> ProjectArchive:
+    repo_root, repo = await ensure_archive_root(settings, project_key, slug)
     project_root = repo_root / "projects" / slug
     await _to_thread(project_root.mkdir, parents=True, exist_ok=True)
     return ProjectArchive(

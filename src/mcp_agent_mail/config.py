@@ -79,6 +79,8 @@ class StorageSettings:
     inline_image_max_bytes: int
     convert_images: bool
     keep_original_images: bool
+    project_key_storage_enabled: bool
+    local_archive_enabled: bool
 
 
 @dataclass(slots=True, frozen=True)
@@ -252,6 +254,10 @@ def get_settings() -> Settings:
         ),
         convert_images=_bool(_decouple_config("CONVERT_IMAGES", default="true"), default=True),
         keep_original_images=_bool(_decouple_config("KEEP_ORIGINAL_IMAGES", default="false"), default=False),
+        project_key_storage_enabled=_bool(
+            _decouple_config("STORAGE_PROJECT_KEY_ENABLED", default="false"), default=False
+        ),
+        local_archive_enabled=_bool(_decouple_config("STORAGE_LOCAL_ARCHIVE_ENABLED", default="true"), default=True),
     )
 
     cors_settings = CorsSettings(
