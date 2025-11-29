@@ -75,7 +75,7 @@ async def acquire_build_slot(
 
     # Resolve project archive
     slug = slugify(project_key)
-    archive = await ensure_archive(settings, slug)
+    archive = await ensure_archive(settings, slug, project_key=project_key)
 
     # Create slot directory
     slot_dir = _slot_dir(archive.root, slot)
@@ -179,7 +179,7 @@ async def renew_build_slot(
         return {"disabled": True}
 
     slug = slugify(project_key)
-    archive = await ensure_archive(settings, slug)
+    archive = await ensure_archive(settings, slug, project_key=project_key)
 
     slot_dir = archive.root / "build_slots" / safe_filesystem_component(slot)
     if not slot_dir.exists():
@@ -248,7 +248,7 @@ async def release_build_slot(
         return {"disabled": True}
 
     slug = slugify(project_key)
-    archive = await ensure_archive(settings, slug)
+    archive = await ensure_archive(settings, slug, project_key=project_key)
 
     slot_dir = archive.root / "build_slots" / safe_filesystem_component(slot)
     if not slot_dir.exists():

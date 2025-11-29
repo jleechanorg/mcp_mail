@@ -124,19 +124,27 @@ async def test_search_with_mcp_mail_storage_structure(mcp_mail_search_env):
 
 
 @pytest.mark.asyncio
-async def test_search_respects_project_isolation_in_mcp_mail(mcp_mail_search_env):
-    """Test that search results are isolated by project in .mcp_mail/ storage."""
+async def test_search_respects_project_context_in_mcp_mail(mcp_mail_search_env):
+    """Test that search results respect project context in .mcp_mail/ storage.
+
+    Note: Agent names are globally unique across all projects. This test uses
+    different agent names for each project to comply with global uniqueness.
+    """
     server = build_mcp_server()
     async with Client(server) as client:
-        # Set up two projects
-        for project in ["project-a", "project-b"]:
+        # Set up two projects with different agents (agent names are globally unique)
+        projects_and_agents = [
+            ("project-a", "AgentAlpha"),
+            ("project-b", "AgentBeta"),
+        ]
+        for project, agent_name in projects_and_agents:
             await client.call_tool(
                 "register_agent",
                 {
                     "project_key": project,
                     "program": "claude",
                     "model": "sonnet",
-                    "name": "Agent",
+                    "name": agent_name,
                 },
             )
 
@@ -144,8 +152,8 @@ async def test_search_respects_project_isolation_in_mcp_mail(mcp_mail_search_env
                 "send_message",
                 {
                     "project_key": project,
-                    "sender_name": "Agent",
-                    "to": ["Agent"],
+                    "sender_name": agent_name,
+                    "to": [agent_name],
                     "subject": f"Project {project} message",
                     "body_md": f"This is a unique message for {project} about security implementation",
                 },
@@ -157,7 +165,7 @@ async def test_search_respects_project_isolation_in_mcp_mail(mcp_mail_search_env
             {
                 "project_key": "project-a",
                 "query": "security implementation",
-                "requesting_agent": "Agent",
+                "requesting_agent": "AgentAlpha",
                 "limit": 10,
             },
         )
@@ -172,7 +180,7 @@ async def test_search_respects_project_isolation_in_mcp_mail(mcp_mail_search_env
             {
                 "project_key": "project-b",
                 "query": "security implementation",
-                "requesting_agent": "Agent",
+                "requesting_agent": "AgentBeta",
                 "limit": 10,
             },
         )

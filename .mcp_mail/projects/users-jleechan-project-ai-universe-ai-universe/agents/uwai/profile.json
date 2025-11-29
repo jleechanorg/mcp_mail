@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": null,
+  "id": 54,
+  "inception_ts": "2025-11-21T06:51:07.014731+00:00",
+  "is_active": true,
+  "last_active_ts": "2025-11-21T06:51:07.014739+00:00",
+  "model": "gpt-5-codex",
+  "name": "uwai",
+  "program": "codex-cli",
+  "project_id": 14,
+  "task_description": "Coordination updates for integration testing and secondary defaults"
+}

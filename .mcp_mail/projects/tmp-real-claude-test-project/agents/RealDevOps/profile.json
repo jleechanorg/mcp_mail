@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": null,
+  "id": 15,
+  "inception_ts": "2025-11-19T11:42:57.125156+00:00",
+  "is_active": true,
+  "last_active_ts": "2025-11-19T11:42:57.125163+00:00",
+  "model": "sonnet-4.5",
+  "name": "RealDevOps",
+  "program": "claude-code",
+  "project_id": 4,
+  "task_description": "Infrastructure and Deployment"
+}

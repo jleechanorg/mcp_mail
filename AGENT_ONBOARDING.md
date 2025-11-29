@@ -8,7 +8,7 @@ This guide provides step-by-step workflows for AI agents to coordinate effective
 
 **Terminology**:
 - `{project_key}` can be either the **human_key** (e.g., `/data/projects/my-app`) or the **slug** (e.g., `my-app-abc123`). Both work interchangeably.
-- Agent names are unique identifiers within a project (e.g., "BackendDev", "FrontendDev").
+- Agent names are **globally unique** identifiers across ALL projects (e.g., "BackendDev", "FrontendDev"). A name like "BlueLake" can only exist once in the entire system.
 
 ## Quick Start: Basic Coordination Workflow
 
@@ -65,9 +65,20 @@ Create your unique identity in the project:
 
 ### Step 3: Discover Other Agents
 
-Find out who else is working on the project:
+Find out who else is available to collaborate with:
 
-**Method 1: Using the dedicated agent directory (RECOMMENDED)**
+**Method 1: Global Agent Directory (RECOMMENDED)**
+
+Use `resource://agents` to discover ALL agents across ALL projects:
+
+```json
+{
+  "resource": "resource://agents",
+  "method": "read"
+}
+```
+
+**Method 2: Project-Filtered View (Deprecated)**
 
 ```json
 {
@@ -76,14 +87,7 @@ Find out who else is working on the project:
 }
 ```
 
-**Method 2: Using the project resource**
-
-```json
-{
-  "resource": "resource://project/my-project-slug",
-  "method": "read"
-}
-```
+**Note:** Method 2 shows only agents in a specific project. Since agents are globally unique and can communicate across projects, prefer Method 1 for complete discovery.
 
 **Response format:**
 ```json
@@ -118,6 +122,7 @@ Find out who else is working on the project:
 **Important notes:**
 - Agent names shown here (e.g., "BackendDev", "FrontendDev") are the names to use in tools
 - These are NOT the same as your program name or user name
+- Agent names are **globally unique** - you can message any agent regardless of their project
 - `unread_count` shows how many unread messages each agent has (useful for knowing if they're checking messages)
 - `last_active_ts` shows when the agent was last active
 
@@ -440,16 +445,17 @@ Project 'my-project' not found
 1. Call `ensure_project(human_key="/data/projects/my-project")` first
 2. Use the same `human_key` consistently
 
-### Pitfall 3: Agents Can't See Each Other
+### Pitfall 3: Agent Name Already Taken
 
-**Problem:** Frontend agent registered in `/data/projects/frontend`, backend in `/data/projects/backend` - they can't see each other.
+**Problem:** When registering with a specific name, you get "Agent name 'X' is already in use globally."
 
-**Why:** Projects are isolated namespaces. Agents in different projects cannot communicate.
+**Why:** Agent names are **globally unique** across all projects (case-insensitive). Another agent already registered with that name.
 
-**Solution:**
-- Use ONE shared project for both frontend and backend: `/data/projects/my-project`
-- Register all agents in the same project
-- See "Project Boundaries" section below
+**Solutions:**
+1. Use `resource://agents` to see all registered agents
+2. Choose a different, more specific name (e.g., "FrontendDevMyApp" instead of "FrontendDev")
+3. Omit the `name` parameter to auto-generate a unique name
+4. Use `force_reclaim=true` if you need to take over an existing name (retires the old agent)
 
 ### Pitfall 4: No Messages in Inbox
 
@@ -477,9 +483,13 @@ Conflict: 'FrontendDev' holds exclusive reservation on 'app/api/*.py' until 2025
 
 ## Project Boundaries
 
-### Single Project (Recommended for Monorepos)
+### Understanding Projects in the Global Namespace
 
-Use this approach when frontend and backend are part of the same codebase:
+**IMPORTANT:** Agent names are **globally unique** across ALL projects. Projects serve as organizational containers for archives and context, not as access control boundaries.
+
+### Single Project (Shared Archive)
+
+Use a single project when you want unified message archives:
 
 ```
 Project: /data/projects/smartedgar
@@ -492,20 +502,31 @@ Agents:
 
 **Pros:**
 - Simple setup
-- Agents can easily coordinate
-- Shared message threads
-- File reservations work across all code
+- Unified archive in one location
+- Shared thread context
+- File reservations in one project
 
-**Cons:**
-- Shared namespace (all agents see all messages)
+### Multiple Projects (Separate Archives)
 
-### Multiple Projects (Currently Limited)
+Use multiple projects when you want separate message archives:
 
-**IMPORTANT:** Cross-project coordination is NOT currently supported. Agents in different projects cannot see or message each other.
+```
+Project A: /data/projects/frontend
+  - FrontendDev
 
-**Future Feature:** Cross-project messaging and agent links are planned for a future release.
+Project B: /data/projects/backend
+  - BackendDev
 
-**Current Workaround:** Use a single shared project for all related agents.
+Both agents can communicate freely!
+Archives are stored separately by project.
+```
+
+**Pros:**
+- Logical separation of archives
+- Each codebase has its own project
+- Still full communication between agents
+
+**Key Point:** Cross-project communication is **fully supported**. Agents can message any other agent by name, regardless of which project they're registered in.
 
 ## Advanced Features
 
@@ -645,13 +666,14 @@ If you encounter issues:
 
 ## Resources Reference
 
-- `resource://agents/{project_key}` - List agents in a project (RECOMMENDED for discovery)
+- `resource://agents` - **List ALL agents globally (RECOMMENDED for discovery)**
+- `resource://agents/{project_key}` - List agents in a specific project (filtered view, deprecated)
 - `resource://project/{project_key}` - Project details including agents
 - `resource://projects` - List all projects
 - `resource://file_reservations/{project_key}?active_only=true` - Active file reservations
-- `resource://inbox/{project_key}/{agent_name}` - Agent's inbox
-- `resource://outbox/{project_key}/{agent_name}` - Agent's sent messages
-- `resource://message/{message_id}` - Single message details
+- `resource://inbox/{agent_name}?project={project_key}` - Agent's inbox (requires project; global lookup works when the name is unique)
+- `resource://outbox/{agent_name}?project={project_key}` - Agent's sent messages (requires project; global lookup works when the name is unique)
+- `resource://message/{message_id}?project={project_key}` - Single message details (project optional when the id is unique globally)
 
 ## Next Steps
 

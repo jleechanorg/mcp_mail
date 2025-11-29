@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": "2025-11-22T03:53:25.428303+00:00",
+  "id": 62,
+  "inception_ts": "2025-11-21T14:39:44.186288+00:00",
+  "is_active": false,
+  "last_active_ts": "2025-11-21T14:39:44.186297+00:00",
+  "model": "claude-sonnet-4.5",
+  "name": "ufauth",
+  "program": "claude-code",
+  "project_id": 12,
+  "task_description": "Auth+conversation reliability PR fixes - rebased #283 and #299"
+}

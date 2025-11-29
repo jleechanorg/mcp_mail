@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": null,
+  "id": 26,
+  "inception_ts": "2025-11-18T13:54:13.891487+00:00",
+  "is_active": true,
+  "last_active_ts": "2025-11-18T13:54:13.891502+00:00",
+  "model": "claude-sonnet-4.5",
+  "name": "TechnicalReviewer",
+  "program": "claude-code",
+  "project_id": 8,
+  "task_description": "GCP MCP endpoint testing and validation"
+}

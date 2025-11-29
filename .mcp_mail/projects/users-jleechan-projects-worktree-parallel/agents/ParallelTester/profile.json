@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": null,
+  "id": 81,
+  "inception_ts": "2025-11-27T04:08:25.835932+00:00",
+  "is_active": true,
+  "last_active_ts": "2025-11-27T04:08:25.835936+00:00",
+  "model": "opus-4.5",
+  "name": "ParallelTester",
+  "program": "claude-code",
+  "project_id": 20,
+  "task_description": "Parallel concurrency testing and validation for Cloud Run ThreadPoolExecutor implementation"
+}
