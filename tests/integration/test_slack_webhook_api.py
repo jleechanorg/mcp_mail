@@ -198,6 +198,7 @@ async def test_notify_slack_message_replies_into_slack_thread(monkeypatch):
     class DummySlackClient:
         def __init__(self) -> None:
             self.calls: list[dict[str, str | None]] = []
+            self.mappings: list[tuple[str, str, str]] = []
 
         async def get_slack_thread(self, thread_id: str):
             return None
@@ -216,7 +217,11 @@ async def test_notify_slack_message_replies_into_slack_thread(monkeypatch):
                 "text": text,
                 "thread_ts": thread_ts,
             })
-            return {"ok": True, "ts": thread_ts, "channel": channel}
+            # Return a unique message timestamp (not thread_ts) to match real Slack API behavior
+            return {"ok": True, "ts": "9999999999.999999", "channel": channel}
+
+        async def map_thread(self, mcp_thread_id: str, slack_channel_id: str, slack_thread_ts: str) -> None:
+            self.mappings.append((mcp_thread_id, slack_channel_id, slack_thread_ts))
 
     monkeypatch.setenv("SLACK_ENABLED", "1")
     monkeypatch.setenv("SLACK_NOTIFY_ON_MESSAGE", "1")

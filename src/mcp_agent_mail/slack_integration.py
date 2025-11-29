@@ -40,8 +40,8 @@ logger = logging.getLogger(__name__)
 
 # Regex pattern for extracting Slack user mentions (e.g., <@U123|name>)
 _SLACK_MENTION_PATTERN = re.compile(r"<@([A-Z0-9]+)(?:\|[^>]+)?>")
-# Thread id format: slack_<channel_id>_<thread_ts>
-_SLACK_THREAD_ID_PATTERN = re.compile(r"^slack_([^_]+)_(.+)$")
+# Thread id format: slack_<channel_id>_<thread_ts> or slackbox_<channel_id>_<thread_ts>
+_SLACK_THREAD_ID_PATTERN = re.compile(r"^(?:slack|slackbox)_([^_]+)_(.+)$")
 
 
 @dataclass
@@ -471,11 +471,13 @@ async def notify_slack_message(
         # Check for existing thread mapping (fallback to message_id for new threads)
         slack_thread_ts: Optional[str] = None
         thread_key = thread_id or message_id
+        thread_mapping_found = False
         if thread_key:
             thread_mapping = await client.get_slack_thread(thread_key)
             if thread_mapping:
                 slack_thread_ts = thread_mapping.slack_thread_ts
                 channel = thread_mapping.slack_channel_id
+                thread_mapping_found = True
             else:
                 match = _SLACK_THREAD_ID_PATTERN.match(thread_key)
                 if match:
@@ -491,8 +493,8 @@ async def notify_slack_message(
             thread_ts=slack_thread_ts,
         )
 
-        # If this is a new thread, create mapping
-        if thread_key and not slack_thread_ts:
+        # If this is a new thread and no mapping exists, create mapping
+        if thread_key and not thread_mapping_found:
             msg_ts = response.get("ts")
             channel_id = response.get("channel")
             if msg_ts and channel_id:

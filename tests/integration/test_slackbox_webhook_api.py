@@ -63,3 +63,33 @@ async def test_slackbox_rejects_invalid_token(monkeypatch):
         )
 
     assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_slackbox_skips_disallowed_channel(monkeypatch):
+    """Messages from channels not in the allowlist should be skipped with 200 OK."""
+    monkeypatch.setenv("SLACK_ENABLED", "1")
+    monkeypatch.setenv("SLACKBOX_ENABLED", "1")
+    monkeypatch.setenv("SLACKBOX_TOKEN", "slackbox-token")
+    monkeypatch.setenv("SLACKBOX_CHANNELS", "CALLOW1,CALLOW2")
+    monkeypatch.setenv("SLACK_SYNC_PROJECT_NAME", "slackbox-project")
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+    settings = get_settings()
+    app = build_http_app(settings)
+    await ensure_schema()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/slackbox/incoming",
+            data={
+                "token": "slackbox-token",
+                "channel_id": "CNOTALLOWED",
+                "text": "This should be skipped",
+                "timestamp": "3333.4444",
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json().get("message") == "Channel not allowed"
