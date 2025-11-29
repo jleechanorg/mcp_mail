@@ -131,7 +131,10 @@ def _resolve_project_identity(target_path: str) -> dict[str, Any]:
         if not git_common_dir.startswith("/"):
             git_common_dir = str(path / git_common_dir)
 
-        private_candidates = [Path(git_common_dir) / "agent-mail" / "project-id", path / ".git" / "agent-mail" / "project-id"]
+        private_candidates = [
+            Path(git_common_dir) / "agent-mail" / "project-id",
+            path / ".git" / "agent-mail" / "project-id",
+        ]
         for private_marker in private_candidates:
             if private_marker.exists():
                 uid = private_marker.read_text(encoding="utf-8").strip()
