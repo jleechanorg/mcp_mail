@@ -279,12 +279,13 @@ class SlackClient:
                 return False
 
             sig_basestring = f"v0:{timestamp}:{body.decode('utf-8')}"
-            expected_signature = "v0=" + hmac.new(signing_secret.encode(), sig_basestring.encode(), hashlib.sha256).hexdigest()
+            expected_signature = (
+                "v0=" + hmac.new(signing_secret.encode(), sig_basestring.encode(), hashlib.sha256).hexdigest()
+            )
             return hmac.compare_digest(expected_signature, signature)
         except (ValueError, UnicodeDecodeError) as e:
             logger.warning(f"Invalid Slack request: {e}")
             return False
-
 
 
 # --- Simple webhook mirroring (outbound, optional) --------------------------------------------
@@ -401,7 +402,7 @@ def format_mcp_message_for_slack(
 
     # Message body (limit to 3000 chars for Slack)
     suffix = "\n\n_...message truncated..._"
-    body_text = body_md[:3000 - len(suffix)] + suffix if len(body_md) > 3000 else body_md
+    body_text = body_md[: 3000 - len(suffix)] + suffix if len(body_md) > 3000 else body_md
 
     blocks.append(
         {
