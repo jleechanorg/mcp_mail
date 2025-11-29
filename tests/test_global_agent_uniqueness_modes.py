@@ -16,7 +16,7 @@ from sqlalchemy import func, select
 
 from mcp_agent_mail.app import build_mcp_server
 from mcp_agent_mail.db import get_session
-from mcp_agent_mail.models import Agent, Project
+from mcp_agent_mail.models import Agent, MessageRecipient, Project
 
 
 @pytest.mark.asyncio
@@ -77,8 +77,90 @@ async def test_agent_names_coerce_mode_auto_generates_unique_names(isolated_env)
                 .all()
             )
             assert len(retired_agents) == 1
-            assert retired_agents[0].is_active is False
-            assert retired_agents[0].deleted_ts is not None
+    assert retired_agents[0].is_active is False
+    assert retired_agents[0].deleted_ts is not None
+
+
+@pytest.mark.asyncio
+async def test_agent_reclaim_reuses_name_and_targets_new_recipient(isolated_env):
+    """Duplicate registration should reclaim the name (retiring the old agent) and route messages to the new agent."""
+    mcp = build_mcp_server()
+    async with Client(mcp) as client:
+        project1 = "/tmp/project1"
+        project2 = "/tmp/project2"
+        await client.call_tool("ensure_project", arguments={"human_key": project1})
+        await client.call_tool("ensure_project", arguments={"human_key": project2})
+
+        first = await client.call_tool(
+            "register_agent",
+            arguments={
+                "project_key": project1,
+                "program": "test_program",
+                "model": "test_model",
+                "name": "Alpha",
+            },
+        )
+        first_id = first.data["id"]
+
+        # Re-register in a different project; should reclaim the name (not auto-suffix) and retire the old agent.
+        second = await client.call_tool(
+            "register_agent",
+            arguments={
+                "project_key": project2,
+                "program": "test_program",
+                "model": "test_model",
+                "name": "Alpha",
+            },
+        )
+        assert second.data["name"] == "Alpha"
+        assert second.data["id"] != first_id
+
+        # Send a message to the reclaimed name; it must target the new agent (project2).
+        send_result = await client.call_tool(
+            "send_message",
+            arguments={
+                "project_key": project2,
+                "sender_name": "Alpha",
+                "to": ["Alpha"],
+                "subject": "Ping reclaimed agent",
+                "body_md": "Hello Alpha",
+            },
+        )
+        message_id = send_result.data["deliveries"][0]["payload"]["id"]
+
+        inbox = await client.call_tool(
+            "fetch_inbox",
+            arguments={
+                "project_key": project2,
+                "agent_name": "Alpha",
+                "include_bodies": True,
+                "limit": 5,
+            },
+        )
+        assert len(inbox.data) == 1
+
+        async with get_session() as session:
+            # Old agent should be retired
+            old_agent = await session.get(Agent, first_id)
+            assert old_agent is not None
+            assert old_agent.is_active is False
+
+            # New agent should be active and receive the message
+            new_agent = await session.get(Agent, second.data["id"])
+            assert new_agent is not None
+            assert new_agent.is_active is True
+
+            recipients = (
+                (
+                    await session.execute(
+                        select(MessageRecipient.agent_id).where(MessageRecipient.message_id == message_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert new_agent.id in recipients  # Delivered to the reclaimed agent
+            assert old_agent.id not in recipients
 
 
 @pytest.mark.asyncio
@@ -236,7 +318,17 @@ async def test_reusing_name_retires_previous_agent(isolated_env):
         async with get_session() as session:
             proj_a = (await session.execute(select(Project).where(Project.human_key == proj_a_key))).scalars().first()
             assert proj_a is not None
-            agents_a = (await session.execute(select(Agent).where(Agent.project_id == proj_a.id))).scalars().all()
+            agents_a = (
+                (
+                    await session.execute(
+                        select(Agent).where(
+                            Agent.project_id == proj_a.id, func.lower(Agent.name).not_like("global-inbox%")
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
             assert len(agents_a) == 1
             retired = agents_a[0]
             assert retired.is_active is False

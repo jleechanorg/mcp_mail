@@ -68,6 +68,21 @@ Each test case is a Markdown (`.md`) file with:
 
 **Evidence output**: `/tmp/mcp_agent_mail_<branch>_multiagent_<timestamp>/`
 
+## Real CLI agents (Codex/Claude/Gemini)
+- **Sanity first**: run a one-line prompt to confirm the CLI works before the long test.
+  - Codex: `codex exec "hello"`
+  - Claude: `claude -p "hello"`
+  - Gemini: `gemini "hello"` (if you see ModelNotFoundError, switch to Codex/Claude or adjust the model flag)
+- **CLI command patterns** (use one of the binaries you have working):
+  - Codex: `MCP_CONFIG=.codex/config.toml codex exec --yolo "$PROMPT"`
+  - Claude: `MCP_CONFIG=.mcp.json claude -p --dangerously-skip-permissions "$PROMPT"`
+  - Gemini: `GEMINI_CONFIG=./gemini.mcp.json gemini --approval-mode yolo --allowed-mcp-server-names mcp-agent-mail "$PROMPT"`
+- **Agent names are GLOBAL (not project-scoped)**. Reusing `FrontendDev` from an old run will route messages to that old agent. Avoid collisions:
+  - `RUN_ID=$(date +"%Y%m%d_%H%M%S")`
+  - Names: `FrontendDev-$RUN_ID`, `BackendDev-$RUN_ID`, `DatabaseAdmin-$RUN_ID`, `DevOpsEngineer-$RUN_ID`
+  - Project key: `/tmp/real_cli_project_$RUN_ID`
+- Keep names in the prompt files consistent with the RUN_ID you choose.
+
 ## How to Run Tests as an LLM
 
 ### Prerequisites

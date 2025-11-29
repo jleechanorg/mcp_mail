@@ -669,6 +669,7 @@ def _agent_to_dict(agent: Agent) -> dict[str, Any]:
         "contact_policy": getattr(agent, "contact_policy", "auto"),
         "is_active": getattr(agent, "is_active", True),
         "deleted_ts": _iso(deleted_ts) if (deleted_ts := getattr(agent, "deleted_ts", None)) is not None else None,
+        "is_placeholder": getattr(agent, "is_placeholder", False),
     }
 
 
@@ -1196,6 +1197,23 @@ async def _agent_name_exists_globally(name: str) -> bool:
         return result.first() is not None
 
 
+async def _get_placeholder_agent_globally(name: str) -> Optional[Agent]:
+    """Get a placeholder agent by name globally, if one exists.
+
+    Returns the Agent if it exists and is_placeholder=True, otherwise None.
+    This is used to "claim" placeholder agents during official registration.
+    """
+    async with get_session() as session:
+        result = await session.execute(
+            select(Agent).where(
+                func.lower(Agent.name) == name.lower(),
+                cast(Any, Agent.is_active).is_(True),
+                cast(Any, Agent.is_placeholder).is_(True),
+            )
+        )
+        return result.scalars().first()
+
+
 async def _generate_unique_agent_name(
     project: Project,
     settings: Settings,
@@ -1330,6 +1348,46 @@ async def _get_or_create_agent(
                 )
             desired_name = await _generate_unique_agent_name(project, settings, None)
         else:
+            # Check if there's a placeholder agent with this name that can be claimed
+            placeholder = await _get_placeholder_agent_globally(sanitized)
+            if placeholder:
+                # Claim the placeholder: update its details and mark as non-placeholder
+                await ensure_schema()
+                async with get_session() as session:
+                    result = await session.execute(
+                        select(Agent).where(
+                            Agent.id == placeholder.id,
+                            cast(Any, Agent.is_placeholder).is_(True),
+                            cast(Any, Agent.is_active).is_(True),
+                        )
+                    )
+                    agent = result.scalars().first()
+                    if agent:
+                        # Race condition check: verify it's still a placeholder
+                        if not getattr(agent, "is_placeholder", False):
+                            # Already claimed by another process, fall through to regular logic
+                            pass
+                        else:
+                            # Update placeholder to claim it
+                            agent.project_id = project.id
+                            agent.program = program
+                            agent.model = model
+                            agent.task_description = task_description
+                            agent.last_active_ts = datetime.now(timezone.utc)
+                            agent.is_placeholder = False
+                            # Reactivate if previously retired
+                            if not getattr(agent, "is_active", True):
+                                agent.is_active = True
+                                agent.deleted_ts = None
+                            session.add(agent)
+                            await session.commit()
+                            await session.refresh(agent)
+                            # Write updated profile to archive
+                            archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+                            async with _archive_write_lock(archive):
+                                await write_agent_profile(archive, _agent_to_dict(agent))
+                            return agent
+                # If we couldn't find the agent, fall through to regular logic
             # Check if the user-provided name is globally unique
             if await _agent_name_exists_globally(sanitized):
                 # Name exists globally; check if it's in THIS project
@@ -1361,15 +1419,16 @@ async def _get_or_create_agent(
                     )
                     # Verify retirement cleared the conflict; otherwise provide a clear path
                     if await _agent_name_exists_globally(sanitized):
-                        if mode == "strict":
-                            raise ToolExecutionError(
-                                "NAME_TAKEN",
-                                f"Agent name '{sanitized}' is still in use after attempting retirement.",
-                                recoverable=True,
-                                data={"name": sanitized, "conflict": "residual_or_race"},
-                            )
-                        # Fallback to auto-generate a unique name
-                        desired_name = await _generate_unique_agent_name(project, settings, None)
+                        raise ToolExecutionError(
+                            "NAME_TAKEN",
+                            f"Agent name '{sanitized}' is still in use after attempting retirement.",
+                            recoverable=True,
+                            data={
+                                "name": sanitized,
+                                "conflict": "residual_or_race",
+                                "hint": "Retry with force_reclaim=True if this persists",
+                            },
+                        )
                     else:
                         desired_name = sanitized
             else:
@@ -1390,6 +1449,8 @@ async def _get_or_create_agent(
             agent.model = model
             agent.task_description = task_description
             agent.last_active_ts = datetime.now(timezone.utc)
+            # Mark as officially registered (not a placeholder)
+            agent.is_placeholder = False
             # Reactivate if previously retired
             if not getattr(agent, "is_active", True):
                 agent.is_active = True
@@ -1448,6 +1509,85 @@ async def _get_or_create_agent(
                         "hint": "Retry the operation; if it persists, call register_agent with force_reclaim=True",
                     },
                 ) from exc
+    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+    async with _archive_write_lock(archive):
+        await write_agent_profile(archive, _agent_to_dict(agent))
+    return agent
+
+
+async def _create_placeholder_agent(
+    project: Project,
+    name: str,
+    sender_program: str,
+    sender_model: str,
+    settings: Settings,
+) -> Agent:
+    """Create a placeholder agent to receive messages before official registration.
+
+    Placeholder agents:
+    - Have is_placeholder=True
+    - Inherit program/model from the sender (as a reasonable default)
+    - Can receive messages just like regular agents
+    - Can be "claimed" by a later register_agent call, which sets is_placeholder=False
+
+    This enables the pattern: send messages to an agent that doesn't exist yet,
+    and when they register later, they can read their pending messages.
+    """
+    if project.id is None:
+        raise ValueError("Project must have an id before creating placeholder agents.")
+
+    sanitized = sanitize_agent_name(name)
+    if not sanitized:
+        raise ValueError(f"Invalid agent name for placeholder: {name}")
+
+    await ensure_schema()
+    async with get_session() as session:
+        # Check if agent already exists (shouldn't happen, but be safe)
+        result = await session.execute(
+            select(Agent).where(
+                func.lower(Agent.name) == sanitized.lower(),
+                cast(Any, Agent.is_active).is_(True),
+            )
+        )
+        existing = result.scalars().first()
+        if existing:
+            if not getattr(existing, "is_placeholder", False):
+                raise ValueError(f"Agent '{sanitized}' already exists and is not a placeholder")
+            return existing  # Placeholder already exists
+
+        agent = Agent(
+            project_id=project.id,
+            name=sanitized,
+            program=sender_program,
+            model=sender_model,
+            task_description="(pending registration)",
+            contact_policy="auto",
+            is_placeholder=True,
+        )
+        session.add(agent)
+        try:
+            await session.commit()
+            await session.refresh(agent)
+        except IntegrityError as exc:
+            # Race condition: name was taken between check and commit
+            await session.rollback()
+            # Try to fetch the existing agent
+            result = await session.execute(
+                select(Agent).where(
+                    func.lower(Agent.name) == sanitized.lower(),
+                    cast(Any, Agent.is_active).is_(True),
+                )
+            )
+            existing = result.scalars().first()
+            if existing:
+                if not getattr(existing, "is_placeholder", False):
+                    raise ValueError(
+                        f"Agent '{sanitized}' was created as non-placeholder during race condition"
+                    ) from exc
+                return existing
+            raise ValueError(f"Failed to create placeholder agent: {sanitized}") from exc
+
+    # Write placeholder profile to archive
     archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
     async with _archive_write_lock(archive):
         await write_agent_profile(archive, _agent_to_dict(agent))
@@ -1962,80 +2102,6 @@ async def _expire_stale_file_reservations(project_id: int) -> list[FileReservati
     return stale_statuses
 
 
-def _glob_patterns_overlap(pattern_a: str, pattern_b: str) -> bool:
-    """Check if two glob patterns could match overlapping files.
-
-    Handles ** (recursive directory matching) properly using pathlib. The
-    determination is intentionally conservative: shared prefixes combined with
-    trailing wildcards are treated as potentially overlapping. The conservatism
-    is intentional for reservation checks: when in doubt, treat patterns as
-    overlapping rather than risk a false negative.
-    """
-    from pathlib import PurePath
-
-    # Normalize: remove leading ./
-    def _norm(s: str) -> str:
-        while s.startswith("./"):
-            s = s[2:]
-        return s
-
-    a = _norm(pattern_a)
-    b = _norm(pattern_b)
-
-    # Exact match
-    if a == b:
-        return True
-
-    # Use pathlib.match for ** support - check both directions
-    # PurePath.match treats the argument as a pattern
-    try:
-        # If a is a concrete path and b is a pattern
-        if ("**" in b or "*" in b) and PurePath(a).match(b):
-            return True
-        # If b is a concrete path and a is a pattern
-        if ("**" in a or "*" in a) and PurePath(b).match(a):
-            return True
-    except Exception:
-        # Suppress exceptions from PurePath.match (e.g., invalid patterns or paths) and
-        # fall back to fnmatch handling below.
-        pass
-
-    # Fallback to fnmatch for simple patterns
-    if fnmatch.fnmatchcase(a, b) or fnmatch.fnmatchcase(b, a):
-        return True
-
-    # Check if patterns share a common prefix that could overlap
-    # e.g., "src/backend/**/*.py" and "src/backend/auth.py"
-    # Split into directory parts and check overlap
-    a_parts = a.split("/")
-    b_parts = b.split("/")
-
-    # Find the first differing part
-    min_len = min(len(a_parts), len(b_parts))
-    for i in range(min_len):
-        ap, bp = a_parts[i], b_parts[i]
-        # If either part is ** or contains wildcards, they could overlap
-        if ap == "**" or bp == "**":
-            return True
-        if "*" in ap or "*" in bp:
-            if fnmatch.fnmatchcase(ap, bp) or fnmatch.fnmatchcase(bp, ap):
-                continue
-            break
-        if ap != bp:
-            break
-    else:
-        # All compared parts matched; allow overlap only if the shorter pattern ends
-        # with a wildcard (otherwise a strict directory prefix does not overlap).
-        if len(a_parts) == len(b_parts):
-            return True
-
-        shorter = a_parts if len(a_parts) < len(b_parts) else b_parts
-        last_part = shorter[-1]
-        return last_part == "**" or "*" in last_part
-
-    return False
-
-
 def _file_reservations_conflict(
     existing: FileReservation, candidate_path: str, candidate_exclusive: bool, candidate_agent: Agent
 ) -> bool:
@@ -2045,8 +2111,27 @@ def _file_reservations_conflict(
         return False
     if not existing.exclusive and not candidate_exclusive:
         return False
+    normalized_existing = existing.path_pattern
+    # Allow **/ patterns to match files at the immediate directory level too
+    fallback_existing = normalized_existing.replace("**/", "")
 
-    return _glob_patterns_overlap(existing.path_pattern, candidate_path)
+    # Treat simple directory patterns like "src/*" as inclusive of files under that directory
+    # when comparing against concrete file paths like "src/app.py".
+    def _expand_dir_star(p: str) -> str:
+        if p.endswith("/*"):
+            return p[:-1] + "*"  # "src/*" -> "src/**"-like breadth for fnmatchcase approximation
+        return p
+
+    a = _expand_dir_star(candidate_path)
+    b = _expand_dir_star(normalized_existing)
+    b_fallback = _expand_dir_star(fallback_existing)
+    return (
+        fnmatch.fnmatchcase(a, b)
+        or fnmatch.fnmatchcase(b, a)
+        or fnmatch.fnmatchcase(a, b_fallback)
+        or fnmatch.fnmatchcase(b_fallback, a)
+        or a == b
+    )
 
 
 def _patterns_overlap(a: str, b: str) -> bool:
@@ -3157,31 +3242,9 @@ def build_mcp_server() -> FastMCP:
 
         try:
             if hasattr(tool_func, "run"):
-                result = await tool_func.run(arguments or {})
-            else:
-                result = await tool_func(ctx, **(arguments or {}))
-
-            # If result is a ToolResult object, extract the data
-            if isinstance(result, ToolResult):
-                payload: Any = getattr(result, "structured_content", None)
-                if payload is None and hasattr(result, "content"):
-                    payload = result.content
-                elif payload is None and hasattr(result, "data"):
-                    payload = result.data
-                if payload is None:
-                    # Try to get the first content item
-                    try:
-                        payload = next(iter(result)) if result else None
-                    except (TypeError, IndexError, StopIteration):
-                        payload = None
-                result = payload
-
-            # Avoid double-wrapping results already in the expected shape
-            if isinstance(result, dict) and set(result.keys()) == {"result"}:
-                return result
-
-            # Wrap result in dict format for consistent API
-            return {"result": result}
+                return await tool_func.run(arguments or {})
+            result = await tool_func(ctx, **(arguments or {}))
+            return result
         except TypeError as e:
             # Invalid arguments
             raise ValueError(f"Invalid arguments for {tool_name}: {e!s}") from e
@@ -3331,9 +3394,9 @@ def build_mcp_server() -> FastMCP:
         Parameters
         ----------
         project_key : str
-            Any string identifier for your project. The project will be automatically created
-            if it doesn't exist. Common patterns include absolute paths, repo names, or custom
-            project identifiers (e.g., "/data/projects/backend", "my-repo", "project-alpha").
+            Any string identifier for your project. Informational only for agent lookup; agents are
+            global. The project will be automatically created if it doesn't exist. Common patterns
+            include absolute paths, repo names, or custom project identifiers.
         program : str
             The agent program (e.g., "codex-cli", "claude-code").
         model : str
@@ -3747,9 +3810,9 @@ def build_mcp_server() -> FastMCP:
         Parameters
         ----------
         project_key : str
-            Project identifier (same used with `ensure_project`/`register_agent`).
+            Project identifier (informational only for agent lookup; agents are global).
         sender_name : str
-            Must match an agent registered in the project.
+            Must match an existing agent name (agents are global).
         to : list[str]
             Primary recipients (agent names). At least one of to/cc/bcc must be non-empty.
         subject : str
@@ -3930,16 +3993,10 @@ def build_mcp_server() -> FastMCP:
                 canonical = sanitized or (trimmed if trimmed else None)
                 return trimmed or value, keys, canonical
 
-            unknown: set[str] = set()
+            unknown: dict[str, set[str]] = {}
 
             async def _route(name_list: list[str], kind: str) -> None:
-                """Route recipients, supporting cross-project addressing.
-
-                Supported formats:
-                - Bare name: "AgentName"
-                - project:id#name: "project:/path/to/proj#AgentName" or "project:slug#AgentName"
-                - name@project: "AgentName@/path/to/proj" or "AgentName@slug"
-                """
+                """Route recipients, supporting cross-project addressing."""
 
                 async def _resolve_cross_project(project_identifier: str, target: str) -> str | None:
                     try:
@@ -3963,8 +4020,12 @@ def build_mcp_server() -> FastMCP:
 
                 for raw in name_list:
                     display_value, key_candidates, canonical = _normalize(raw)
+                    unknown_key = canonical or (
+                        display_value.strip() if display_value else (raw.strip() if raw else raw)
+                    )
                     if not key_candidates or not canonical:
-                        unknown.add(raw.strip() if raw else raw)
+                        if unknown_key is not None:
+                            unknown.setdefault(unknown_key, set()).add(kind)
                         continue
 
                     target_project: str | None = None
@@ -3993,7 +4054,7 @@ def build_mcp_server() -> FastMCP:
                                 key_candidates.add(sanitized.lower())
 
                     # Allow self-send
-                    if not target_project and sender_candidate_keys.intersection(key_candidates):
+                    if sender_candidate_keys.intersection(key_candidates):
                         if kind == "to":
                             all_to.append(sender.name)
                         elif kind == "cc":
@@ -4020,41 +4081,48 @@ def build_mcp_server() -> FastMCP:
                         else:
                             all_bcc.append(resolved)
                     else:
-                        unknown.add(display_value)
+                        if unknown_key is not None:
+                            unknown.setdefault(unknown_key, set()).add(kind)
 
             await _route(to, "to")
             await _route(cc or [], "cc")
             await _route(bcc or [], "bcc")
 
             if unknown:
-
-                def _is_simple_name(value: str) -> bool:
-                    # Only bare agent names (no cross-project syntax) are eligible for auto-registration
-                    return not (value.startswith("project:") or "@" in value)
-
                 # Auto-register missing recipients if enabled
                 if getattr(settings_local, "messaging_auto_register_recipients", True):
-                    # Best effort: try to register any unknown recipients with sane defaults
-                    newly_registered: set[str] = set()
-                    for missing in list(unknown):
-                        if not _is_simple_name(missing):
-                            continue
+                    # Best effort: create placeholder agents for unknown recipients.
+                    # Placeholder agents can receive messages and be "claimed" later
+                    # when the real agent registers with that name.
+                    newly_registered: list[tuple[str, set[str]]] = []
+                    for missing in list(unknown.keys()):
                         try:
-                            _ = await _get_or_create_agent(
+                            placeholder = await _create_placeholder_agent(
                                 project,
                                 missing,
                                 sender.program,
                                 sender.model,
-                                sender.task_description,
                                 settings_local,
                             )
-                            newly_registered.add(missing)
+                            newly_registered.append((missing, unknown.get(missing, set())))
+                            unknown.pop(missing, None)
+                            # Add the newly created placeholder to global_lookup so _route can find it
+                            canonical_name = placeholder.name
+                            sanitized_canonical = sanitize_agent_name(canonical_name) or canonical_name
+                            for key in {canonical_name.lower(), sanitized_canonical.lower()}:
+                                global_lookup.setdefault(key, canonical_name)
                         except Exception:
                             pass
-                    unknown.difference_update(newly_registered)
                     # Re-run routing for any that were registered
                     if newly_registered:
-                        await _route(list(newly_registered), "to")
+                        for name, kinds in newly_registered:
+                            route_kinds = kinds or {"to"}
+                            if "to" in route_kinds:
+                                await _route([name], "to")
+                            if "cc" in route_kinds:
+                                await _route([name], "cc")
+                            if "bcc" in route_kinds:
+                                await _route([name], "bcc")
 
                 # If still have unknown recipients, raise error
                 if unknown:
@@ -5099,9 +5167,8 @@ def build_mcp_server() -> FastMCP:
 
         Returns
         -------
-        dict
-            { "result": list[dict] } where each entry includes id, subject, body_md,
-            importance, ack_required, created_ts, thread_id, and from.
+        list[dict]
+            Each entry: { id, subject, importance, ack_required, created_ts, thread_id, from }
 
         Example
         -------
@@ -5183,8 +5250,7 @@ def build_mcp_server() -> FastMCP:
             }
             for row in rows
         ]
-        # Return list wrapped for extended tool compatibility
-        return {"result": items}
+        return ToolResult(structured_content={"result": items})
 
     @mcp.tool(name="acquire_build_slot")
     @_instrument_tool(
