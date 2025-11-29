@@ -3882,7 +3882,9 @@ def build_mcp_server() -> FastMCP:
                 for raw in name_list:
                     # Strip whitespace and normalize
                     display_value, key_candidates, canonical = _normalize(raw)
-                    unknown_key = canonical or (display_value.strip() if display_value else (raw.strip() if raw else raw))
+                    unknown_key = canonical or (
+                        display_value.strip() if display_value else (raw.strip() if raw else raw)
+                    )
                     if not key_candidates or not canonical:
                         if unknown_key is not None:
                             unknown.setdefault(unknown_key, set()).add(kind)
