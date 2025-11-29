@@ -20,8 +20,8 @@ from datetime import datetime, timedelta, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Annotated, Any, Iterable, List, Optional, Sequence, cast
-from zipfile import ZIP_DEFLATED, ZipFile
 
+import httpx
 import typer
 import uvicorn
 from rich.console import Console
@@ -120,7 +120,7 @@ def _iso(dt: Optional[datetime]) -> str:
 @products_app.command("ensure")
 def products_ensure(
     product_key: Annotated[Optional[str], typer.Argument(None, help="Product uid or name")],
-    name: Annotated[Optional[str], typer.Option("--name", "-n", help="Product display name")] = None,
+    name: Annotated[Optional[str], typer.Option(..., "--name", "-n", help="Product display name")] = None,
 ) -> None:
     """
     Ensure a product exists (creates if missing) and print its identifiers.
@@ -167,9 +167,15 @@ def products_ensure(
                 )
                 prod = existing.scalars().first()
                 if prod:
-                    return {"id": prod.id, "product_uid": prod.product_uid, "name": prod.name, "created_at": prod.created_at}
+                    return {
+                        "id": prod.id,
+                        "product_uid": prod.product_uid,
+                        "name": prod.name,
+                        "created_at": prod.created_at,
+                    }
                 import re as _re
                 import uuid as _uuid
+
                 uid_pattern = _re.compile(r"^[A-Fa-f0-9]{8,64}$")
                 if product_key and uid_pattern.fullmatch(product_key.strip()):
                     uid = product_key.strip().lower()
@@ -181,7 +187,13 @@ def products_ensure(
                 session.add(prod)
                 await session.commit()
                 await session.refresh(prod)
-                return {"id": prod.id, "product_uid": prod.product_uid, "name": prod.name, "created_at": prod.created_at}
+                return {
+                    "id": prod.id,
+                    "product_uid": prod.product_uid,
+                    "name": prod.name,
+                    "created_at": prod.created_at,
+                }
+
         resp_data = asyncio.run(_ensure_local())
     table = Table(title="Product", show_lines=False)
     table.add_column("Field")
@@ -207,6 +219,7 @@ def products_link(
     """
     Link a project into a product (idempotent).
     """
+
     async def _link() -> dict:
         await ensure_schema()
         prod = await _get_product_record(product_key.strip())
@@ -224,8 +237,11 @@ def products_link(
                 await session.commit()
                 await session.refresh(link)
         return {"product_uid": prod.product_uid, "product_name": prod.name, "project_slug": proj.slug}
+
     res = asyncio.run(_link())
-    console.print(f"[green]Linked[/] project '{res['project_slug']}' into product '{res['product_name']}' ({res['product_uid']}).")
+    console.print(
+        f"[green]Linked[/] project '{res['project_slug']}' into product '{res['product_name']}' ({res['product_uid']})."
+    )
 
 
 @products_app.command("status")
@@ -235,6 +251,7 @@ def products_status(
     """
     Show product metadata and linked projects.
     """
+
     async def _status() -> tuple[Product, list[Project]]:
         await ensure_schema()
         async with get_session() as session:
@@ -243,12 +260,13 @@ def products_status(
             if prod is None:
                 raise typer.BadParameter(f"Product '{product_key}' not found.")
             rows = await session.execute(
-                select(Project).join(ProductProjectLink, ProductProjectLink.project_id == Project.id).where(
-                    ProductProjectLink.product_id == prod.id
-                )
+                select(Project)
+                .join(ProductProjectLink, ProductProjectLink.project_id == Project.id)
+                .where(ProductProjectLink.product_id == prod.id)
             )
             projects = list(rows.scalars().all())
             return prod, projects
+
     prod, projects = asyncio.run(_status())
     table = Table(title=f"Product: {prod.name}", show_lines=False)
     table.add_column("Field")
@@ -271,11 +289,20 @@ def products_status(
 def products_search(
     product_key: Annotated[str, typer.Argument(..., help="Product uid or name")],
     query: Annotated[str, typer.Argument(..., help="FTS query")],
-    limit: Annotated[int, typer.Option("--limit", "-l", help="Max results",)] = 20,
+    limit: Annotated[
+        int,
+        typer.Option(
+            20,
+            "--limit",
+            "-l",
+            help="Max results",
+        ),
+    ] = 20,
 ) -> None:
     """
     Full-text search over messages for all projects linked to a product.
     """
+
     async def _run() -> list[dict]:
         await ensure_schema()
         async with get_session() as session:
@@ -305,6 +332,7 @@ def products_search(
                 {"proj_ids": proj_ids, "query": query, "limit": limit},
             )
             return [dict(row) for row in result.mappings().all()]
+
     rows = asyncio.run(_run())
     if not rows:
         console.print("[yellow]No results.[/]")
@@ -316,7 +344,13 @@ def products_search(
     t.add_column("from")
     t.add_column("created_ts")
     for r in rows:
-        t.add_row(str(r["project_id"]), str(r["id"]), r["subject"], r["sender_name"], r["created_ts"].isoformat() if hasattr(r["created_ts"], "isoformat") else str(r["created_ts"]))
+        t.add_row(
+            str(r["project_id"]),
+            str(r["id"]),
+            r["subject"],
+            r["sender_name"],
+            r["created_ts"].isoformat() if hasattr(r["created_ts"], "isoformat") else str(r["created_ts"]),
+        )
     console.print(t)
 
 
@@ -324,10 +358,18 @@ def products_search(
 def products_inbox(
     product_key: Annotated[str, typer.Argument(..., help="Product uid or name")],
     agent: Annotated[str, typer.Argument(..., help="Agent name")],
-    limit: Annotated[int, typer.Option("--limit", "-l", help="Max messages",)] = 20,
-    urgent_only: Annotated[bool, typer.Option("--urgent-only/--all", help="Only high/urgent")] = False,
-    include_bodies: Annotated[bool, typer.Option("--include-bodies/--no-bodies", help="Include body_md")] = False,
-    since_ts: Annotated[Optional[str], typer.Option("--since-ts", help="ISO-8601 timestamp filter")] = None,
+    limit: Annotated[
+        int,
+        typer.Option(
+            20,
+            "--limit",
+            "-l",
+            help="Max messages",
+        ),
+    ] = 20,
+    urgent_only: Annotated[bool, typer.Option(..., "--urgent-only/--all", help="Only high/urgent")] = False,
+    include_bodies: Annotated[bool, typer.Option(..., "--include-bodies/--no-bodies", help="Include body_md")] = False,
+    since_ts: Annotated[Optional[str], typer.Option(None, "--since-ts", help="ISO-8601 timestamp filter")] = None,
 ) -> None:
     """
     Fetch recent inbox messages for an agent across all projects in a product.
@@ -369,21 +411,34 @@ def products_inbox(
         async def _fallback() -> list[dict]:
             await ensure_schema()
             async with get_session() as session:
-                prod = (await session.execute(select(Product).where((Product.product_uid == product_key) | (Product.name == product_key)))).scalars().first()
+                prod = (
+                    (
+                        await session.execute(
+                            select(Product).where((Product.product_uid == product_key) | (Product.name == product_key))
+                        )
+                    )
+                    .scalars()
+                    .first()
+                )
                 if prod is None:
                     return []
                 proj_rows = await session.execute(
-                    select(Project).join(ProductProjectLink, ProductProjectLink.project_id == Project.id).where(
-                        ProductProjectLink.product_id == prod.id
-                    )
+                    select(Project)
+                    .join(ProductProjectLink, ProductProjectLink.project_id == Project.id)
+                    .where(ProductProjectLink.product_id == prod.id)
                 )
                 projects = list(proj_rows.scalars().all())
                 items: list[dict] = []
                 for proj in projects:
-                    agent_row = (await session.execute(select(Agent).where(Agent.project_id == proj.id, Agent.name == agent))).scalars().first()
+                    agent_row = (
+                        (await session.execute(select(Agent).where(Agent.project_id == proj.id, Agent.name == agent)))
+                        .scalars()
+                        .first()
+                    )
                     if not agent_row:
                         continue
                     from sqlalchemy.orm import aliased as _aliased  # local to avoid top-level churn
+
                     sender_alias = _aliased(Agent)
                     stmt = (
                         select(Message, MessageRecipient.kind, sender_alias.name)
@@ -400,6 +455,7 @@ def products_inbox(
                             s = since_ts.strip()
                             s = s[:-1] + "+00:00" if s.endswith("Z") else s
                             from datetime import datetime as _dt
+
                             since_dt = _dt.fromisoformat(s)
                             stmt = stmt.where(Message.created_ts > since_dt)
                         except Exception:
@@ -422,6 +478,7 @@ def products_inbox(
                 # Sort desc by created_ts
                 items.sort(key=lambda r: r.get("created_ts") or 0, reverse=True)
                 return items[: max(0, int(limit))]
+
         rows = asyncio.run(_fallback())
     if not rows:
         console.print("[yellow]No messages found.[/]")
@@ -437,7 +494,14 @@ def products_inbox(
         created = r.get("created_ts")
         if hasattr(created, "isoformat"):
             created = created.isoformat()
-        t.add_row(str(r.get("project_id", "")), str(r.get("id", "")), str(r.get("subject", "")), str(r.get("from", "")), str(r.get("importance", "")), str(created or ""))
+        t.add_row(
+            str(r.get("project_id", "")),
+            str(r.get("id", "")),
+            str(r.get("subject", "")),
+            str(r.get("from", "")),
+            str(r.get("importance", "")),
+            str(created or ""),
+        )
     console.print(t)
 
 
@@ -445,8 +509,16 @@ def products_inbox(
 def products_summarize_thread(
     product_key: Annotated[str, typer.Argument(..., help="Product uid or name")],
     thread_id: Annotated[str, typer.Argument(..., help="Thread id or key")],
-    per_thread_limit: Annotated[int, typer.Option("--per-thread-limit", "-n", help="Max messages per thread",)] = 50,
-    no_llm: Annotated[bool, typer.Option("--no-llm", help="Disable LLM refinement")] = False,
+    per_thread_limit: Annotated[
+        int,
+        typer.Option(
+            50,
+            "--per-thread-limit",
+            "-n",
+            help="Max messages per thread",
+        ),
+    ] = 50,
+    no_llm: Annotated[bool, typer.Option(..., "--no-llm", help="Disable LLM refinement")] = False,
 ) -> None:
     """
     Summarize a thread across all projects in a product. Prefers server tool; minimal fallback if server is unavailable.
@@ -481,7 +553,9 @@ def products_summarize_thread(
     except Exception:
         result = {}
     if not result:
-        console.print("[yellow]Server unavailable; summarization requires server tool. Try again when server is running.[/]")
+        console.print(
+            "[yellow]Server unavailable; summarization requires server tool. Try again when server is running.[/]"
+        )
         raise typer.Exit(code=2)
     # Pretty print
     summary = result.get("summary") or {}
@@ -513,7 +587,9 @@ def products_summarize_thread(
         ex.add_column("from")
         ex.add_column("created_ts")
         for e in examples:
-            ex.add_row(str(e.get("id", "")), str(e.get("subject", "")), str(e.get("from", "")), str(e.get("created_ts", "")))
+            ex.add_row(
+                str(e.get("id", "")), str(e.get("subject", "")), str(e.get("from", "")), str(e.get("created_ts", ""))
+            )
         console.print(ex)
 
 
@@ -584,21 +660,23 @@ def typecheck() -> None:
 
 @share_app.command("export")
 def share_export(
-    output: Annotated[str, typer.Option("--output", "-o", help="Directory where the static bundle should be written.")],
+    output: Annotated[str, typer.Option(..., "--output", "-o", help="Directory where the static bundle should be written.")],
     interactive: Annotated[
         bool,
         typer.Option(
+            ...,
             "--interactive",
             "-i",
             help="Launch an interactive wizard (future enhancement; currently prints guidance).",
         ),
     ] = False,
     projects: Annotated[
-        list[str] | None, typer.Option("--project", "-p", help="Limit export to specific project slugs or human keys.")
+        list[str] | None, typer.Option(None, "--project", "-p", help="Limit export to specific project slugs or human keys.")
     ] = None,
     inline_threshold: Annotated[
         int,
         typer.Option(
+            INLINE_ATTACHMENT_THRESHOLD,
             "--inline-threshold",
             help="Inline attachments ≤ this many bytes as data URIs.",
             min=0,
@@ -608,6 +686,7 @@ def share_export(
     detach_threshold: Annotated[
         int,
         typer.Option(
+            DETACH_ATTACHMENT_THRESHOLD,
             "--detach-threshold",
             help="Mark attachments ≥ this many bytes as external (not bundled).",
             min=0,
@@ -617,6 +696,7 @@ def share_export(
     scrub_preset: Annotated[
         str,
         typer.Option(
+            "standard",
             "--scrub-preset",
             help="Redaction preset to apply (e.g., standard, strict).",
             case_sensitive=False,
@@ -626,6 +706,7 @@ def share_export(
     chunk_threshold: Annotated[
         int,
         typer.Option(
+            DEFAULT_CHUNK_THRESHOLD,
             "--chunk-threshold",
             help="Chunk the SQLite database when it exceeds this size (bytes).",
             min=0,
@@ -635,6 +716,7 @@ def share_export(
     chunk_size: Annotated[
         int,
         typer.Option(
+            DEFAULT_CHUNK_SIZE,
             "--chunk-size",
             help="Chunk size in bytes when chunking is enabled.",
             min=1024,
@@ -644,6 +726,7 @@ def share_export(
     dry_run: Annotated[
         bool,
         typer.Option(
+            ...,
             "--dry-run/--no-dry-run",
             help="Generate a security summary without writing bundle artifacts.",
             show_default=True,
@@ -652,20 +735,22 @@ def share_export(
     zip_bundle: Annotated[
         bool,
         typer.Option(
+            ...,
             "--zip/--no-zip",
             help="Package the exported directory into a ZIP archive (enabled by default).",
             show_default=True,
         ),
     ] = True,
     signing_key: Annotated[
-        Optional[Path], typer.Option("--signing-key", help="Path to Ed25519 signing key (32-byte seed).")
+        Optional[Path], typer.Option(None, "--signing-key", help="Path to Ed25519 signing key (32-byte seed).")
     ] = None,
     signing_public_out: Annotated[
-        Optional[Path], typer.Option("--signing-public-out", help="Write public key to this file after signing.")
+        Optional[Path], typer.Option(None, "--signing-public-out", help="Write public key to this file after signing.")
     ] = None,
     age_recipients: Annotated[
         Optional[list[str]],
         typer.Option(
+            None,
             "--age-recipient",
             help="Encrypt the ZIP archive with age using the provided recipient(s). May be passed multiple times.",
         ),
@@ -1098,6 +1183,7 @@ def share_update(
     projects: Annotated[
         list[str] | None,
         typer.Option(
+            None,
             "--project",
             "-p",
             help="Override project scope for this update (slugs or human keys). May be provided multiple times.",
@@ -1105,23 +1191,24 @@ def share_update(
     ] = None,
     inline_threshold_override: Annotated[
         Optional[int],
-        typer.Option("--inline-threshold", help="Override inline attachment threshold (bytes).", min=0),
+        typer.Option(None, "--inline-threshold", help="Override inline attachment threshold (bytes).", min=0),
     ] = None,
     detach_threshold_override: Annotated[
         Optional[int],
-        typer.Option("--detach-threshold", help="Override detach attachment threshold (bytes).", min=0),
+        typer.Option(None, "--detach-threshold", help="Override detach attachment threshold (bytes).", min=0),
     ] = None,
     chunk_threshold_override: Annotated[
         Optional[int],
-        typer.Option("--chunk-threshold", help="Override chunking threshold (bytes).", min=0),
+        typer.Option(None, "--chunk-threshold", help="Override chunking threshold (bytes).", min=0),
     ] = None,
     chunk_size_override: Annotated[
         Optional[int],
-        typer.Option("--chunk-size", help="Override chunk size when chunking is enabled.", min=1024),
+        typer.Option(None, "--chunk-size", help="Override chunk size when chunking is enabled.", min=1024),
     ] = None,
     scrub_preset_override: Annotated[
         Optional[str],
         typer.Option(
+            None,
             "--scrub-preset",
             help="Override scrub preset (standard, strict, ...).",
             case_sensitive=False,
@@ -1129,17 +1216,18 @@ def share_update(
     ] = None,
     zip_bundle: Annotated[
         bool,
-        typer.Option("--zip/--no-zip", help="Package the updated bundle into a ZIP archive.", show_default=True),
+        typer.Option(..., "--zip/--no-zip", help="Package the updated bundle into a ZIP archive.", show_default=True),
     ] = False,
     signing_key: Annotated[
-        Optional[Path], typer.Option("--signing-key", help="Path to Ed25519 signing key (32-byte seed).")
+        Optional[Path], typer.Option(None, "--signing-key", help="Path to Ed25519 signing key (32-byte seed).")
     ] = None,
     signing_public_out: Annotated[
-        Optional[Path], typer.Option("--signing-public-out", help="Write public key to this file after signing.")
+        Optional[Path], typer.Option(None, "--signing-public-out", help="Write public key to this file after signing.")
     ] = None,
     age_recipients: Annotated[
         Optional[list[str]],
         typer.Option(
+            None,
             "--age-recipient",
             help="Encrypt the ZIP archive with age using the provided recipient(s). May be passed multiple times.",
         ),
@@ -1422,6 +1510,7 @@ def share_verify(
     public_key: Annotated[
         Optional[str],
         typer.Option(
+            ...,
             "--public-key",
             help="Ed25519 public key (base64) to verify signature. If omitted, uses key from manifest.sig.json.",
         ),
@@ -1465,6 +1554,7 @@ def share_decrypt(
     output: Annotated[
         Optional[str],
         typer.Option(
+            ...,
             "--output",
             "-o",
             help="Path where decrypted file should be written. Defaults to encrypted filename with .age removed.",
@@ -1473,6 +1563,7 @@ def share_decrypt(
     identity: Annotated[
         Optional[Path],
         typer.Option(
+            ...,
             "--identity",
             "-i",
             help="Path to age identity file (private key). Mutually exclusive with --passphrase.",
@@ -1481,6 +1572,7 @@ def share_decrypt(
     passphrase: Annotated[
         bool,
         typer.Option(
+            False,
             "--passphrase",
             "-p",
             help="Prompt for passphrase interactively. Mutually exclusive with --identity.",
@@ -1871,6 +1963,7 @@ def guard_install(
     prepush: Annotated[
         bool,
         typer.Option(
+            ...,
             "--prepush/--no-prepush",
             help="Also install a pre-push guard.",
         ),
@@ -1970,12 +2063,13 @@ def amctl_env(
     project_path: Annotated[
         Path,
         typer.Option(
+            ".",
             "--path",
             "-p",
             help="Path to repo/worktree",
         ),
     ] = Path(),
-    agent: Annotated[Optional[str], typer.Option("--agent", "-a", help="Agent name (defaults to $AGENT_NAME)")] = None,
+    agent: Annotated[Optional[str], typer.Option(..., "--agent", "-a", help="Agent name (defaults to $AGENT_NAME)")] = None,
 ) -> None:
     """
     Print environment variables useful for build wrappers (slots, caches, artifacts).
@@ -2020,12 +2114,13 @@ def am_run(
     project_path: Annotated[
         Path,
         typer.Option(
+            ".",
             "--path",
             "-p",
             help="Path to repo/worktree",
         ),
     ] = Path(),
-    agent: Annotated[Optional[str], typer.Option("--agent", "-a", help="Agent name (defaults to $AGENT_NAME)")] = None,
+    agent: Annotated[Optional[str], typer.Option(..., "--agent", "-a", help="Agent name (defaults to $AGENT_NAME)")] = None,
 ) -> None:
     """
     Build wrapper that prepares environment variables and manages a build slot:
@@ -2053,12 +2148,10 @@ def am_run(
     settings = get_settings()
     guard_mode = (os.environ.get("AGENT_MAIL_GUARD_MODE", "block") or "block").strip().lower()
     worktrees_enabled = bool(settings.worktrees_enabled)
-    server_url = f"http://{settings.http.host}:{settings.http.port}{settings.http.path}"
-    bearer = settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
 
     def _safe_component(value: str) -> str:
         s = value.strip()
-        for ch in ("/", "\\\\", ":", "*", "?", "\"", "<", ">", "|", " "):
+        for ch in ("/", "\\\\", ":", "*", "?", '"', "<", ">", "|", " "):
             s = s.replace(ch, "_")
         return s or "unknown"
 
@@ -2307,7 +2400,7 @@ def guard_status(
 def projects_adopt(
     source: Annotated[str, typer.Argument(..., help="Old project slug or human key")],
     target: Annotated[str, typer.Argument(..., help="New project slug or project_uid (future)")],
-    dry_run: Annotated[bool, typer.Option("--dry-run/--apply", help="Show plan without applying changes.")] = True,
+    dry_run: Annotated[bool, typer.Option(..., "--dry-run/--apply", help="Show plan without applying changes.")] = True,
 ) -> None:
     """
     Plan consolidation of legacy per-worktree projects into a canonical project.
@@ -2386,7 +2479,10 @@ def projects_adopt(
         # Move Git artifacts
         settings = get_settings()
         # local import to minimize top-level churn and keep ordering stable
-        from .storage import AsyncFileLock as _AsyncFileLock, ensure_archive as _ensure_archive  # type: ignore
+        from .storage import (
+            AsyncFileLock as _AsyncFileLock,  # type: ignore
+            ensure_archive as _ensure_archive,
+        )
 
         src_archive = asyncio.run(_ensure_archive(settings, src.slug))
         dst_archive = asyncio.run(_ensure_archive(settings, dst.slug))
@@ -2832,7 +2928,7 @@ def list_acks(
 @config_app.command("set-port")
 def config_set_port(
     port: int = typer.Argument(..., help="HTTP server port number"),
-    env_file: Annotated[Optional[Path], typer.Option("--env-file", help="Path to .env file")] = None,
+    env_file: Annotated[Optional[Path], typer.Option(..., "--env-file", help="Path to .env file")] = None,
 ) -> None:
     """Set HTTP_PORT in .env file."""
     import re
@@ -3014,9 +3110,7 @@ def _iter_doc_files(base: Path, max_depth: int) -> Iterable[Path]:
     def _on_error(error: OSError) -> None:  # pragma: no cover - best effort logging
         console.print(f"[yellow]Warning:[/yellow] Skipping {error.filename}: {error.strerror}")
 
-    for dirpath, dirnames, filenames in os.walk(
-        origin, topdown=True, followlinks=False, onerror=_on_error
-    ):
+    for dirpath, dirnames, filenames in os.walk(origin, topdown=True, followlinks=False, onerror=_on_error):
         current_depth = len(Path(dirpath).parts) - base_parts
         if max_depth >= 0 and current_depth >= max_depth:
             dirnames[:] = []
@@ -3063,13 +3157,14 @@ def _append_snippet_to_doc(path: Path, snippet: str) -> None:
 @docs_app.command("insert-blurbs")
 def docs_insert_blurbs(
     scan_dir: Annotated[
-        Optional[List[Path]], typer.Option("--scan-dir", "-d", help="Directories to scan (repeatable).")
+        Optional[List[Path]], typer.Option(..., "--scan-dir", "-d", help="Directories to scan (repeatable).")
     ] = None,
-    yes: Annotated[bool, typer.Option("--yes", help="Automatically confirm insertion for each file.")] = False,
-    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show actions without modifying files.")] = False,
+    yes: Annotated[bool, typer.Option(..., "--yes", help="Automatically confirm insertion for each file.")] = False,
+    dry_run: Annotated[bool, typer.Option(..., "--dry-run", help="Show actions without modifying files.")] = False,
     max_depth: Annotated[
         int,
         typer.Option(
+            6,
             "--max-depth",
             min=1,
             help="Maximum directory depth to explore under each scan root (default: 6).",
@@ -3112,9 +3207,7 @@ def docs_insert_blurbs(
         if candidate.has_snippet:
             console.print(f"[dim]Skipping {candidate.path} (snippet already present).[/dim]")
             continue
-        prompt = (
-            f"Insert Agent Mail + Beads snippet into {candidate.path}?"
-        )
+        prompt = f"Insert Agent Mail + Beads snippet into {candidate.path}?"
         if not yes and not typer.confirm(prompt, default=True):
             skipped += 1
             console.print(f"[yellow]Skipped {candidate.path}[/yellow]")

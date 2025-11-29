@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import fnmatch
 import functools
+import hashlib
 import inspect
 import json
 import logging
@@ -24,7 +25,7 @@ from fastmcp import Context, FastMCP
 from fastmcp.tools.tool import ToolResult  # type: ignore
 from git import Repo
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
-from sqlalchemy import asc, delete, desc, func, or_, select, text, update
+from sqlalchemy import asc, bindparam, delete, desc, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, NoResultFound, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -34,7 +35,16 @@ from .config import Settings, get_settings
 from .db import ensure_schema, get_session, init_engine
 from .guard import install_guard as install_guard_script, uninstall_guard as uninstall_guard_script
 from .llm import complete_system_user
-from .models import Agent, FileReservation, Message, MessageRecipient, Project, ProjectSiblingSuggestion
+from .models import (
+    Agent,
+    FileReservation,
+    Message,
+    MessageRecipient,
+    Product,
+    ProductProjectLink,
+    Project,
+    ProjectSiblingSuggestion,
+)
 from .slots import (
     acquire_build_slot as acquire_slot_impl,
     release_build_slot as release_slot_impl,
@@ -68,6 +78,7 @@ CLUSTER_MESSAGING = "messaging"
 CLUSTER_SEARCH = "search"
 CLUSTER_FILE_RESERVATIONS = "file_reservations"
 CLUSTER_MACROS = "workflow_macros"
+CLUSTER_PRODUCT = "product"
 
 
 # Global inbox configuration
@@ -365,6 +376,107 @@ def _ensure_utc(dt: Optional[datetime]) -> Optional[datetime]:
     if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+def _resolve_project_identity(target_path: str) -> dict[str, Any]:
+    """Resolve project identity from a filesystem path."""
+    path = Path(target_path).expanduser().resolve()
+
+    # 1. Committed marker
+    marker = path / ".agent-mail-project-id"
+    if marker.exists():
+        try:
+            uid = marker.read_text(encoding="utf-8").strip()
+            if uid:
+                return {
+                    "project_uid": uid,
+                    "source": "committed_marker",
+                    "path": str(marker),
+                    "mode": "committed",
+                }
+        except Exception:
+            pass
+
+    # 2. Private marker (git-common-dir)
+    try:
+        repo = Repo(path, search_parent_directories=True)
+        if repo.git_dir:
+            git_dir = Path(repo.git_dir)
+            # Handle worktrees by checking git-common-dir if available
+            try:
+                common_dir = repo.git.rev_parse("--git-common-dir")
+                if common_dir:
+                    if Path(common_dir).is_absolute():
+                        git_dir = Path(common_dir)
+                    else:
+                        git_dir = (Path(repo.git_dir) / common_dir).resolve()
+            except Exception:
+                pass
+
+            private_marker = git_dir / "agent-mail" / "project-id"
+            if private_marker.exists():
+                uid = private_marker.read_text(encoding="utf-8").strip()
+                if uid:
+                    return {
+                        "project_uid": uid,
+                        "source": "private_marker",
+                        "path": str(private_marker),
+                        "mode": "private",
+                    }
+    except (InvalidGitRepositoryError, NoSuchPathError):
+        pass
+    except Exception:
+        pass
+
+    # 3. Fallback: Remote fingerprint
+    try:
+        repo = Repo(path, search_parent_directories=True)
+        remotes = {r.name: r.url for r in repo.remotes}
+        url = remotes.get("origin") or next(iter(remotes.values()), None)
+
+        if url:
+            # Normalize URL: remove protocol, user, .git suffix
+            normalized = url
+            if "://" in normalized:
+                normalized = normalized.split("://", 1)[1]
+            if "@" in normalized:
+                normalized = normalized.split("@", 1)[1]
+            if ":" in normalized and "/" not in normalized.split(":", 1)[0]:
+                # SCP style: host:path -> host/path
+                host, path_part = normalized.split(":", 1)
+                normalized = f"{host}/{path_part}"
+            if normalized.endswith(".git"):
+                normalized = normalized[:-4]
+
+            # Default branch resolve may fail; code falls back to 'main'
+            branch = "main"
+            try:
+                # Try to get the default branch if possible, or current branch
+                if not repo.head.is_detached:
+                    branch = repo.active_branch.name
+            except Exception:
+                pass
+
+            fingerprint = f"{normalized}@{branch}"
+            uid = hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()[:20]
+
+            return {
+                "project_uid": uid,
+                "source": "remote_fingerprint",
+                "fingerprint": fingerprint,
+                "mode": "fingerprint",
+            }
+    except Exception:
+        pass
+
+    # 4. Last resort: path hash
+    path_uid = hashlib.sha1(str(path).encode("utf-8")).hexdigest()[:20]
+    return {
+        "project_uid": path_uid,
+        "source": "path_hash",
+        "path": str(path),
+        "mode": "path",
+    }
 
 
 def _max_datetime(*timestamps: Optional[datetime]) -> Optional[datetime]:
@@ -5867,8 +5979,9 @@ def build_mcp_server() -> FastMCP:
             prod = await _get_product_by_key(session, key_raw)
             if prod is None:
                 # Create with strict uid pattern; otherwise generate uid and normalize name
-                import uuid as _uuid
                 import re as _re
+                import uuid as _uuid
+
                 uid_pattern = _re.compile(r"^[A-Fa-f0-9]{8,64}$")
                 if product_key and uid_pattern.fullmatch(product_key.strip()):
                     uid = product_key.strip().lower()
@@ -5926,6 +6039,7 @@ def build_mcp_server() -> FastMCP:
         """
         Inspect product and list linked projects.
         """
+
         # Safe runner that works even if an event loop is already running
         def _run_coro_sync(coro):
             try:
@@ -5933,20 +6047,24 @@ def build_mcp_server() -> FastMCP:
                 # Run in a separate thread to avoid nested loop issues
             except RuntimeError:
                 return asyncio.run(coro)
-            import threading  # type: ignore
             import queue  # type: ignore
+            import threading  # type: ignore
+
             q: "queue.Queue[tuple[bool, Any]]" = queue.Queue()
+
             def _runner():
                 try:
                     q.put((True, asyncio.run(coro)))
                 except Exception as e:
                     q.put((False, e))
+
             t = threading.Thread(target=_runner, daemon=True)
             t.start()
             ok, val = q.get()
             if ok:
                 return val
             raise val
+
         async def _load() -> dict[str, Any]:
             await ensure_schema()
             async with get_session() as session:
@@ -5954,9 +6072,9 @@ def build_mcp_server() -> FastMCP:
                 if prod is None:
                     raise ToolExecutionError("NOT_FOUND", f"Product '{key}' not found.", recoverable=True)
                 proj_rows = await session.execute(
-                    select(Project).join(ProductProjectLink, ProductProjectLink.project_id == Project.id).where(
-                        ProductProjectLink.product_id == cast(Any, prod.id)
-                    )
+                    select(Project)
+                    .join(ProductProjectLink, ProductProjectLink.project_id == Project.id)
+                    .where(ProductProjectLink.product_id == cast(Any, prod.id))
                 )
                 projects = [
                     {"id": p.id, "slug": p.slug, "human_key": p.human_key, "created_at": _iso(p.created_at)}
@@ -5969,6 +6087,7 @@ def build_mcp_server() -> FastMCP:
                     "created_at": _iso(prod.created_at),
                     "projects": projects,
                 }
+
         # Run async in a synchronous resource
         return _run_coro_sync(_load())
 
@@ -6026,6 +6145,7 @@ def build_mcp_server() -> FastMCP:
         ]
         try:
             from fastmcp.tools.tool import ToolResult  # type: ignore
+
             return ToolResult(structured_content={"result": items})
         except Exception:
             return items
@@ -6051,9 +6171,9 @@ def build_mcp_server() -> FastMCP:
             if prod is None:
                 raise ToolExecutionError("NOT_FOUND", f"Product '{product_key}' not found.", recoverable=True)
             proj_rows = await session.execute(
-                select(Project).join(ProductProjectLink, ProductProjectLink.project_id == Project.id).where(
-                    ProductProjectLink.product_id == cast(Any, prod.id)
-                )
+                select(Project)
+                .join(ProductProjectLink, ProductProjectLink.project_id == Project.id)
+                .where(ProductProjectLink.product_id == cast(Any, prod.id))
             )
             projects: list[Project] = list(proj_rows.scalars().all())
         # For each project, if agent exists, list inbox items
@@ -6067,10 +6187,12 @@ def build_mcp_server() -> FastMCP:
             for item in proj_items:
                 item["project_id"] = item.get("project_id") or project.id
                 messages.append(item)
+
         # Sort by created_ts desc and trim to limit
         def _dt_key(it: dict[str, Any]) -> float:
             ts = _parse_iso(str(it.get("created_ts") or ""))
             return ts.timestamp() if ts else 0.0
+
         messages.sort(key=_dt_key, reverse=True)
         return messages[: max(0, int(limit))]
 
@@ -6107,7 +6229,11 @@ def build_mcp_server() -> FastMCP:
             )
             proj_ids = [int(row[0]) for row in proj_ids_rows.fetchall()]
             if not proj_ids:
-                return {"thread_id": thread_id, "summary": {"participants": [], "key_points": [], "action_items": [], "total_messages": 0}, "examples": []}
+                return {
+                    "thread_id": thread_id,
+                    "summary": {"participants": [], "key_points": [], "action_items": [], "total_messages": 0},
+                    "examples": [],
+                }
             stmt = (
                 select(Message, sender_alias.name)
                 .join(sender_alias, Message.sender_id == sender_alias.id)
@@ -6164,6 +6290,7 @@ def build_mcp_server() -> FastMCP:
                 )
         await ctx.info(f"Summarized thread '{thread_id}' across product '{product_key}' with {len(rows)} messages")
         return {"thread_id": thread_id, "summary": summary, "examples": examples}
+
     @mcp.resource("resource://identity/{project}", mime_type="application/json")
     def identity_resource(project: str) -> dict[str, Any]:
         """
@@ -6174,6 +6301,7 @@ def build_mcp_server() -> FastMCP:
         target_path = str(Path(raw_path).expanduser().resolve())
 
         return _resolve_project_identity(target_path)
+
     @mcp.resource("resource://tooling/directory", mime_type="application/json")
     def tooling_directory_resource() -> dict[str, Any]:
         """

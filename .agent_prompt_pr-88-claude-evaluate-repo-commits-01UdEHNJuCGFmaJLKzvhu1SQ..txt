@@ -1,0 +1,19 @@
+Task: Update PR #88 (branch claude/evaluate-repo-commits-01UdEHNJuCGFmaJLKzvhu1SQ) in jleechanorg/mcp_mail, finish the pending changes, and push. Workdir: /private/tmp/mcp_mail/pr-88-claude-evaluate-repo-commits-01UdEHNJuCGFmaJLKzvhu1SQ.
+
+Process:
+1) Checkout PR: gh pr checkout 88; fetch GH status: gh pr view 88 --json statusCheckRollup,mergeable,mergeStateStatus.
+2) Inspect current diffs (git status/git diff) and continue rather than discarding.
+3) When editing, read the target file first. If apply_patch/replace fails twice ("old_string not found"), switch to manual editing (copy the block, edit, write back). Do NOT loop.
+4) Run a fast test pass: python -m pytest (or the project’s quickest targeted suite if full pytest is too heavy). If you must skip due to time/infra, note it explicitly.
+5) Keep changes minimal and PR-scoped; avoid generating new project scaffolding. Remove temp .mcp_mail/projects/test-instrumented-* artifacts before committing unless needed.
+6) Commit with prefix [gemini-automation-commit] and push to the PR branch.
+
+Rules:
+- No subagents. No endless retries. If blocked by missing context/creds, stop and log the reason.
+- Summarize what failed, what you changed, and what you tested in the completion report.
+
+Exit criteria:
+- Tests run or explicitly skipped with rationale.
+- Temp artifacts cleaned (unless required).
+- Changes committed and pushed to PR #88.
+- Completion report written to /tmp/orchestration_results/pr-88-claude-evaluate-repo-commits-01UdEHNJuCGFmaJLKzvhu1SQ._results.json
