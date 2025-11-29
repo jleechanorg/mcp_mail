@@ -1333,9 +1333,7 @@ async def _get_or_create_agent(
                 # Claim the placeholder: update its details and mark as non-placeholder
                 await ensure_schema()
                 async with get_session() as session:
-                    result = await session.execute(
-                        select(Agent).where(Agent.id == placeholder.id)
-                    )
+                    result = await session.execute(select(Agent).where(Agent.id == placeholder.id))
                     agent = result.scalars().first()
                     if agent:
                         # Update placeholder to claim it
