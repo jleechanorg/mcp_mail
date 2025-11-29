@@ -155,7 +155,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         path = request.url.path or ""
         if request.method == "OPTIONS":  # allow CORS preflight
             return await call_next(request)
-        if path.startswith("/health/") or path == "/slack/events":
+        if path.startswith("/health/") or path in {"/slack/events", "/slackbox/incoming"}:
             return await call_next(request)
         # Allow localhost without Authorization when enabled
         try:
@@ -329,13 +329,14 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS" or path.startswith("/health/"):
             return await call_next(request)
 
-        # Apply dedicated rate limiting for Slack webhooks
-        if path == "/slack/events":
+        # Apply dedicated rate limiting for Slack webhooks (and bypass auth) before further processing
+        if path in {"/slack/events", "/slackbox/incoming"}:
             slack_rpm = int(getattr(self.settings.http, "rate_limit_slack_per_minute", 120) or 120)
             slack_burst = int(getattr(self.settings.http, "rate_limit_slack_burst", 0) or 0)
             slack_burst = slack_burst if slack_burst > 0 else max(1, slack_rpm)
             client_ip = request.client.host if request.client else "unknown"
-            key = f"slack:{client_ip}"
+            route_label = "slackbox" if path == "/slackbox/incoming" else "slack"
+            key = f"{route_label}:{client_ip}"
             allowed = await self._consume_bucket(key, slack_rpm, slack_burst)
             if not allowed:
                 return JSONResponse({"detail": "Rate limit exceeded"}, status_code=status.HTTP_429_TOO_MANY_REQUESTS)

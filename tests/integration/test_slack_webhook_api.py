@@ -169,6 +169,7 @@ async def test_slack_webhook_records_thread_mapping_for_top_level(monkeypatch):
     dummy_client = DummySlackClient()
     import mcp_agent_mail.app as app_module
 
+    old_client = getattr(app_module, "_slack_client", None)
     app_module._slack_client = dummy_client
     try:
         transport = httpx.ASGITransport(app=app)
@@ -183,7 +184,7 @@ async def test_slack_webhook_records_thread_mapping_for_top_level(monkeypatch):
                 },
             )
     finally:
-        app_module._slack_client = None
+        app_module._slack_client = old_client
 
     assert resp.status_code == 200
     assert dummy_client.mappings == [
