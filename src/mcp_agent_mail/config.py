@@ -81,6 +81,7 @@ class StorageSettings:
     keep_original_images: bool
     project_key_storage_enabled: bool
     local_archive_enabled: bool
+    project_key_prompt_enabled: bool
 
 
 @dataclass(slots=True, frozen=True)
@@ -258,6 +259,9 @@ def get_settings() -> Settings:
             _decouple_config("STORAGE_PROJECT_KEY_ENABLED", default="false"), default=False
         ),
         local_archive_enabled=_bool(_decouple_config("STORAGE_LOCAL_ARCHIVE_ENABLED", default="true"), default=True),
+        project_key_prompt_enabled=_bool(
+            _decouple_config("STORAGE_PROJECT_KEY_PROMPT_ENABLED", default="true"), default=True
+        ),
     )
 
     cors_settings = CorsSettings(

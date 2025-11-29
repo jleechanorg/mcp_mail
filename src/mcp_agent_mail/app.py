@@ -221,11 +221,18 @@ def _instrument_tool(
             except ProjectStorageResolutionError as exc:
                 metrics["errors"] += 1
                 _record_tool_error(tool_name, exc)
+                error_type = "PROJECT_STORAGE_PROMPT" if getattr(exc, "prompt", None) else "PROJECT_STORAGE"
+                base_message = str(exc)
+                message = (
+                    f"{base_message} Choose a resolution option from the prompt."
+                    if getattr(exc, "prompt", None)
+                    else base_message
+                )
                 wrapped_exc = ToolExecutionError(
-                    "PROJECT_STORAGE",
-                    str(exc),
-                    recoverable=False,
-                    data={"tool": tool_name, "project": project_value},
+                    error_type,
+                    message,
+                    recoverable=bool(getattr(exc, "prompt", None)),
+                    data={"tool": tool_name, "project": project_value, "prompt": getattr(exc, "prompt", {})},
                 )
                 error = wrapped_exc
                 raise wrapped_exc from exc

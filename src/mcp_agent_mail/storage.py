@@ -51,6 +51,10 @@ _PROCESS_LOCK_OWNERS: dict[tuple[int, str], int] = {}
 class ProjectStorageResolutionError(RuntimeError):
     """Raised when project-key storage cannot resolve a repository root."""
 
+    def __init__(self, message: str, *, prompt: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.prompt = prompt or {}
+
 
 class AsyncFileLock:
     """Async-friendly wrapper around SoftFileLock with metadata tracking."""
@@ -306,33 +310,66 @@ def _resolve_repo_root(settings: Settings, project_key: str | None, slug: str) -
             )
 
         project_path = Path(project_key).expanduser().resolve()
+        def _build_prompt(reason: str) -> dict[str, Any]:
+            options: list[dict[str, Any]] = []
+            if settings.storage.local_archive_enabled:
+                options.append(
+                    {
+                        "id": "use_default_archive",
+                        "label": f"Store mail in default archive at {default_root}",
+                        "value": {"action": "use_default_archive", "storage_root": str(default_root)},
+                    }
+                )
+            options.append(
+                {
+                    "id": "retry_with_repo_root",
+                    "label": "Retry with a valid git repo path as project_key",
+                    "value": {"action": "retry_with_repo_root"},
+                }
+            )
+            options.append({"id": "abort", "label": "Cancel and fix project_key", "value": {"action": "abort"}})
+            return {
+                "kind": "project_storage_resolution",
+                "question": (
+                    f"Project-key storage is enabled but cannot use project_key '{project_path}'. {reason} "
+                    "Choose how to proceed."
+                ),
+                "context": {
+                    "project_key": str(project_path),
+                    "expected": "git repository root",
+                    "default_storage_root": str(default_root),
+                },
+                "options": options,
+            }
+
         if not project_path.exists():
+            prompt = _build_prompt("Path does not exist.")
             raise ProjectStorageResolutionError(
-                f"Project-key storage is enabled, but the project path {project_path} does not exist. "
-                "Provide a valid git repo path or disable STORAGE_PROJECT_KEY_ENABLED to keep using the "
-                f"default archive at {default_root}."
+                f"Project-key storage is enabled, but the project path {project_path} does not exist.",
+                prompt=prompt if settings.storage.project_key_prompt_enabled else None,
             )
         if not project_path.is_dir():
+            prompt = _build_prompt("Path is not a directory.")
             raise ProjectStorageResolutionError(
-                f"Project-key storage is enabled, but the project path {project_path} is not a directory. "
-                "Point project_key at a git repository root, or disable STORAGE_PROJECT_KEY_ENABLED to "
-                f"use the default archive at {default_root}."
+                f"Project-key storage is enabled, but the project path {project_path} is not a directory.",
+                prompt=prompt if settings.storage.project_key_prompt_enabled else None,
             )
 
         try:
             repo = Repo(str(project_path), search_parent_directories=True)
         except Exception as exc:  # pragma: no cover - git error path
+            prompt = _build_prompt("Not a git repository.")
             raise ProjectStorageResolutionError(
-                f"Project-key storage requires a git repo, but {project_path} is not a git repository. "
-                "Initialize git there or disable STORAGE_PROJECT_KEY_ENABLED to use the default archive."
+                f"Project-key storage requires a git repo, but {project_path} is not a git repository.",
+                prompt=prompt if settings.storage.project_key_prompt_enabled else None,
             ) from exc
 
         worktree_root = Path(repo.working_tree_dir or repo.common_dir).resolve()
         if worktree_root != project_path:
+            prompt = _build_prompt(f"Provided path is not the repo root (repo root: {worktree_root}).")
             raise ProjectStorageResolutionError(
-                f"Project-key storage expects the project_key to be the git repo root. "
-                f"Provided: {project_path} ; repo root: {worktree_root}. "
-                "Set project_key to the repo root or disable STORAGE_PROJECT_KEY_ENABLED."
+                "Project-key storage expects project_key to be the git repo root.",
+                prompt=prompt if settings.storage.project_key_prompt_enabled else None,
             )
 
         return project_path / ".mcp_mail"
