@@ -968,12 +968,18 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         sender_agent = await _get_agent_by_name_optional(sender_name)
 
         if not sender_agent:
+            if source == "slack":
+                program = "slack_bridge"
+                model = "slack-events"
+            else:
+                program = "slack_ingestion"
+                model = "slack-webhook"
             async with get_session() as session:
                 sender_agent = Agent(
                     name=sender_name,
                     project_id=project.id,
-                    program="slack_bridge",
-                    model="slack-events",
+                    program=program,
+                    model=model,
                     task_description="Bridges Slack messages into MCP Agent Mail",
                     is_active=True,
                 )
@@ -1191,10 +1197,16 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         if not settings.slack.slackbox_enabled:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Slackbox disabled")
 
+        if not settings.slack.slackbox_token:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Slackbox token not configured",
+            )
+
         form = await request.form()
 
         token = (form.get("token") or "").strip()
-        if settings.slack.slackbox_token and token != settings.slack.slackbox_token:
+        if token != settings.slack.slackbox_token:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Slackbox token")
 
         text = (form.get("text") or "").strip()
