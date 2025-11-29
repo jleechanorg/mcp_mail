@@ -169,6 +169,7 @@ async def test_slack_webhook_records_thread_mapping_for_top_level(monkeypatch):
     dummy_client = DummySlackClient()
     import mcp_agent_mail.app as app_module
 
+    old_client = getattr(app_module, "_slack_client", None)
     app_module._slack_client = dummy_client
     try:
         transport = httpx.ASGITransport(app=app)
@@ -183,7 +184,7 @@ async def test_slack_webhook_records_thread_mapping_for_top_level(monkeypatch):
                 },
             )
     finally:
-        app_module._slack_client = None
+        app_module._slack_client = old_client
 
     assert resp.status_code == 200
     assert dummy_client.mappings == [
@@ -198,9 +199,13 @@ async def test_notify_slack_message_replies_into_slack_thread(monkeypatch):
     class DummySlackClient:
         def __init__(self) -> None:
             self.calls: list[dict[str, str | None]] = []
+            self.mappings: list[tuple[str, str, str]] = []
 
         async def get_slack_thread(self, thread_id: str):
             return None
+
+        async def map_thread(self, mcp_thread_id: str, slack_channel_id: str, slack_thread_ts: str) -> None:
+            self.mappings.append((mcp_thread_id, slack_channel_id, slack_thread_ts))
 
         async def post_message(
             self,
@@ -218,7 +223,7 @@ async def test_notify_slack_message_replies_into_slack_thread(monkeypatch):
                     "thread_ts": thread_ts,
                 }
             )
-            return {"ok": True, "ts": thread_ts, "channel": channel}
+            return {"ok": True, "ts": "9999999999.999999", "channel": channel}
 
     monkeypatch.setenv("SLACK_ENABLED", "1")
     monkeypatch.setenv("SLACK_NOTIFY_ON_MESSAGE", "1")
