@@ -569,8 +569,10 @@ async def test_message_search(mcp_client, tmp_path):
         },
     )
 
-    # search_messages returns a list directly in structured_content
-    results = search_result.structured_content
+    # search_messages returns structured content; normalize to a list
+    results = search_result.structured_content or []
+    if isinstance(results, dict) and "result" in results:
+        results = results["result"]
     # Should find 2 messages mentioning authentication
     assert len(results) >= 2
 

@@ -16,5 +16,3 @@ def test_overlap_cross_match() -> None:
     # cross-match heuristic should detect that pattern and path overlap
     assert _patterns_overlap("assets/*.png", "assets/logo.png")
     assert not _patterns_overlap("assets/*.png", "assets/logo.jpg")
-
-

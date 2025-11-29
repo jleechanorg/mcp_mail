@@ -652,7 +652,9 @@ def typecheck() -> None:
 
 @share_app.command("export")
 def share_export(
-    output: Annotated[str, typer.Option(..., "--output", "-o", help="Directory where the static bundle should be written.")],
+    output: Annotated[
+        str, typer.Option(..., "--output", "-o", help="Directory where the static bundle should be written.")
+    ],
     interactive: Annotated[
         bool,
         typer.Option(
@@ -718,7 +720,9 @@ def share_export(
             show_default=True,
         ),
     ] = True,
-    signing_key: Optional[Path] = typer.Option(None, "--signing-key", help="Path to Ed25519 signing key (32-byte seed)."),
+    signing_key: Optional[Path] = typer.Option(
+        None, "--signing-key", help="Path to Ed25519 signing key (32-byte seed)."
+    ),
     signing_public_out: Optional[Path] = typer.Option(
         None, "--signing-public-out", help="Write public key to this file after signing."
     ),
@@ -1180,7 +1184,9 @@ def share_update(
         bool,
         typer.Option(..., "--zip/--no-zip", help="Package the updated bundle into a ZIP archive.", show_default=True),
     ] = False,
-    signing_key: Optional[Path] = typer.Option(None, "--signing-key", help="Path to Ed25519 signing key (32-byte seed)."),
+    signing_key: Optional[Path] = typer.Option(
+        None, "--signing-key", help="Path to Ed25519 signing key (32-byte seed)."
+    ),
     signing_public_out: Optional[Path] = typer.Option(
         None, "--signing-public-out", help="Write public key to this file after signing."
     ),
@@ -2021,7 +2027,9 @@ def amctl_env(
         "-p",
         help="Path to repo/worktree",
     ),
-    agent: Annotated[Optional[str], typer.Option(..., "--agent", "-a", help="Agent name (defaults to $AGENT_NAME)")] = None,
+    agent: Annotated[
+        Optional[str], typer.Option(..., "--agent", "-a", help="Agent name (defaults to $AGENT_NAME)")
+    ] = None,
 ) -> None:
     """
     Print environment variables useful for build wrappers (slots, caches, artifacts).
@@ -2070,7 +2078,9 @@ def am_run(
         "-p",
         help="Path to repo/worktree",
     ),
-    agent: Annotated[Optional[str], typer.Option(..., "--agent", "-a", help="Agent name (defaults to $AGENT_NAME)")] = None,
+    agent: Annotated[
+        Optional[str], typer.Option(..., "--agent", "-a", help="Agent name (defaults to $AGENT_NAME)")
+    ] = None,
 ) -> None:
     """
     Build wrapper that prepares environment variables and manages a build slot:
@@ -2107,7 +2117,7 @@ def am_run(
         return s or "unknown"
 
     async def _ensure_slot_paths() -> Path:
-        archive = await ensure_archive(settings, slug)
+        archive = await ensure_archive(settings, slug, project_key=str(p))
         slot_dir = archive.root / "build_slots" / safe_filesystem_component(slot)
         slot_dir.mkdir(parents=True, exist_ok=True)
         return slot_dir
@@ -2401,8 +2411,8 @@ def projects_adopt(
     settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
     from .storage import ensure_archive as _ensure_archive
 
-    src_archive = asyncio.run(_ensure_archive(settings, src.slug))
-    dst_archive = asyncio.run(_ensure_archive(settings, dst.slug))
+    src_archive = asyncio.run(_ensure_archive(settings, src.slug, project_key=src.human_key))
+    dst_archive = asyncio.run(_ensure_archive(settings, dst.slug, project_key=dst.human_key))
     plan.append(f"Move Git artifacts: {src_archive.root} -> {dst_archive.root}")
     plan.append("Re-key DB rows: source project_id -> target project_id (messages, agents, file_reservations, etc.)")
     plan.append("Write aliases.json under target 'projects/<slug>/' with former_slugs")
@@ -2439,8 +2449,8 @@ def projects_adopt(
             ensure_archive as _ensure_archive,
         )
 
-        src_archive = asyncio.run(_ensure_archive(settings, src.slug))
-        dst_archive = asyncio.run(_ensure_archive(settings, dst.slug))
+        src_archive = asyncio.run(_ensure_archive(settings, src.slug, project_key=src.human_key))
+        dst_archive = asyncio.run(_ensure_archive(settings, dst.slug, project_key=dst.human_key))
         moved_relpaths: list[str] = []
         for path in sorted(src_archive.root.rglob("*"), key=str):
             if not path.is_file():

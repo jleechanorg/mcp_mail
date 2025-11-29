@@ -67,5 +67,3 @@ def test_remote_fingerprint_when_no_markers(tmp_path: Path, monkeypatch) -> None
     expected_uid = hashlib.sha1(expected_fingerprint.encode("utf-8")).hexdigest()[:20]
     ident = _resolve_project_identity(str(repo))
     assert ident["project_uid"] == expected_uid
-
-
