@@ -642,6 +642,7 @@ def _agent_to_dict(agent: Agent) -> dict[str, Any]:
         "contact_policy": getattr(agent, "contact_policy", "auto"),
         "is_active": getattr(agent, "is_active", True),
         "deleted_ts": _iso(deleted_ts) if (deleted_ts := getattr(agent, "deleted_ts", None)) is not None else None,
+        "is_placeholder": getattr(agent, "is_placeholder", False),
     }
 
 
@@ -1175,6 +1176,23 @@ async def _agent_name_exists_globally(name: str) -> bool:
         return result.first() is not None
 
 
+async def _get_placeholder_agent_globally(name: str) -> Optional[Agent]:
+    """Get a placeholder agent by name globally, if one exists.
+
+    Returns the Agent if it exists and is_placeholder=True, otherwise None.
+    This is used to "claim" placeholder agents during official registration.
+    """
+    async with get_session() as session:
+        result = await session.execute(
+            select(Agent).where(
+                func.lower(Agent.name) == name.lower(),
+                cast(Any, Agent.is_active).is_(True),
+                cast(Any, Agent.is_placeholder).is_(True),
+            )
+        )
+        return result.scalars().first()
+
+
 async def _generate_unique_agent_name(
     project: Project,
     settings: Settings,
@@ -1309,6 +1327,37 @@ async def _get_or_create_agent(
                 )
             desired_name = await _generate_unique_agent_name(project, settings, None)
         else:
+            # Check if there's a placeholder agent with this name that can be claimed
+            placeholder = await _get_placeholder_agent_globally(sanitized)
+            if placeholder:
+                # Claim the placeholder: update its details and mark as non-placeholder
+                await ensure_schema()
+                async with get_session() as session:
+                    result = await session.execute(
+                        select(Agent).where(Agent.id == placeholder.id)
+                    )
+                    agent = result.scalars().first()
+                    if agent:
+                        # Update placeholder to claim it
+                        agent.project_id = project.id
+                        agent.program = program
+                        agent.model = model
+                        agent.task_description = task_description
+                        agent.last_active_ts = datetime.now(timezone.utc)
+                        agent.is_placeholder = False
+                        # Reactivate if previously retired
+                        if not getattr(agent, "is_active", True):
+                            agent.is_active = True
+                            agent.deleted_ts = None
+                        session.add(agent)
+                        await session.commit()
+                        await session.refresh(agent)
+                        # Write updated profile to archive
+                        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+                        async with _archive_write_lock(archive):
+                            await write_agent_profile(archive, _agent_to_dict(agent))
+                        return agent
+                # If we couldn't find the agent, fall through to regular logic
             # Check if the user-provided name is globally unique
             if await _agent_name_exists_globally(sanitized):
                 # Name exists globally; check if it's in THIS project
@@ -1369,6 +1418,8 @@ async def _get_or_create_agent(
             agent.model = model
             agent.task_description = task_description
             agent.last_active_ts = datetime.now(timezone.utc)
+            # Mark as officially registered (not a placeholder)
+            agent.is_placeholder = False
             # Reactivate if previously retired
             if not getattr(agent, "is_active", True):
                 agent.is_active = True
@@ -1427,6 +1478,79 @@ async def _get_or_create_agent(
                         "hint": "Retry the operation; if it persists, call register_agent with force_reclaim=True",
                     },
                 ) from exc
+    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+    async with _archive_write_lock(archive):
+        await write_agent_profile(archive, _agent_to_dict(agent))
+    return agent
+
+
+async def _create_placeholder_agent(
+    project: Project,
+    name: str,
+    sender_program: str,
+    sender_model: str,
+    settings: Settings,
+) -> Agent:
+    """Create a placeholder agent to receive messages before official registration.
+
+    Placeholder agents:
+    - Have is_placeholder=True
+    - Inherit program/model from the sender (as a reasonable default)
+    - Can receive messages just like regular agents
+    - Can be "claimed" by a later register_agent call, which sets is_placeholder=False
+
+    This enables the pattern: send messages to an agent that doesn't exist yet,
+    and when they register later, they can read their pending messages.
+    """
+    if project.id is None:
+        raise ValueError("Project must have an id before creating placeholder agents.")
+
+    sanitized = sanitize_agent_name(name)
+    if not sanitized:
+        raise ValueError(f"Invalid agent name for placeholder: {name}")
+
+    await ensure_schema()
+    async with get_session() as session:
+        # Check if agent already exists (shouldn't happen, but be safe)
+        result = await session.execute(
+            select(Agent).where(
+                func.lower(Agent.name) == sanitized.lower(),
+                cast(Any, Agent.is_active).is_(True),
+            )
+        )
+        existing = result.scalars().first()
+        if existing:
+            return existing  # Already exists, return as-is
+
+        agent = Agent(
+            project_id=project.id,
+            name=sanitized,
+            program=sender_program,
+            model=sender_model,
+            task_description="(pending registration)",
+            contact_policy="auto",
+            is_placeholder=True,
+        )
+        session.add(agent)
+        try:
+            await session.commit()
+            await session.refresh(agent)
+        except IntegrityError:
+            # Race condition: name was taken between check and commit
+            await session.rollback()
+            # Try to fetch the existing agent
+            result = await session.execute(
+                select(Agent).where(
+                    func.lower(Agent.name) == sanitized.lower(),
+                    cast(Any, Agent.is_active).is_(True),
+                )
+            )
+            existing = result.scalars().first()
+            if existing:
+                return existing
+            raise ValueError(f"Failed to create placeholder agent: {sanitized}")
+
+    # Write placeholder profile to archive
     archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
     async with _archive_write_lock(archive):
         await write_agent_profile(archive, _agent_to_dict(agent))
@@ -3781,19 +3905,25 @@ def build_mcp_server() -> FastMCP:
             if unknown:
                 # Auto-register missing recipients if enabled
                 if getattr(settings_local, "messaging_auto_register_recipients", True):
-                    # Best effort: try to register any unknown recipients with sane defaults
+                    # Best effort: create placeholder agents for unknown recipients.
+                    # Placeholder agents can receive messages and be "claimed" later
+                    # when the real agent registers with that name.
                     newly_registered: set[str] = set()
                     for missing in list(unknown):
                         try:
-                            _ = await _get_or_create_agent(
+                            placeholder = await _create_placeholder_agent(
                                 project,
                                 missing,
                                 sender.program,
                                 sender.model,
-                                sender.task_description,
                                 settings_local,
                             )
                             newly_registered.add(missing)
+                            # Add the newly created placeholder to global_lookup so _route can find it
+                            canonical_name = placeholder.name
+                            sanitized_canonical = sanitize_agent_name(canonical_name) or canonical_name
+                            for key in {canonical_name.lower(), sanitized_canonical.lower()}:
+                                global_lookup.setdefault(key, canonical_name)
                         except Exception:
                             pass
                     unknown.difference_update(newly_registered)

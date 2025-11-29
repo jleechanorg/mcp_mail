@@ -376,5 +376,10 @@ def _ensure_agent_active_columns(connection) -> None:
         connection.exec_driver_sql("ALTER TABLE agents ADD COLUMN deleted_ts TEXT")
     if "contact_policy" not in columns:
         connection.exec_driver_sql("ALTER TABLE agents ADD COLUMN contact_policy TEXT NOT NULL DEFAULT 'auto'")
+    if "is_placeholder" not in columns:
+        # Add is_placeholder column for tracking agents auto-created before official registration.
+        # Existing agents are assumed to be officially registered (is_placeholder=0).
+        connection.exec_driver_sql("ALTER TABLE agents ADD COLUMN is_placeholder INTEGER NOT NULL DEFAULT 0")
     connection.exec_driver_sql("UPDATE agents SET is_active = 1 WHERE is_active IS NULL")
     connection.exec_driver_sql("UPDATE agents SET contact_policy = 'auto' WHERE contact_policy IS NULL")
+    connection.exec_driver_sql("UPDATE agents SET is_placeholder = 0 WHERE is_placeholder IS NULL")
