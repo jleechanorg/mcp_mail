@@ -63,3 +63,65 @@ async def test_slackbox_rejects_invalid_token(monkeypatch):
         )
 
     assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_slackbox_skips_non_allowed_channel(monkeypatch):
+    """Messages from channels not in SLACKBOX_CHANNELS should be skipped."""
+    monkeypatch.setenv("SLACK_ENABLED", "1")
+    monkeypatch.setenv("SLACKBOX_ENABLED", "1")
+    monkeypatch.setenv("SLACKBOX_TOKEN", "slackbox-token")
+    monkeypatch.setenv("SLACKBOX_CHANNELS", "ALLOWED_CHAN")
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+    settings = get_settings()
+    app = build_http_app(settings)
+    await ensure_schema()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/slackbox/incoming",
+            data={
+                "token": "slackbox-token",
+                "channel_id": "NOT_ALLOWED_CHAN",
+                "text": "Message from disallowed channel",
+                "timestamp": "3333.4444",
+            },
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data.get("message") == "Channel not allowed"
+
+    # Verify no message was created for this channel
+    async with get_session() as session:
+        result = await session.execute(
+            select(Message).where(Message.thread_id == "slackbox_NOT_ALLOWED_CHAN_3333.4444")
+        )
+        message = result.scalars().first()
+
+    assert message is None
+
+
+@pytest.mark.asyncio
+async def test_slackbox_requires_token_configured(monkeypatch):
+    """When Slackbox is enabled but token is not configured, return 503."""
+    monkeypatch.setenv("SLACK_ENABLED", "1")
+    monkeypatch.setenv("SLACKBOX_ENABLED", "1")
+    monkeypatch.setenv("SLACKBOX_TOKEN", "")  # Empty token
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+    settings = get_settings()
+    app = build_http_app(settings)
+    await ensure_schema()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/slackbox/incoming",
+            data={"token": "any-token", "text": "hi"},
+        )
+
+    assert resp.status_code == 503
+    assert "token not configured" in resp.json().get("detail", "").lower()

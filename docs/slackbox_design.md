@@ -19,7 +19,7 @@ Provide a minimal, webhook-only path for importing Slack channel chatter into MC
    - Subject: `[Slackbox] <first line>` (prefix configurable)
    - Body: raw text with Slack mentions untouched
    - Thread: `slackbox_<channel>_<timestamp>` when both are available
-3. The payload is ingested via the shared Slack bridge path that creates the Slackbridge agent (if needed), broadcasts to all active agents in the Slack sync project, writes to the archive, and records dedupe keys.
+3. The payload is ingested via the shared Slack bridge path. Slackbox messages use a configurable sender agent name (from `SLACKBOX_SENDER_NAME`, default "Slackbox"). The message is broadcast to all active agents in the Slack sync project, written to the archive, and dedupe keys are recorded.
 
 ## Configuration
 New environment flags (read via `SlackSettings`):
@@ -34,7 +34,7 @@ Slackbox reuses `SLACK_SYNC_PROJECT_NAME` to choose the project that receives th
 
 ## Error Handling & Limits
 - 401 for invalid/missing token.
-- 503 when Slackbox is disabled or the Slack signing secret is missing for the main Slack app.
+- 503 when Slackbox is disabled or the token is not configured.
 - Empty texts short-circuit with a friendly 200 response to avoid noisy retries.
 - Dedupe cache prevents duplicate inserts on webhook retries using `(channel, timestamp)` keys when available.
 
