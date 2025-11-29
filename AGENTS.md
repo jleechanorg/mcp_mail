@@ -71,7 +71,8 @@ We load all configuration details from the existing .env file (even if you can't
 
 **Default posture:** proactively:
 - Run `./scripts/ensure_git_hooks.sh` at the start of every session (or after git operations) to keep hooks installed.
-- Run targeted tests for the area you touch (e.g., Slack integration → `uv run pytest tests/integration/test_slack_mcp_mail_integration.py`) without being asked.
+- Run targeted tests for the area you touch (e.g., Slack integration → `uv run pytest tests/integration/test_slack_mcp_mail_integration.py`, webhook → `uv run pytest tests/integration/test_slack_webhook_api.py`) without being asked.
+- Before stating CI status, explicitly check the latest workflow run (including in-progress) and review annotations/logs; do not rely solely on prior green runs.
 - Re-run CI-reported failing suites locally and fix them before handoff.
 
 ```
