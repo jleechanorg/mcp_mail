@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pytest
 from fastmcp import Client
-from fastmcp.exceptions import ToolError
 
 from mcp_agent_mail.app import build_mcp_server
 
@@ -29,7 +28,8 @@ async def test_invalid_project_or_agent_errors(isolated_env):
 
 
 @pytest.mark.asyncio
-async def test_unknown_recipient_reports_structured_error(isolated_env):
+async def test_unknown_recipient_creates_placeholder_agent(isolated_env):
+    """Messages to unknown recipients create placeholder agents and store messages."""
     server = build_mcp_server()
     async with Client(server) as client:
         await client.call_tool("ensure_project", {"human_key": "/backend"})
@@ -38,22 +38,8 @@ async def test_unknown_recipient_reports_structured_error(isolated_env):
             {"project_key": "Backend", "program": "codex", "model": "gpt-5", "name": "GreenCastle"},
         )
 
-        # Unknown recipient returns structured error
-        with pytest.raises(ToolError):
-            await client.call_tool(
-                "send_message",
-                {
-                    "project_key": "Backend",
-                    "sender_name": "GreenCastle",
-                    "to": ["BlueLake"],
-                    "subject": "Hello",
-                    "body_md": "testing unknown recipient",
-                },
-            )
-
-        # Retrieve again via non-raising call — implementation may auto-handshake;
-        # accept either structured error or success
-        res = await client.call_tool_mcp(
+        # Unknown recipient creates placeholder agent and stores message (no error)
+        res = await client.call_tool(
             "send_message",
             {
                 "project_key": "Backend",
@@ -63,14 +49,23 @@ async def test_unknown_recipient_reports_structured_error(isolated_env):
                 "body_md": "testing unknown recipient",
             },
         )
-        if res.isError:
-            # structured error path
-            text = " ".join(getattr(c, "text", "") for c in res.content)
-            assert "BlueLake" in text
-        else:
-            # success path (auto-handshake)
-            text = " ".join(getattr(c, "text", "") for c in res.content)
-            assert "deliveries" in text
+        # Message should be delivered successfully
+        assert res.data.get("deliveries") is not None
+        assert res.data.get("count") == 1
+
+        # Send another message to verify placeholder agent is reused
+        res2 = await client.call_tool(
+            "send_message",
+            {
+                "project_key": "Backend",
+                "sender_name": "GreenCastle",
+                "to": ["BlueLake"],
+                "subject": "Hello again",
+                "body_md": "second message to placeholder",
+            },
+        )
+        assert res2.data.get("count") == 1
+        assert res2.data.get("deliveries") is not None
 
         # Register and ensure sanitized inputs (hyphen stripped/lowercased) route
         await client.call_tool(
