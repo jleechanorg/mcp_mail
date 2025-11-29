@@ -1891,6 +1891,8 @@ def _file_reservations_conflict(
     if not existing.exclusive and not candidate_exclusive:
         return False
     normalized_existing = existing.path_pattern
+    # Allow **/ patterns to match files at the immediate directory level too
+    fallback_existing = normalized_existing.replace("**/", "")
 
     # Treat simple directory patterns like "src/*" as inclusive of files under that directory
     # when comparing against concrete file paths like "src/app.py".
@@ -1901,7 +1903,14 @@ def _file_reservations_conflict(
 
     a = _expand_dir_star(candidate_path)
     b = _expand_dir_star(normalized_existing)
-    return fnmatch.fnmatchcase(a, b) or fnmatch.fnmatchcase(b, a) or a == b
+    b_fallback = _expand_dir_star(fallback_existing)
+    return (
+        fnmatch.fnmatchcase(a, b)
+        or fnmatch.fnmatchcase(b, a)
+        or fnmatch.fnmatchcase(a, b_fallback)
+        or fnmatch.fnmatchcase(b_fallback, a)
+        or a == b
+    )
 
 
 def _patterns_overlap(a: str, b: str) -> bool:
@@ -3714,13 +3723,58 @@ def build_mcp_server() -> FastMCP:
             unknown: set[str] = set()
 
             async def _route(name_list: list[str], kind: str) -> None:
-                """Simplified routing: look up agents globally by name."""
+                """Route recipients, supporting cross-project addressing."""
+
+                async def _resolve_cross_project(project_identifier: str, target: str) -> str | None:
+                    try:
+                        proj = await _get_project_by_identifier(project_identifier)
+                    except NoResultFound:
+                        return None
+
+                    # Try original and sanitized name variants
+                    candidates = [target]
+                    sanitized = sanitize_agent_name(target)
+                    if sanitized and sanitized not in candidates:
+                        candidates.append(sanitized)
+
+                    for candidate in candidates:
+                        try:
+                            agent_obj = await _get_agent(proj, candidate)
+                            return agent_obj.name
+                        except NoResultFound:
+                            continue
+                    return None
+
                 for raw in name_list:
-                    # Strip whitespace and normalize
                     display_value, key_candidates, canonical = _normalize(raw)
                     if not key_candidates or not canonical:
                         unknown.add(raw.strip() if raw else raw)
                         continue
+
+                    target_project: str | None = None
+                    target_name = canonical
+
+                    # Format 1: "project:<identifier>#<agent-name>"
+                    if display_value.startswith("project:") and "#" in display_value:
+                        parts = display_value.split("#", 1)
+                        if len(parts) == 2:
+                            target_project = parts[0].replace("project:", "", 1).strip()
+                            target_name = (parts[1] or target_name).strip() or target_name
+                            key_candidates = {target_name.lower()}
+                            sanitized = sanitize_agent_name(target_name)
+                            if sanitized:
+                                key_candidates.add(sanitized.lower())
+
+                    # Format 2: "<agent-name>@<project-identifier>"
+                    elif "@" in display_value and not display_value.startswith("@"):
+                        parts = display_value.rsplit("@", 1)
+                        if len(parts) == 2:
+                            target_name = (parts[0] or target_name).strip() or target_name
+                            target_project = (parts[1] or "").strip() or None
+                            key_candidates = {target_name.lower()}
+                            sanitized = sanitize_agent_name(target_name)
+                            if sanitized:
+                                key_candidates.add(sanitized.lower())
 
                     # Allow self-send
                     if sender_candidate_keys.intersection(key_candidates):
@@ -3732,12 +3786,15 @@ def build_mcp_server() -> FastMCP:
                             all_bcc.append(sender.name)
                         continue
 
-                    # Look up agent globally by name
                     resolved = None
-                    for key in key_candidates:
-                        resolved = global_lookup.get(key)
-                        if resolved:
-                            break
+
+                    if target_project:
+                        resolved = await _resolve_cross_project(target_project, target_name)
+                    else:
+                        for key in key_candidates:
+                            resolved = global_lookup.get(key)
+                            if resolved:
+                                break
 
                     if resolved:
                         if kind == "to":
@@ -4893,6 +4950,7 @@ def build_mcp_server() -> FastMCP:
             {
                 "id": row["id"],
                 "subject": row["subject"],
+                "body_md": row["body_md"],
                 "importance": row["importance"],
                 "ack_required": row["ack_required"],
                 "created_ts": _iso(row["created_ts"]),
@@ -4901,12 +4959,7 @@ def build_mcp_server() -> FastMCP:
             }
             for row in rows
         ]
-        try:
-            from fastmcp.tools.tool import ToolResult  # type: ignore
-
-            return ToolResult(structured_content={"result": items})
-        except Exception:
-            return items
+        return ToolResult(structured_content={"result": items})
 
     @mcp.tool(name="acquire_build_slot")
     @_instrument_tool(
