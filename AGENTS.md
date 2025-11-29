@@ -67,6 +67,11 @@ You can also consult `third_party_docs/fastmcp_distilled_docs.md` for any questi
 
 We load all configuration details from the existing .env file (even if you can't see this file, it DOES exist, and must NEVER be overwritten!). We NEVER use os.getenv() or dotenv or other methods to get variables from our .env file other than using python-decouple in this very specific pattern of usage (this is just an example but it always follows the same basic pattern):
 
+**Default posture:** proactively:
+- Run `./scripts/ensure_git_hooks.sh` at the start of every session (or after git operations) to keep hooks installed.
+- Run targeted tests for the area you touch (e.g., Slack integration → `uv run pytest tests/integration/test_slack_mcp_mail_integration.py`) without being asked.
+- Re-run CI-reported failing suites locally and fix them before handoff.
+
 ```
 from decouple import Config as DecoupleConfig, RepositoryEnv
 
