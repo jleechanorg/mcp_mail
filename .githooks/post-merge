@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Keep hooksPath pointed at .githooks after merges.
+
+set -euo pipefail
+
+current=$(git config --get core.hooksPath || true)
+if [ "$current" != ".githooks" ]; then
+  git config core.hooksPath .githooks
+  echo "[post-merge] set core.hooksPath to .githooks"
+fi
