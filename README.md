@@ -551,6 +551,55 @@ slack_post_message(
 
 See [SLACK_BIDIRECTIONAL_SYNC.md](SLACK_BIDIRECTIONAL_SYNC.md) for full configuration options, MCP tools reference, webhook setup, and troubleshooting.
 
+## Slack Integration
+
+MCP Agent Mail includes full Slack integration, enabling agents to send notifications and post messages to Slack channels. See [SLACK_BIDIRECTIONAL_SYNC.md](SLACK_BIDIRECTIONAL_SYNC.md) for complete documentation.
+
+**Quick Setup:**
+
+1. Create a Slack app at [https://api.slack.com/apps](https://api.slack.com/apps)
+2. Add bot token scopes: `chat:write`, `channels:read`, `groups:read`, `channels:history`, `groups:history`, `reactions:read`, `app_mentions:read`
+3. Install to workspace and copy the bot token
+4. Configure in `.env`:
+   ```bash
+   SLACK_ENABLED=true
+   SLACK_BOT_TOKEN=xoxb-your-token-here
+   SLACK_DEFAULT_CHANNEL=general
+   ```
+5. Restart the server
+
+**Features:**
+
+- **Automatic Notifications**: MCP messages automatically posted to Slack
+- **Manual Posting**: `slack_post_message()` tool for direct Slack posts
+- **Channel Discovery**: `slack_list_channels()` to explore available channels
+- **Channel Insights**: `slack_get_channel_info()` to inspect metadata and member counts before posting
+- **Thread Support**: MCP threads map to Slack threads for conversation continuity
+- **Rich Formatting**: Uses Slack Block Kit for enhanced message presentation
+- **Webhook Support**: Receive Slack events for future bidirectional sync
+
+**Example:**
+```python
+# Automatically notify Slack when sending an MCP message
+send_message(
+    project_key="myproject",
+    agent_name="BlueWhale",
+    to=["GreenCastle"],
+    subject="Deploy completed",
+    body_md="Production deployment successful ✅",
+    importance="normal"
+)
+# → Slack notification appears in configured channel
+
+# Or post directly to Slack
+slack_post_message(
+    channel="deployments",
+    text="🚀 Build #1234 deployed to production"
+)
+```
+
+See [SLACK_BIDIRECTIONAL_SYNC.md](SLACK_BIDIRECTIONAL_SYNC.md) for full configuration options, MCP tools reference, webhook setup, and troubleshooting.
+
 ## Core ideas (at a glance)
 
 - HTTP-only FastMCP server (Streamable HTTP). No SSE, no STDIO.
