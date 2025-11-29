@@ -1898,6 +1898,7 @@ def list_projects(
     """List known projects."""
 
     settings = get_settings()
+    settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
 
     async def _collect() -> list[tuple[Project, int]]:
         await ensure_schema(settings)
@@ -1972,6 +1973,7 @@ def guard_install(
     """Install the advisory pre-commit guard into the given repository."""
 
     settings = get_settings()
+    settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
     repo_path = repo.expanduser().resolve()
 
     # Use slug directly without database lookup (works for tests and standalone use)
@@ -2094,6 +2096,7 @@ def amctl_env(
             branch = "unknown"
     # Compute cache key and artifact dir
     settings = get_settings()
+    settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
     cache_key = f"am-cache-{project_uid}-{agent_name}-{branch}"
     artifact_dir = (
         Path(settings.storage.root).expanduser().resolve() / "projects" / slug / "artifacts" / agent_name / branch
@@ -2146,6 +2149,7 @@ def am_run(
         except Exception:
             branch = "unknown"
     settings = get_settings()
+    settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
     guard_mode = (os.environ.get("AGENT_MAIL_GUARD_MODE", "block") or "block").strip().lower()
     worktrees_enabled = bool(settings.worktrees_enabled)
 
@@ -2281,6 +2285,7 @@ def mail_status(
     and the slug that would be used for this path.
     """
     settings = get_settings()
+    settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
     p = project_path.expanduser().resolve()
     gate = bool(getattr(settings, "worktrees_enabled", False))
     mode = (getattr(settings, "project_identity_mode", "dir") or "dir").strip() or "dir"
@@ -2353,6 +2358,7 @@ def guard_status(
     Print guard status: gate/mode, resolved hooks directory, and presence of hooks.
     """
     settings = get_settings()
+    settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
     p = repo.expanduser().resolve()
     gate = bool(getattr(settings, "worktrees_enabled", False))
     mode = (getattr(settings, "project_identity_mode", "dir") or "dir").strip() or "dir"
@@ -2445,6 +2451,7 @@ def projects_adopt(
 
     # Describe filesystem moves (archive layout)
     settings = get_settings()
+    settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
     from .storage import ensure_archive as _ensure_archive
 
     src_archive = asyncio.run(_ensure_archive(settings, src.slug))
@@ -2478,6 +2485,7 @@ def projects_adopt(
                 raise typer.BadParameter(f"Agent name conflicts in target project: {', '.join(dup)}")
         # Move Git artifacts
         settings = get_settings()
+        settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
         # local import to minimize top-level churn and keep ordering stable
         from .storage import (
             AsyncFileLock as _AsyncFileLock,  # type: ignore
@@ -3003,6 +3011,7 @@ def config_set_port(
 def config_show_port() -> None:
     """Display the configured HTTP port."""
     settings = get_settings()
+    settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
     console.print("[cyan]HTTP Server Configuration:[/cyan]")
     console.print(f"  Host: {settings.http.host}")
     console.print(f"  Port: [bold]{settings.http.port}[/bold]")

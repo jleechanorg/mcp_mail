@@ -82,6 +82,90 @@ CLUSTER_PRODUCT = "product"
 
 
 # Global inbox configuration
+
+def _resolve_project_identity(target_path: str) -> dict[str, Any]:
+    """
+    Resolve project identity using markers and git metadata.
+
+    Priority:
+    1. Committed marker (.agent-mail-project-id)
+    2. Private marker (.git/agent-mail/project-id)
+    3. Remote fingerprint (SHA1 of normalized remote URL + default branch)
+
+    Returns dict with 'project_uid' key.
+    """
+    import hashlib
+    import re
+    import subprocess
+
+    path = Path(target_path).resolve()
+
+    # 1. Check for committed marker
+    committed_marker = path / ".agent-mail-project-id"
+    if committed_marker.exists():
+        uid = committed_marker.read_text(encoding="utf-8").strip()
+        if uid:
+            return {"project_uid": uid}
+
+    # 2. Check for private marker in git-common-dir
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        git_common_dir = result.stdout.strip()
+        if not git_common_dir.startswith("/"):
+            git_common_dir = str(path / git_common_dir)
+
+        private_marker = Path(git_common_dir) / "agent-mail" / "project-id"
+        if private_marker.exists():
+            uid = private_marker.read_text(encoding="utf-8").strip()
+            if uid:
+                return {"project_uid": uid}
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    # 3. Fall back to remote fingerprint
+    try:
+        # Get remote URL
+        result = subprocess.run(
+            ["git", "-C", str(path), "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        remote_url = result.stdout.strip()
+
+        # Normalize URL to host/owner/repo pattern
+        # Handle both https://github.com/owner/repo.git and git@github.com:owner/repo.git
+        normalized = re.sub(r"\.git$", "", remote_url)
+        normalized = re.sub(r"^https?://", "", normalized)
+        normalized = re.sub(r"^git@([^:]+):", r"\1/", normalized)
+
+        # Get default branch (fallback to 'main' if not found)
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(path), "symbolic-ref", "refs/remotes/origin/HEAD"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            default_branch = result.stdout.strip().split("/")[-1]
+        except (subprocess.CalledProcessError, IndexError):
+            default_branch = "main"
+
+        # Create fingerprint and hash it
+        fingerprint = f"{normalized}@{default_branch}"
+        uid = hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()[:20]
+        return {"project_uid": uid}
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    # Final fallback - use path-based slug
+    return {"project_uid": slugify(str(path))}
+
 def get_global_inbox_name(project: Project) -> str:
     """Get project-specific global inbox name for message archival organization."""
     return f"global-inbox-{project.slug}"
