@@ -3492,12 +3492,16 @@ def build_mcp_server() -> FastMCP:
                 suggestion_text = f" Did you mean one of: {suggestions}?"
             error_msg = f"Agent '{agent_name}' not found.{suggestion_text}"
             await ctx.warning(error_msg)
-            return {
-                "error": error_msg,
-                "agent_name": agent_name,
-                "suggestions": suggestions,
-                "_tip": "Use resource://agents to see all registered agents globally.",
-            }
+            raise ToolExecutionError(
+                "AGENT_NOT_FOUND",
+                f"Agent '{agent_name}' not registered for project '{project.human_key}'.{suggestion_text}",
+                recoverable=True,
+                data={
+                    "agent_name": agent_name,
+                    "suggestions": suggestions,
+                    "_tip": "Use resource://agents to see all registered agents globally.",
+                },
+            )
 
         # Get the agent's actual project for commit history and logging
         # This matters when agent was found via global fallback (different from requested project)
