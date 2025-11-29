@@ -1548,7 +1548,7 @@ async def _create_placeholder_agent(
             existing = result.scalars().first()
             if existing:
                 return existing
-            raise ValueError(f"Failed to create placeholder agent: {sanitized}")
+            raise ValueError(f"Failed to create placeholder agent: {sanitized}") from None
 
     # Write placeholder profile to archive
     archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
