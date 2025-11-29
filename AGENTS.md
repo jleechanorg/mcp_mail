@@ -1,5 +1,7 @@
 RULE NUMBER 1 (NEVER EVER EVER FORGET THIS RULE!!!): YOU ARE NEVER ALLOWED TO DELETE A FILE WITHOUT EXPRESS PERMISSION FROM ME OR A DIRECT COMMAND FROM ME. EVEN A NEW FILE THAT YOU YOURSELF CREATED, SUCH AS A TEST CODE FILE. YOU HAVE A HORRIBLE TRACK RECORD OF DELETING CRITICALLY IMPORTANT FILES OR OTHERWISE THROWING AWAY TONS OF EXPENSIVE WORK THAT I THEN NEED TO PAY TO REPRODUCE. AS A RESULT, YOU HAVE PERMANENTLY LOST ANY AND ALL RIGHTS TO DETERMINE THAT A FILE OR FOLDER SHOULD BE DELETED. YOU MUST **ALWAYS** ASK AND *RECEIVE* CLEAR, WRITTEN PERMISSION FROM ME BEFORE EVER EVEN THINKING OF DELETING A FILE OR FOLDER OF ANY KIND!!!
 
+**First step in any clone/session:** run `./scripts/ensure_git_hooks.sh` to force `core.hooksPath=.githooks` so Ruff/ty/Bandit hooks run on every commit. Re-run if hooks ever stop firing.
+
 ### IRREVERSIBLE GIT & FILESYSTEM ACTIONS — DO-NOT-EVER BREAK GLASS
 
 1. **Absolutely forbidden commands:** `git reset --hard`, `git clean -fd`, `rm -rf`, or any command that can delete or overwrite code/data must never be run unless the user explicitly provides the exact command and states, in the same message, that they understand and want the irreversible consequences.
@@ -66,6 +68,12 @@ bash -lc "cd /Users/jleechan/mcp_agent_mail && ./scripts/run_server_with_token.s
 You can also consult `third_party_docs/fastmcp_distilled_docs.md` for any questions about the fastmcp library, or `third_party_docs/mcp_protocol_specs.md` for any questions about the MCP protocol in general. For anything relating to Postgres, be sure to read `third_party_docs/POSTGRES18_AND_PYTHON_BEST_PRACTICES.md`.
 
 We load all configuration details from the existing .env file (even if you can't see this file, it DOES exist, and must NEVER be overwritten!). We NEVER use os.getenv() or dotenv or other methods to get variables from our .env file other than using python-decouple in this very specific pattern of usage (this is just an example but it always follows the same basic pattern):
+
+**Default posture:** proactively:
+- Run `./scripts/ensure_git_hooks.sh` at the start of every session (or after git operations) to keep hooks installed.
+- Run targeted tests for the area you touch (e.g., Slack integration → `uv run pytest tests/integration/test_slack_mcp_mail_integration.py`, webhook → `uv run pytest tests/integration/test_slack_webhook_api.py`) without being asked.
+- Before stating CI status, explicitly check the latest workflow run (including in-progress) and review annotations/logs; do not rely solely on prior green runs.
+- Re-run CI-reported failing suites locally and fix them before handoff.
 
 ```
 from decouple import Config as DecoupleConfig, RepositoryEnv

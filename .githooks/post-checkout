@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Ensure hooksPath stays pointed at .githooks after checkouts.
+
+set -euo pipefail
+
+current=$(git config --get core.hooksPath || true)
+if [ "$current" != ".githooks" ]; then
+  git config core.hooksPath .githooks
+  echo "[post-checkout] set core.hooksPath to .githooks"
+fi

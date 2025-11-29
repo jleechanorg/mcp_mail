@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": "2025-11-20T13:55:55.777048+00:00",
+  "id": 46,
+  "inception_ts": "2025-11-20T13:46:50.324537+00:00",
+  "is_active": false,
+  "last_active_ts": "2025-11-20T13:48:54.623255+00:00",
+  "model": "gpt-5",
+  "name": "Codex",
+  "program": "codex-cli",
+  "project_id": 8,
+  "task_description": "Coordinate PR split and outstanding tasks"
+}

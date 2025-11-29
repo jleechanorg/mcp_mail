@@ -265,10 +265,12 @@ When an agent sends a message via `send_message`, here's what happens:
 - **Blameable**: `git blame` traces who sent what and when
 - **Reversible**: `git revert` to undo problematic messages
 - **Portable**: Clone the repo to backup or share message history
-
+  
 **Configuration:**
 - Storage location: `STORAGE_ROOT` env var (default: `.mcp_mail`)
   - **Project-local (default)**: `.mcp_mail` - messages stored in project directory and committed to Git
+  - **Optional project-key anchored**: set `STORAGE_PROJECT_KEY_ENABLED=true` to store under `<project_key>/.mcp_mail` (project_key must be the git repo root)
+  - **Disable local archive**: set `STORAGE_LOCAL_ARCHIVE_ENABLED=false` to require project-key storage; otherwise defaults to `.mcp_mail`
   - **Global alternative**: `~/.mcp_agent_mail_git_mailbox_repo` - messages stored in user home directory
 - Git author: `GIT_AUTHOR_NAME` and `GIT_AUTHOR_EMAIL` env vars
 
@@ -279,12 +281,18 @@ uv run python -m mcp_agent_mail.http
 
 # Messages stored in ./mcp_mail/projects/<slug>/messages/
 # Commit to share: git add .mcp_mail && git commit -m "Add agent coordination messages"
+
+# Ensure git hooks are installed (enforces Ruff/ty/Bandit on commit)
+./scripts/ensure_git_hooks.sh
 ```
 
 **🔒 Want private messages?** Use global storage instead:
 ```bash
 # Set STORAGE_ROOT to use global directory (not committed to Git)
 STORAGE_ROOT=~/.mcp_agent_mail_git_mailbox_repo uv run python -m mcp_agent_mail.http
+
+# Use project-key anchored storage (project_key must be repo root)
+STORAGE_PROJECT_KEY_ENABLED=true uv run python -m mcp_agent_mail.http
 ```
 
 ---
@@ -403,6 +411,55 @@ Pitfalls to avoid
 - Always include `bd-###` in message `thread_id` to avoid ID drift across tools.
 
 ```
+
+## Slack Integration
+
+MCP Agent Mail includes full Slack integration, enabling agents to send notifications and post messages to Slack channels. See [SLACK_BIDIRECTIONAL_SYNC.md](SLACK_BIDIRECTIONAL_SYNC.md) for complete documentation.
+
+**Quick Setup:**
+
+1. Create a Slack app at [https://api.slack.com/apps](https://api.slack.com/apps)
+2. Add bot token scopes: `chat:write`, `channels:read`, `groups:read`, `channels:history`, `groups:history`, `reactions:read`, `app_mentions:read`
+3. Install to workspace and copy the bot token
+4. Configure in `.env`:
+   ```bash
+   SLACK_ENABLED=true
+   SLACK_BOT_TOKEN=xoxb-your-token-here
+   SLACK_DEFAULT_CHANNEL=general
+   ```
+5. Restart the server
+
+**Features:**
+
+- **Automatic Notifications**: MCP messages automatically posted to Slack
+- **Manual Posting**: `slack_post_message()` tool for direct Slack posts
+- **Channel Discovery**: `slack_list_channels()` to explore available channels
+- **Channel Insights**: `slack_get_channel_info()` to inspect metadata and member counts before posting
+- **Thread Support**: MCP threads map to Slack threads for conversation continuity
+- **Rich Formatting**: Uses Slack Block Kit for enhanced message presentation
+- **Webhook Support**: Receive Slack events for future bidirectional sync
+
+**Example:**
+```python
+# Automatically notify Slack when sending an MCP message
+send_message(
+    project_key="myproject",
+    agent_name="BlueWhale",
+    to=["GreenCastle"],
+    subject="Deploy completed",
+    body_md="Production deployment successful ✅",
+    importance="normal"
+)
+# → Slack notification appears in configured channel
+
+# Or post directly to Slack
+slack_post_message(
+    channel="deployments",
+    text="🚀 Build #1234 deployed to production"
+)
+```
+
+See [SLACK_BIDIRECTIONAL_SYNC.md](SLACK_BIDIRECTIONAL_SYNC.md) for full configuration options, MCP tools reference, webhook setup, and troubleshooting.
 
 ## Core ideas (at a glance)
 
@@ -1757,6 +1814,8 @@ result = await client.call_tool("list_extended_tools", {})
 | Name | Default | Description |
 | :-- | :-- | :-- |
 | `STORAGE_ROOT` | `.mcp_mail` | Root for per-project repos and SQLite DB (project-local by default) |
+| `STORAGE_PROJECT_KEY_ENABLED` | `false` | When true, use `<project_key>/.mcp_mail` as archive root (project_key must be git repo root) |
+| `STORAGE_LOCAL_ARCHIVE_ENABLED` | `true` | When false, disable default `.mcp_mail` archive; requires project-key storage |
 | `HTTP_HOST` | `127.0.0.1` | Bind host for HTTP transport |
 | `HTTP_PORT` | `8765` | Bind port for HTTP transport |
 | `HTTP_PATH` | `/mcp/` | HTTP path where MCP endpoint is mounted |

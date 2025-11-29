@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": null,
+  "id": 12,
+  "inception_ts": "2025-11-19T11:26:24.178114+00:00",
+  "is_active": true,
+  "last_active_ts": "2025-11-19T11:52:49.101551+00:00",
+  "model": "sonnet-4.5",
+  "name": "mv",
+  "program": "claude-code",
+  "project_id": 3,
+  "task_description": "Message validation and evidence verification"
+}

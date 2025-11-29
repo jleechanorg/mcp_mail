@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": null,
+  "id": 22,
+  "inception_ts": "2025-11-18T13:49:26.146082+00:00",
+  "is_active": true,
+  "last_active_ts": "2025-11-18T13:49:26.146089+00:00",
+  "model": "gpt-5.0",
+  "name": "preview",
+  "program": "codex-cli",
+  "project_id": 8,
+  "task_description": "Preview MCP mail agent"
+}

@@ -1,0 +1,14 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": "2025-11-19T13:34:07.374252+00:00",
+  "id": 3,
+  "inception_ts": "2025-11-19T12:41:14.381591+00:00",
+  "is_active": false,
+  "last_active_ts": "2025-11-19T12:41:56.829937+00:00",
+  "model": "sonnet-4.5",
+  "name": "BackendDev",
+  "program": "claude-code",
+  "project_id": 1,
+  "task_description": "FastAPI Backend Development"
+}
