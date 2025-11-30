@@ -67,6 +67,7 @@ def test_mirror_message_to_slack_includes_cc_and_bcc(monkeypatch):
     resp = mirror_message_to_slack(frontmatter, body)
 
     assert resp == "ok"
+    assert captured["url"] == "https://hooks.slack.com/services/test"
     text = captured["payload"]["text"]
     # Verify all recipient types are included
     assert "SenderAgent" in text
