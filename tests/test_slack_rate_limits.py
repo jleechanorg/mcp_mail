@@ -62,4 +62,3 @@ async def test_slack_and_slackbox_rate_limits_use_independent_config(monkeypatch
 
         resp5 = await client.post("/slackbox/incoming", data=form)
         assert resp5.status_code == 429
-
