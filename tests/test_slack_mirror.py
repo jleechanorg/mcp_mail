@@ -39,6 +39,65 @@ def test_mirror_message_to_slack_posts_when_enabled(monkeypatch):
     assert "RecipientAgent" in text
 
 
+def test_mirror_message_to_slack_includes_cc_and_bcc(monkeypatch):
+    """Test that cc and bcc recipients are also included in the Slack message."""
+    captured = {}
+
+    def fake_post(url, payload):
+        captured["url"] = url
+        captured["payload"] = payload
+        return "ok"
+
+    monkeypatch.setenv("SLACK_MCP_MAIL_WEBHOOK_URL", "https://hooks.slack.com/services/test")
+    monkeypatch.setenv("SLACK_MIRROR_ENABLED", "1")
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "")
+    monkeypatch.setenv("SLACK_LIVE_TEST", "0")
+
+    monkeypatch.setattr("mcp_agent_mail.slack_integration._post_webhook", fake_post)
+
+    frontmatter = {
+        "project": "proj",
+        "subject": "subj",
+        "from": "SenderAgent",
+        "to": ["RecipientAgent"],
+        "cc": ["CCAgent"],
+        "bcc": ["BCCAgent"],
+    }
+    body = "hello body"
+    resp = mirror_message_to_slack(frontmatter, body)
+
+    assert resp == "ok"
+    text = captured["payload"]["text"]
+    # Verify all recipient types are included
+    assert "SenderAgent" in text
+    assert "RecipientAgent" in text
+    assert "CCAgent" in text
+    assert "BCCAgent" in text
+
+
+def test_mirror_message_to_slack_handles_missing_names(monkeypatch):
+    """Test that missing from/to fields are handled gracefully."""
+    captured = {}
+
+    def fake_post(url, payload):
+        captured["payload"] = payload
+        return "ok"
+
+    monkeypatch.setattr("mcp_agent_mail.slack_integration._post_webhook", fake_post)
+    monkeypatch.setenv("SLACK_MCP_MAIL_WEBHOOK_URL", "https://hooks.slack.com/services/test")
+    monkeypatch.setenv("SLACK_MIRROR_ENABLED", "1")
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "")
+    monkeypatch.setenv("SLACK_LIVE_TEST", "0")
+
+    frontmatter = {"project": "proj", "subject": "subj"}  # No from/to
+    mirror_message_to_slack(frontmatter, "body")
+
+    text = captured["payload"]["text"]
+    assert "proj" in text
+    assert "*From:*" not in text
+    assert "*To:*" not in text
+
+
 def test_mirror_message_to_slack_skips_when_disabled(monkeypatch):
     monkeypatch.delenv("SLACK_MCP_MAIL_WEBHOOK_URL", raising=False)
     monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
