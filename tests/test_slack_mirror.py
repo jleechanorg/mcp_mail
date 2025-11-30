@@ -24,6 +24,8 @@ def test_mirror_message_to_slack_posts_when_enabled(monkeypatch):
         "thread_id": "tid",
         "from": "SenderAgent",
         "to": ["RecipientAgent"],
+        "cc": ["CCAgent"],
+        "bcc": ["BCCAgent"],
     }
     body = "hello body"
     resp = mirror_message_to_slack(frontmatter, body)
@@ -35,8 +37,34 @@ def test_mirror_message_to_slack_posts_when_enabled(monkeypatch):
     assert "subj" in text
     assert "tid" in text
     assert "hello body" in text
-    assert "SenderAgent" in text
-    assert "RecipientAgent" in text
+    assert "*From:* SenderAgent" in text
+    assert "*To:* RecipientAgent, CCAgent, BCCAgent" in text
+
+
+def test_mirror_message_to_slack_handles_missing_names(monkeypatch):
+    captured = {}
+
+    def fake_post(url, payload):
+        captured["payload"] = payload
+        return "ok"
+
+    monkeypatch.setenv("SLACK_MCP_MAIL_WEBHOOK_URL", "https://hooks.slack.com/services/test")
+    monkeypatch.setenv("SLACK_MIRROR_ENABLED", "1")
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "")
+
+    monkeypatch.setattr("mcp_agent_mail.slack_integration._post_webhook", fake_post)
+
+    frontmatter = {"project": "proj", "subject": "subj"}
+    body = "hello body"
+
+    resp = mirror_message_to_slack(frontmatter, body)
+
+    assert resp == "ok"
+    text = captured["payload"]["text"]
+    assert "proj" in text
+    assert "subj" in text
+    assert "*From:*" not in text
+    assert "*To:*" not in text
 
 
 def test_mirror_message_to_slack_skips_when_disabled(monkeypatch):

@@ -319,7 +319,14 @@ def mirror_message_to_slack(frontmatter: dict[str, Any], body_md: str) -> str | 
     project = frontmatter.get("project", "")
     subject = frontmatter.get("subject", "")
     sender_name = frontmatter.get("from", "")
-    recipients = [*frontmatter.get("to", []), *frontmatter.get("cc", []), *frontmatter.get("bcc", [])]
+
+    recipients: list[str] = []
+    for key in ("to", "cc", "bcc"):
+        value = frontmatter.get(key)
+        if isinstance(value, str):
+            recipients.append(value)
+        elif isinstance(value, list):
+            recipients.extend(value)
     thread = frontmatter.get("thread_id")
     title = f"{project} | {subject}".strip(" |")
     if thread:
