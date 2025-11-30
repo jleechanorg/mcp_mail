@@ -196,6 +196,7 @@ tmp
 .artifacts*
 run_server_clean.sh.txt
 vendor/*
+.agent_prompt*
 
 # Benchmark results - exclude transient JSON output files
 benchmarks/tmp_*
