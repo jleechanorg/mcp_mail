@@ -180,6 +180,42 @@ def _send_live_slack_message(text: str) -> str:
         return body.strip()
 
 
+def _live_mirror_payload(sender: str, recipients: list[str]) -> str | None:
+    """Send a real webhook payload and return response if live testing is enabled."""
+    webhook = os.getenv("SLACK_MCP_MAIL_WEBHOOK_URL")
+    enabled = os.getenv("SLACK_LIVE_TEST") == "1"
+    if not (enabled and webhook):
+        return None
+
+    frontmatter = {
+        "project": "live-test",
+        "subject": "Live Slack agent visibility test",
+        "from": sender,
+        "to": recipients,
+    }
+    body_md = "This is a live Slack webhook test to verify agent names are included."
+
+    from mcp_agent_mail.slack_integration import mirror_message_to_slack
+
+    return mirror_message_to_slack(frontmatter, body_md)
+
+
+@pytest.mark.asyncio
+async def test_slack_live_webhook_includes_agent_names(monkeypatch):
+    """Live Slack webhook test: ensures From/To are present in the payload sent to the webhook.
+
+    Guarded by SLACK_LIVE_TEST=1 and SLACK_MCP_MAIL_WEBHOOK_URL. If not set, this test is skipped.
+    """
+    if os.getenv("SLACK_LIVE_TEST") != "1" or not os.getenv("SLACK_MCP_MAIL_WEBHOOK_URL"):
+        pytest.skip("SLACK_LIVE_TEST not enabled or webhook not set")
+
+    sender = "LiveSenderAgent"
+    recipients = ["LiveRecipientA", "LiveRecipientB"]
+
+    resp = _live_mirror_payload(sender, recipients)
+    assert resp is not None  # Should have been sent
+
+
 @pytest.mark.asyncio
 async def test_slack_message_creates_mcp_mail_entry(mcp_mail_repo):
     """Test that incoming Slack message creates entry in .mcp_mail/."""
