@@ -268,9 +268,9 @@ When an agent sends a message via `send_message`, here's what happens:
   
 **Configuration:**
 - Storage location: `STORAGE_ROOT` env var (default: `.mcp_mail`)
-  - **Project-local (default)**: `.mcp_mail` - messages stored in project directory and committed to Git
-  - **Optional project-key anchored**: set `STORAGE_PROJECT_KEY_ENABLED=true` to store under `<project_key>/.mcp_mail` (project_key must be the git repo root)
-  - **Disable local archive**: set `STORAGE_LOCAL_ARCHIVE_ENABLED=false` to require project-key storage; otherwise defaults to `.mcp_mail`
+  - **Project-local**: set `STORAGE_LOCAL_ARCHIVE_ENABLED=true` to store in `.mcp_mail` - messages stored in project directory and committed to Git
+  - **Project-key anchored**: set `STORAGE_PROJECT_KEY_ENABLED=true` to store under `<project_key>/.mcp_mail` (project_key must be the git repo root)
+  - **Default behavior**: Both storage modes disabled by default; must explicitly enable one to use MCP Agent Mail
   - **Global alternative**: `~/.mcp_agent_mail_git_mailbox_repo` - messages stored in user home directory
 - Git author: `GIT_AUTHOR_NAME` and `GIT_AUTHOR_EMAIL` env vars
 
@@ -1972,7 +1972,7 @@ result = await client.call_tool("list_extended_tools", {})
 | :-- | :-- | :-- |
 | `STORAGE_ROOT` | `.mcp_mail` | Root for per-project repos and SQLite DB (project-local by default) |
 | `STORAGE_PROJECT_KEY_ENABLED` | `false` | When true, use `<project_key>/.mcp_mail` as archive root (project_key must be git repo root) |
-| `STORAGE_LOCAL_ARCHIVE_ENABLED` | `true` | When false, disable default `.mcp_mail` archive; requires project-key storage |
+| `STORAGE_LOCAL_ARCHIVE_ENABLED` | `false` | When true, enable `.mcp_mail` archive; when false, requires project-key storage |
 | `HTTP_HOST` | `127.0.0.1` | Bind host for HTTP transport |
 | `HTTP_PORT` | `8765` | Bind port for HTTP transport |
 | `HTTP_PATH` | `/mcp/` | HTTP path where MCP endpoint is mounted |
