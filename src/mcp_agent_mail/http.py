@@ -1193,7 +1193,14 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         form = await request.form()
 
         token = (form.get("token") or "").strip()
-        if settings.slack.slackbox_token and token != settings.slack.slackbox_token:
+        expected_token = (settings.slack.slackbox_token or "").strip()
+        if not expected_token:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Slackbox token not configured",
+            )
+
+        if token != expected_token:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Slackbox token")
 
         text = (form.get("text") or "").strip()

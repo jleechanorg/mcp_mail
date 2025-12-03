@@ -63,3 +63,24 @@ async def test_slackbox_rejects_invalid_token(monkeypatch):
         )
 
     assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_slackbox_requires_configured_token(monkeypatch):
+    monkeypatch.setenv("SLACK_ENABLED", "1")
+    monkeypatch.setenv("SLACKBOX_ENABLED", "1")
+    monkeypatch.delenv("SLACKBOX_TOKEN", raising=False)
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+    settings = get_settings()
+    app = build_http_app(settings)
+    await ensure_schema()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/slackbox/incoming",
+            data={"text": "hi"},
+        )
+
+    assert resp.status_code == 503
