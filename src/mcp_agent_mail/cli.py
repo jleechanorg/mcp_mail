@@ -516,19 +516,22 @@ def products_summarize_thread(
     """
     Summarize a thread across all projects in a product. Prefers server tool; minimal fallback if server is unavailable.
     """
-    result = _call_server_tool(
-        "cli-products-summarize-thread",
-        "summarize_thread_product",
-        {
-            "product_key": product_key,
-            "thread_id": thread_id,
-            "include_examples": True,
-            "llm_mode": (not no_llm),
-            "per_thread_limit": int(per_thread_limit),
-        },
-        timeout=8.0,
-        error_notice="[dim]Server unavailable ({exc}); summarization requires the server tool.[/dim]",
-    ) or {}
+    result = (
+        _call_server_tool(
+            "cli-products-summarize-thread",
+            "summarize_thread_product",
+            {
+                "product_key": product_key,
+                "thread_id": thread_id,
+                "include_examples": True,
+                "llm_mode": (not no_llm),
+                "per_thread_limit": int(per_thread_limit),
+            },
+            timeout=8.0,
+            error_notice="[dim]Server unavailable ({exc}); summarization requires the server tool.[/dim]",
+        )
+        or {}
+    )
     if not result:
         console.print(
             "[yellow]Server unavailable; summarization requires server tool. Try again when server is running.[/]"
