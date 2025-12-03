@@ -127,3 +127,180 @@ async def test_slack_webhook_thread_mapping(monkeypatch):
         message = result.scalars().first()
     assert message is not None
     assert message.thread_id == "slack_CCHAN123_1234567890.111111"
+
+
+@pytest.mark.asyncio
+async def test_slack_webhook_records_thread_mapping_for_top_level(monkeypatch):
+    """Top-level Slack messages should map threads using the message ts when bot client is available."""
+
+    class DummySlackClient:
+        def __init__(self) -> None:
+            self.mappings: list[tuple[str, str, str]] = []
+
+        async def map_thread(self, mcp_thread_id: str, slack_channel_id: str, slack_thread_ts: str) -> None:
+            self.mappings.append((mcp_thread_id, slack_channel_id, slack_thread_ts))
+
+    monkeypatch.setenv("SLACK_ENABLED", "1")
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test-token")
+    monkeypatch.setenv("SLACK_SIGNING_SECRET", "test-secret")
+    monkeypatch.setenv("SLACK_SYNC_ENABLED", "1")
+    monkeypatch.setenv("SLACK_SYNC_CHANNELS", "CCHAN321")
+    monkeypatch.setenv("SLACK_SYNC_PROJECT_NAME", "slack-sync-test-top-level")
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+    settings = get_settings()
+    app = build_http_app(settings)
+    await ensure_schema()
+
+    payload = {
+        "type": "event_callback",
+        "event": {
+            "type": "message",
+            "channel": "CCHAN321",
+            "user": "U555",
+            "text": "Top level message",
+            "ts": "5555555555.555555",
+        },
+    }
+    body = json.dumps(payload)
+    timestamp = str(int(time.time()))
+    signature = _slack_signature(settings.slack.signing_secret or "", timestamp, body)
+
+    dummy_client = DummySlackClient()
+    import mcp_agent_mail.app as app_module
+
+    app_module._slack_client = dummy_client
+    try:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/slack/events",
+                content=body,
+                headers={
+                    "X-Slack-Request-Timestamp": timestamp,
+                    "X-Slack-Signature": signature,
+                    "Content-Type": "application/json",
+                },
+            )
+    finally:
+        app_module._slack_client = None
+
+    assert resp.status_code == 200
+    assert dummy_client.mappings == [
+        ("slack_CCHAN321_5555555555.555555", "CCHAN321", "5555555555.555555"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_notify_slack_message_replies_into_slack_thread(monkeypatch):
+    """Thread-id patterns should keep replies in the originating Slack thread when no mapping exists."""
+
+    class DummySlackClient:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, str | None]] = []
+
+        async def get_slack_thread(self, thread_id: str):
+            return None
+
+        async def post_message(
+            self,
+            *,
+            channel: str,
+            text: str,
+            blocks: list[dict] | None = None,
+            thread_ts: str | None = None,
+            mrkdwn: bool = True,
+        ) -> dict[str, str | None]:
+            self.calls.append({
+                "channel": channel,
+                "text": text,
+                "thread_ts": thread_ts,
+            })
+            return {"ok": True, "ts": thread_ts, "channel": channel}
+
+    monkeypatch.setenv("SLACK_ENABLED", "1")
+    monkeypatch.setenv("SLACK_NOTIFY_ON_MESSAGE", "1")
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test-token")
+    monkeypatch.setenv("SLACK_SIGNING_SECRET", "test-secret")
+    monkeypatch.setenv("SLACK_DEFAULT_CHANNEL", "CDEFAULT")
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+    settings = get_settings()
+
+    client = DummySlackClient()
+    thread_id = "slack_CSLACK123_1111.2222"
+
+    from mcp_agent_mail.slack_integration import notify_slack_message
+
+    await notify_slack_message(
+        client=client,
+        settings=settings,
+        message_id="mid-1",
+        subject="Reply subject",
+        body_md="Reply body",
+        sender_name="Responder",
+        recipients=["SlackBridge"],
+        thread_id=thread_id,
+    )
+
+    assert len(client.calls) == 1
+    call = client.calls[0]
+    assert call["channel"] == "CSLACK123"
+    assert call["thread_ts"] == "1111.2222"
+    assert "Reply subject" in (call["text"] or "")
+
+
+@pytest.mark.asyncio
+async def test_notify_slack_ack_replies_into_slack_thread(monkeypatch):
+    """Ack notifications should reply to the originating Slack thread when no mapping exists."""
+
+    class DummySlackClient:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, str | None]] = []
+
+        async def get_slack_thread(self, thread_id: str):
+            return None
+
+        async def post_message(
+            self,
+            *,
+            channel: str,
+            text: str,
+            blocks: list[dict] | None = None,
+            thread_ts: str | None = None,
+            mrkdwn: bool = True,
+        ) -> dict[str, str | None]:
+            self.calls.append({"channel": channel, "text": text, "thread_ts": thread_ts})
+            return {"ok": True, "ts": thread_ts, "channel": channel}
+
+        async def map_thread(self, mcp_thread_id: str, slack_channel_id: str, slack_thread_ts: str) -> None:
+            return None
+
+    monkeypatch.setenv("SLACK_ENABLED", "1")
+    monkeypatch.setenv("SLACK_NOTIFY_ON_ACK", "1")
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test-token")
+    monkeypatch.setenv("SLACK_SIGNING_SECRET", "test-secret")
+    monkeypatch.setenv("SLACK_DEFAULT_CHANNEL", "CDEFAULT")
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+    settings = get_settings()
+
+    client = DummySlackClient()
+    thread_id = "slack_CACK123_9999.8888"
+
+    from mcp_agent_mail.slack_integration import notify_slack_ack
+
+    await notify_slack_ack(
+        client=client,
+        settings=settings,
+        message_id="mid-ack-1",
+        agent_name="Responder",
+        subject="Ack subject",
+        thread_id=thread_id,
+    )
+
+    assert len(client.calls) == 1
+    call = client.calls[0]
+    assert call["channel"] == "CACK123"
+    assert call["thread_ts"] == "9999.8888"
+    assert "Ack subject" in (call["text"] or "")
