@@ -554,7 +554,9 @@ async def notify_slack_ack(
             else:
                 match = _SLACK_THREAD_ID_PATTERN.match(thread_key)
                 if match:
-                    channel, slack_thread_ts = match.groups()
+                    derived_channel, derived_ts = match.groups()
+                    channel = derived_channel
+                    slack_thread_ts = derived_ts
 
         response = await client.post_message(
             channel=channel,
