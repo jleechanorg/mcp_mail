@@ -211,11 +211,13 @@ async def test_notify_slack_message_replies_into_slack_thread(monkeypatch):
             thread_ts: str | None = None,
             mrkdwn: bool = True,
         ) -> dict[str, str | None]:
-            self.calls.append({
-                "channel": channel,
-                "text": text,
-                "thread_ts": thread_ts,
-            })
+            self.calls.append(
+                {
+                    "channel": channel,
+                    "text": text,
+                    "thread_ts": thread_ts,
+                }
+            )
             return {"ok": True, "ts": thread_ts, "channel": channel}
 
     monkeypatch.setenv("SLACK_ENABLED", "1")
