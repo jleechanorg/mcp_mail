@@ -34,7 +34,7 @@ Slackbox reuses `SLACK_SYNC_PROJECT_NAME` to choose the project that receives th
 
 ## Error Handling & Limits
 - 401 for invalid/missing token.
-- 503 when Slackbox is disabled or the Slack signing secret is missing for the main Slack app.
+- 503 when Slackbox is disabled.
 - Empty texts short-circuit with a friendly 200 response to avoid noisy retries.
 - Dedupe cache prevents duplicate inserts on webhook retries using `(channel, timestamp)` keys when available.
 
