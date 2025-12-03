@@ -559,17 +559,18 @@ async def test_message_search(mcp_client, tmp_path):
         },
     )
 
-    # Search for "authentication"
+    # Search for "authentication" using search_mailbox (core tool)
     search_result = await mcp_client.call_tool(
-        "search_messages",
+        "search_mailbox",
         {
             "project_key": str(project_path),
             "query": "authentication",
             "limit": 10,
+            "include_bodies": True,
         },
     )
 
-    # search_messages returns structured content; normalize to a list
+    # search_mailbox returns structured content; normalize to a list
     results = search_result.structured_content or []
     if isinstance(results, dict) and "result" in results:
         results = results["result"]

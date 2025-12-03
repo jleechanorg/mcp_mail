@@ -3352,9 +3352,28 @@ def build_mcp_server() -> FastMCP:
 
         try:
             if hasattr(tool_func, "run"):
-                return await tool_func.run(arguments or {})
-            result = await tool_func(ctx, **(arguments or {}))
-            return result
+                result = await tool_func.run(arguments or {})
+            else:
+                result = await tool_func(ctx, **(arguments or {}))
+
+            if isinstance(result, ToolResult):
+                payload: Any = getattr(result, "structured_content", None)
+                if payload is None and hasattr(result, "content"):
+                    payload = result.content
+                if payload is None and hasattr(result, "data"):
+                    payload = result.data
+                if payload is None:
+                    try:
+                        payload = next(iter(result)) if result else None
+                    except (TypeError, IndexError, StopIteration):
+                        payload = None
+                result = payload
+
+            # Avoid double-wrapping if the tool already returned a structured result
+            if isinstance(result, dict) and set(result.keys()) == {"result"}:
+                return result
+
+            return {"result": result}
         except TypeError as e:
             # Invalid arguments
             raise ValueError(f"Invalid arguments for {tool_name}: {e!s}") from e
@@ -4163,8 +4182,8 @@ def build_mcp_server() -> FastMCP:
                             if sanitized:
                                 key_candidates.add(sanitized.lower())
 
-                    # Allow self-send
-                    if sender_candidate_keys.intersection(key_candidates):
+                    # Allow self-send unless explicitly targeting another project
+                    if not target_project and sender_candidate_keys.intersection(key_candidates):
                         if kind == "to":
                             all_to.append(sender.name)
                         elif kind == "cc":
@@ -4206,6 +4225,9 @@ def build_mcp_server() -> FastMCP:
                     # when the real agent registers with that name.
                     newly_registered: list[tuple[str, set[str]]] = []
                     for missing in list(unknown.keys()):
+                        # Skip cross-project address syntaxes; only auto-register simple names
+                        if missing.startswith("project:") or "@" in missing:
+                            continue
                         try:
                             placeholder = await _create_placeholder_agent(
                                 project,
