@@ -218,7 +218,7 @@ def test_share_export_end_to_end(monkeypatch, tmp_path: Path) -> None:
     assert "viewer/index.html" in names
 
     readme_text = (output_dir / "README.md").read_text(encoding="utf-8")
-    assert "Detected hosting targets" in readme_text
+    assert "Detected hosting signals" in readme_text
 
     deployment_text = (output_dir / "HOW_TO_DEPLOY.md").read_text(encoding="utf-8")
     assert "## GitHub Pages (detected)" in deployment_text
