@@ -196,7 +196,7 @@ tmp
 .artifacts*
 run_server_clean.sh.txt
 vendor/*
-# Internal automation prompt artifacts (tracked file retained per repo policy)
+# Internal automation prompt artifacts (auto-generated; do not commit—existing tracked file retained per repo policy)
 .agent_prompt*
 
 # Benchmark results - exclude transient JSON output files
