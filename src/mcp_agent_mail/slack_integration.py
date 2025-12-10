@@ -362,10 +362,17 @@ def format_mcp_message_for_slack(
         "low": ":information_source:",
     }.get(importance, ":email:")
 
-    # Fallback text for notifications with importance indicator and full routing info
+    # Limit recipient expansion to avoid Slack field limits while preserving counts
+    max_recipients = 5
+    displayed_recipients = recipients[:max_recipients]
+    extra_recipient_count = max(len(recipients) - max_recipients, 0)
+
+    # Fallback text for notifications with importance indicator and routing info
     if recipients:
-        recipient_list = ", ".join(recipients)
-        text = f"{importance_emoji} *{subject}* from *{sender_name}* to {recipient_list}"
+        truncated_list = ", ".join(displayed_recipients)
+        if extra_recipient_count:
+            truncated_list = f"{truncated_list}, +{extra_recipient_count} more"
+        text = f"{importance_emoji} *{subject}* from *{sender_name}* to {truncated_list}"
     else:
         text = f"{importance_emoji} *{subject}* from *{sender_name}*"
 
@@ -389,7 +396,13 @@ def format_mcp_message_for_slack(
     )
 
     # Metadata section
-    recipient_lines = "\n".join(f"• {name}" for name in recipients) if recipients else "—"
+    if recipients:
+        lines = [f"• {name}" for name in displayed_recipients]
+        if extra_recipient_count:
+            lines.append(f"• +{extra_recipient_count} more")
+        recipient_lines = "\n".join(lines)
+    else:
+        recipient_lines = "—"
 
     metadata_fields = [
         {"type": "mrkdwn", "text": f"*From:*\n*{sender_name}*"},
