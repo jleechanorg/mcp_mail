@@ -226,7 +226,7 @@ async def test_notify_slack_message_replies_into_slack_thread(monkeypatch):
             )
             # Return a unique message timestamp for each call
             self.message_counter += 1
-            new_ts = f"{9999999999 + self.message_counter}.{str(self.message_counter).zfill(6)}"
+            new_ts = f"1000000000.{str(self.message_counter).zfill(6)}"
             return {"ok": True, "ts": new_ts, "channel": channel}
 
     monkeypatch.setenv("SLACK_ENABLED", "1")
