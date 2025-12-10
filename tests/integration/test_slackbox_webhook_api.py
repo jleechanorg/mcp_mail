@@ -84,3 +84,16 @@ async def test_slackbox_requires_configured_token(monkeypatch):
         )
 
     assert resp.status_code == 503
+
+
+def test_slackbox_thread_pattern_allows_underscore_channel_names():
+    from mcp_agent_mail.slack_integration import _SLACK_THREAD_ID_PATTERN
+
+    thread_id = "slackbox_my_channel_1111.2222"
+    match = _SLACK_THREAD_ID_PATTERN.match(thread_id)
+
+    assert match is not None
+    channel, ts = match.groups()
+
+    assert channel == "my_channel"
+    assert ts == "1111.2222"
