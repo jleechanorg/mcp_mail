@@ -200,6 +200,7 @@ async def test_notify_slack_message_replies_into_slack_thread(monkeypatch):
         def __init__(self) -> None:
             self.calls: list[dict[str, str | None]] = []
             self.mappings: list[tuple[str, str, str]] = []
+            self.message_counter = 0
 
         async def get_slack_thread(self, thread_id: str):
             return None
@@ -223,7 +224,10 @@ async def test_notify_slack_message_replies_into_slack_thread(monkeypatch):
                     "thread_ts": thread_ts,
                 }
             )
-            return {"ok": True, "ts": "9999999999.999999", "channel": channel}
+            # Return a unique message timestamp for each call
+            self.message_counter += 1
+            new_ts = f"{9999999999 + self.message_counter}.{str(self.message_counter).zfill(6)}"
+            return {"ok": True, "ts": new_ts, "channel": channel}
 
     monkeypatch.setenv("SLACK_ENABLED", "1")
     monkeypatch.setenv("SLACK_NOTIFY_ON_MESSAGE", "1")
