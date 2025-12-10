@@ -20,6 +20,7 @@ def isolated_env(tmp_path, monkeypatch):
     monkeypatch.setenv("MCP_TOOLS_MODE", "extended")
     storage_root = tmp_path / "storage"
     monkeypatch.setenv("STORAGE_ROOT", str(storage_root))
+    monkeypatch.setenv("STORAGE_LOCAL_ARCHIVE_ENABLED", "true")
     monkeypatch.setenv("GIT_AUTHOR_NAME", "test-agent")
     monkeypatch.setenv("GIT_AUTHOR_EMAIL", "test@example.com")
     monkeypatch.setenv("INLINE_IMAGE_MAX_BYTES", "128")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+# ruff: noqa: B008
 import asyncio
 import hashlib
 import json
@@ -19,13 +20,14 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Annotated, Any, Optional, cast
+from typing import Annotated, Any, Iterable, List, Optional, Sequence, cast
 
+import httpx
 import typer
 import uvicorn
 from rich.console import Console
 from rich.table import Table
-from sqlalchemy import asc, desc, func, select
+from sqlalchemy import asc, bindparam, desc, func, select, text
 from sqlalchemy.engine import make_url
 
 from .app import build_mcp_server
@@ -33,7 +35,7 @@ from .config import get_settings
 from .db import ensure_schema, get_session
 from .guard import install_guard as install_guard_script, uninstall_guard as uninstall_guard_script
 from .http import build_http_app
-from .models import Agent, FileReservation, Message, MessageRecipient, Project
+from .models import Agent, FileReservation, Message, MessageRecipient, Product, ProductProjectLink, Project
 from .share import (
     DEFAULT_CHUNK_SIZE,
     DEFAULT_CHUNK_THRESHOLD,
@@ -78,6 +80,12 @@ mail_app = typer.Typer(help="Mail diagnostics and routing status")
 app.add_typer(mail_app, name="mail")
 projects_app = typer.Typer(help="Project maintenance utilities")
 app.add_typer(projects_app, name="projects")
+amctl_app = typer.Typer(help="Build and environment helpers")
+app.add_typer(amctl_app, name="amctl")
+products_app = typer.Typer(help="Product Bus: manage products and links")
+app.add_typer(products_app, name="products")
+docs_app = typer.Typer(help="Documentation helpers for agent onboarding")
+app.add_typer(docs_app, name="docs")
 
 
 async def _get_project_record(identifier: str) -> Project:
@@ -108,6 +116,473 @@ def _iso(dt: Optional[datetime]) -> str:
     if dt is None:
         return ""
     return dt.astimezone(timezone.utc).isoformat()
+
+
+def _call_server_tool(
+    request_id: str,
+    tool_name: str,
+    arguments: dict[str, Any],
+    *,
+    timeout: float = 5.0,
+    error_notice: Optional[str] = None,
+) -> Any:
+    """Invoke a server tool via JSON-RPC; return result or None on failure."""
+
+    settings = get_settings()
+    server_url = f"http://{settings.http.host}:{settings.http.port}{settings.http.path}"
+    bearer = settings.http.bearer_token or ""
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            headers: dict[str, str] = {}
+            if bearer:
+                headers["Authorization"] = f"Bearer {bearer}"
+            req = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": "tools/call",
+                "params": {
+                    "name": tool_name,
+                    "arguments": arguments,
+                },
+            }
+            resp = client.post(server_url, json=req, headers=headers)
+            data = resp.json()
+            return (data or {}).get("result")
+    except (httpx.HTTPError, ValueError, json.JSONDecodeError) as exc:
+        if error_notice:
+            console.print(error_notice.format(exc=exc))
+        return None
+
+
+@products_app.command("ensure")
+def products_ensure(
+    product_key: Annotated[Optional[str], typer.Argument(help="Product uid or name")] = None,
+    name: Annotated[Optional[str], typer.Option(..., "--name", "-n", help="Product display name")] = None,
+) -> None:
+    """
+    Ensure a product exists (creates if missing) and print its identifiers.
+    """
+    key = (product_key or name or "").strip()
+    if not key:
+        raise typer.BadParameter("Provide a product_key or --name.")
+    # Prefer server tool to ensure consistent uid policy
+    resp = _call_server_tool(
+        "cli-products-ensure",
+        "ensure_product",
+        {"product_key": product_key or "", "name": name or ""},
+        error_notice="[dim]Server unavailable ({exc}); falling back to local DB.[/dim]",
+    )
+    resp_data: dict[str, Any] = resp if isinstance(resp, dict) else {}
+    if not resp_data:
+        # Fallback to local DB with the same strict uid policy
+        async def _ensure_local() -> dict[str, Any]:
+            await ensure_schema()
+            async with get_session() as session:
+                existing = await session.execute(
+                    select(Product).where((Product.product_uid == key) | (Product.name == key))
+                )
+                prod = existing.scalars().first()
+                if prod:
+                    return {
+                        "id": prod.id,
+                        "product_uid": prod.product_uid,
+                        "name": prod.name,
+                        "created_at": prod.created_at,
+                    }
+                import re as _re
+                import uuid as _uuid
+
+                uid_pattern = _re.compile(r"^[A-Fa-f0-9]{8,64}$")
+                if product_key and uid_pattern.fullmatch(product_key.strip()):
+                    uid = product_key.strip().lower()
+                else:
+                    uid = _uuid.uuid4().hex[:20]
+                display_name = (name or key).strip()
+                display_name = " ".join(display_name.split())[:255] or uid
+                prod = Product(product_uid=uid, name=display_name)
+                session.add(prod)
+                await session.commit()
+                await session.refresh(prod)
+                return {
+                    "id": prod.id,
+                    "product_uid": prod.product_uid,
+                    "name": prod.name,
+                    "created_at": prod.created_at,
+                }
+
+        resp_data = asyncio.run(_ensure_local())
+    table = Table(title="Product", show_lines=False)
+    table.add_column("Field")
+    table.add_column("Value")
+    table.add_row("id", str(resp_data.get("id", "")))
+    table.add_row("product_uid", str(resp_data.get("product_uid", "")))
+    table.add_row("name", str(resp_data.get("name", "")))
+    _created = resp_data.get("created_at", "")
+    try:
+        if hasattr(_created, "isoformat"):
+            _created = _created.isoformat()
+    except Exception:
+        # If _created is not ISO-serializable, keep the raw value for display.
+        pass
+    table.add_row("created_at", str(_created))
+    console.print(table)
+
+
+@products_app.command("link")
+def products_link(
+    product_key: Annotated[str, typer.Argument(help="Product uid or name")],
+    project: Annotated[str, typer.Argument(help="Project slug or path")],
+) -> None:
+    """
+    Link a project into a product (idempotent).
+    """
+
+    async def _link() -> dict:
+        await ensure_schema()
+        prod = await _get_product_record(product_key.strip())
+        proj = await _get_project_record(project)
+        async with get_session() as session:
+            existing = await session.execute(
+                select(ProductProjectLink).where(
+                    ProductProjectLink.product_id == prod.id, ProductProjectLink.project_id == proj.id
+                )
+            )
+            link = existing.scalars().first()
+            if link is None:
+                link = ProductProjectLink(product_id=int(prod.id), project_id=int(proj.id))
+                session.add(link)
+                await session.commit()
+                await session.refresh(link)
+        return {"product_uid": prod.product_uid, "product_name": prod.name, "project_slug": proj.slug}
+
+    res = asyncio.run(_link())
+    console.print(
+        f"[green]Linked[/] project '{res['project_slug']}' into product '{res['product_name']}' ({res['product_uid']})."
+    )
+
+
+@products_app.command("status")
+def products_status(
+    product_key: Annotated[str, typer.Argument(help="Product uid or name")],
+) -> None:
+    """
+    Show product metadata and linked projects.
+    """
+
+    async def _status() -> tuple[Product, list[Project]]:
+        await ensure_schema()
+        async with get_session() as session:
+            stmt_prod = select(Product).where((Product.product_uid == product_key) | (Product.name == product_key))
+            prod = (await session.execute(stmt_prod)).scalars().first()
+            if prod is None:
+                raise typer.BadParameter(f"Product '{product_key}' not found.")
+            rows = await session.execute(
+                select(Project)
+                .join(ProductProjectLink, ProductProjectLink.project_id == Project.id)
+                .where(ProductProjectLink.product_id == prod.id)
+            )
+            projects = list(rows.scalars().all())
+            return prod, projects
+
+    prod, projects = asyncio.run(_status())
+    table = Table(title=f"Product: {prod.name}", show_lines=False)
+    table.add_column("Field")
+    table.add_column("Value")
+    table.add_row("id", str(prod.id))
+    table.add_row("product_uid", prod.product_uid)
+    table.add_row("name", prod.name)
+    table.add_row("created_at", _iso(prod.created_at))
+    console.print(table)
+    pt = Table(title="Linked Projects", show_lines=False)
+    pt.add_column("id")
+    pt.add_column("slug")
+    pt.add_column("human_key")
+    for p in projects:
+        pt.add_row(str(p.id), p.slug, p.human_key)
+    console.print(pt)
+
+
+@products_app.command("search")
+def products_search(
+    product_key: Annotated[str, typer.Argument(help="Product uid or name")],
+    query: Annotated[str, typer.Argument(help="FTS query")],
+    limit: int = typer.Option(
+        20,
+        "--limit",
+        "-l",
+        help="Max results",
+    ),
+) -> None:
+    """
+    Full-text search over messages for all projects linked to a product.
+    """
+
+    async def _run() -> list[dict]:
+        await ensure_schema()
+        async with get_session() as session:
+            stmt_prod = select(Product).where((Product.product_uid == product_key) | (Product.name == product_key))
+            prod = (await session.execute(stmt_prod)).scalars().first()
+            if prod is None:
+                raise typer.BadParameter(f"Product '{product_key}' not found.")
+            rows = await session.execute(
+                select(ProductProjectLink.project_id).where(ProductProjectLink.product_id == prod.id)
+            )
+            proj_ids = [int(r[0]) for r in rows.fetchall()]
+            if not proj_ids:
+                return []
+            result = await session.execute(
+                text(
+                    """
+                    SELECT m.id, m.subject, m.body_md, m.importance, m.ack_required, m.created_ts,
+                           m.thread_id, a.name AS sender_name, m.project_id
+                    FROM fts_messages
+                    JOIN messages m ON fts_messages.rowid = m.id
+                    JOIN agents a ON m.sender_id = a.id
+                    WHERE m.project_id IN (:proj_ids) AND fts_messages MATCH :query
+                    ORDER BY bm25(fts_messages) ASC
+                    LIMIT :limit
+                    """
+                ).bindparams(bindparam("proj_ids", expanding=True)),
+                {"proj_ids": proj_ids, "query": query, "limit": limit},
+            )
+            return [dict(row) for row in result.mappings().all()]
+
+    rows = asyncio.run(_run())
+    if not rows:
+        console.print("[yellow]No results.[/]")
+        return
+    t = Table(title=f"Product search: '{query}'", show_lines=False)
+    t.add_column("project_id")
+    t.add_column("id")
+    t.add_column("subject")
+    t.add_column("from")
+    t.add_column("created_ts")
+    for r in rows:
+        t.add_row(
+            str(r["project_id"]),
+            str(r["id"]),
+            r["subject"],
+            r["sender_name"],
+            r["created_ts"].isoformat() if hasattr(r["created_ts"], "isoformat") else str(r["created_ts"]),
+        )
+    console.print(t)
+
+
+@products_app.command("inbox")
+def products_inbox(
+    product_key: Annotated[str, typer.Argument(help="Product uid or name")],
+    agent: Annotated[str, typer.Argument(help="Agent name")],
+    limit: int = typer.Option(
+        20,
+        "--limit",
+        "-l",
+        help="Max messages",
+    ),
+    urgent_only: Annotated[bool, typer.Option(..., "--urgent-only/--all", help="Only high/urgent")] = False,
+    include_bodies: Annotated[bool, typer.Option(..., "--include-bodies/--no-bodies", help="Include body_md")] = False,
+    since_ts: Optional[str] = typer.Option(None, "--since-ts", help="ISO-8601 timestamp filter"),
+) -> None:
+    """
+    Fetch recent inbox messages for an agent across all projects in a product.
+    Prefers server tool; falls back to local DB when server is not reachable.
+    """
+    resp = _call_server_tool(
+        "cli-products-inbox",
+        "fetch_inbox_product",
+        {
+            "product_key": product_key,
+            "agent_name": agent,
+            "limit": int(limit),
+            "urgent_only": bool(urgent_only),
+            "include_bodies": bool(include_bodies),
+            "since_ts": since_ts or "",
+        },
+        error_notice="[dim]Server unavailable ({exc}); using local DB fallback.[/dim]",
+    )
+    rows = resp if isinstance(resp, list) else []
+    if not rows:
+        # Fallback: local DB
+        async def _fallback() -> list[dict]:
+            await ensure_schema()
+            async with get_session() as session:
+                prod = (
+                    (
+                        await session.execute(
+                            select(Product).where((Product.product_uid == product_key) | (Product.name == product_key))
+                        )
+                    )
+                    .scalars()
+                    .first()
+                )
+                if prod is None:
+                    return []
+                proj_rows = await session.execute(
+                    select(Project)
+                    .join(ProductProjectLink, ProductProjectLink.project_id == Project.id)
+                    .where(ProductProjectLink.product_id == prod.id)
+                )
+                projects = list(proj_rows.scalars().all())
+                items: list[dict] = []
+                for proj in projects:
+                    agent_row = (
+                        (await session.execute(select(Agent).where(Agent.project_id == proj.id, Agent.name == agent)))
+                        .scalars()
+                        .first()
+                    )
+                    if not agent_row:
+                        continue
+                    from sqlalchemy.orm import aliased as _aliased  # local to avoid top-level churn
+
+                    sender_alias = _aliased(Agent)
+                    stmt = (
+                        select(Message, MessageRecipient.kind, sender_alias.name)
+                        .join(MessageRecipient, MessageRecipient.message_id == Message.id)
+                        .join(sender_alias, Message.sender_id == sender_alias.id)
+                        .where(Message.project_id == proj.id, MessageRecipient.agent_id == agent_row.id)
+                        .order_by(desc(Message.created_ts))
+                        .limit(limit)
+                    )
+                    if urgent_only:
+                        stmt = stmt.where(Message.importance.in_(["high", "urgent"]))
+                    if since_ts:
+                        try:
+                            s = since_ts.strip()
+                            s = s[:-1] + "+00:00" if s.endswith("Z") else s
+                            from datetime import datetime as _dt
+
+                            since_dt = _dt.fromisoformat(s)
+                            stmt = stmt.where(Message.created_ts > since_dt)
+                        except Exception:
+                            # Ignore invalid timestamp formats; fallback is to not filter by date.
+                            pass
+                    res = await session.execute(stmt)
+                    for msg, kind, sender_name in res.all():
+                        payload = {
+                            "id": msg.id,
+                            "project_id": proj.id,
+                            "subject": msg.subject,
+                            "importance": msg.importance,
+                            "ack_required": msg.ack_required,
+                            "created_ts": msg.created_ts,
+                            "from": sender_name,
+                            "kind": kind,
+                        }
+                        if include_bodies:
+                            payload["body_md"] = msg.body_md
+                        items.append(payload)
+                # Sort desc by created_ts, falling back to epoch
+                epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+                items.sort(key=lambda r: r.get("created_ts") or epoch, reverse=True)
+                return items[: max(0, int(limit))]
+
+        rows = asyncio.run(_fallback())
+    if not rows:
+        console.print("[yellow]No messages found.[/]")
+        return
+    t = Table(title=f"Inbox for {agent} in product '{product_key}'", show_lines=False)
+    t.add_column("project_id")
+    t.add_column("id")
+    t.add_column("subject")
+    t.add_column("from")
+    t.add_column("importance")
+    t.add_column("created_ts")
+    for r in rows:
+        created = r.get("created_ts")
+        if hasattr(created, "isoformat"):
+            created = created.isoformat()
+        t.add_row(
+            str(r.get("project_id", "")),
+            str(r.get("id", "")),
+            str(r.get("subject", "")),
+            str(r.get("from", "")),
+            str(r.get("importance", "")),
+            str(created or ""),
+        )
+    console.print(t)
+
+
+@products_app.command("summarize-thread")
+def products_summarize_thread(
+    product_key: Annotated[str, typer.Argument(help="Product uid or name")],
+    thread_id: Annotated[str, typer.Argument(help="Thread id or key")],
+    per_thread_limit: int = typer.Option(
+        50,
+        "--per-thread-limit",
+        "-n",
+        help="Max messages per thread",
+    ),
+    no_llm: Annotated[bool, typer.Option(..., "--no-llm", help="Disable LLM refinement")] = False,
+) -> None:
+    """
+    Summarize a thread across all projects in a product. Prefers server tool; minimal fallback if server is unavailable.
+    """
+    result = (
+        _call_server_tool(
+            "cli-products-summarize-thread",
+            "summarize_thread_product",
+            {
+                "product_key": product_key,
+                "thread_id": thread_id,
+                "include_examples": True,
+                "llm_mode": (not no_llm),
+                "per_thread_limit": int(per_thread_limit),
+            },
+            timeout=8.0,
+            error_notice="[dim]Server unavailable ({exc}); summarization requires the server tool.[/dim]",
+        )
+        or {}
+    )
+    if not result:
+        console.print(
+            "[yellow]Server unavailable; summarization requires server tool. Try again when server is running.[/]"
+        )
+        raise typer.Exit(code=2)
+    # Pretty print
+    summary = result.get("summary") or {}
+    examples = result.get("examples") or []
+    table = Table(title=f"Thread summary: {thread_id}", show_lines=False)
+    table.add_column("Key")
+    table.add_column("Value")
+    table.add_row("participants", ", ".join(summary.get("participants", [])))
+    table.add_row("total_messages", str(summary.get("total_messages", "")))
+    table.add_row("open_actions", str(summary.get("open_actions", "")))
+    table.add_row("done_actions", str(summary.get("done_actions", "")))
+    console.print(table)
+    if summary.get("key_points"):
+        kp = Table(title="Key Points", show_lines=False)
+        kp.add_column("point")
+        for p in summary["key_points"]:
+            kp.add_row(str(p))
+        console.print(kp)
+    if summary.get("action_items"):
+        act = Table(title="Action Items", show_lines=False)
+        act.add_column("item")
+        for a in summary["action_items"]:
+            act.add_row(str(a))
+        console.print(act)
+    if examples:
+        ex = Table(title="Examples", show_lines=False)
+        ex.add_column("id")
+        ex.add_column("subject")
+        ex.add_column("from")
+        ex.add_column("created_ts")
+        for e in examples:
+            ex.add_row(
+                str(e.get("id", "")), str(e.get("subject", "")), str(e.get("from", "")), str(e.get("created_ts", ""))
+            )
+        console.print(ex)
+
+
+async def _get_product_record(key: str) -> Product:
+    """Fetch Product by uid or name."""
+    await ensure_schema()
+    async with get_session() as session:
+        stmt = select(Product).where((Product.product_uid == key) | (Product.name == key))
+        result = await session.execute(stmt)
+        prod = result.scalars().first()
+        if not prod:
+            raise ValueError(f"Product '{key}' not found")
+        return prod
 
 
 @app.command("serve-http")
@@ -165,66 +640,60 @@ def typecheck() -> None:
 
 @share_app.command("export")
 def share_export(
-    output: Annotated[str, typer.Option("--output", "-o", help="Directory where the static bundle should be written.")],
+    output: Annotated[
+        str, typer.Option(..., "--output", "-o", help="Directory where the static bundle should be written.")
+    ],
     interactive: Annotated[
         bool,
         typer.Option(
+            ...,
             "--interactive",
             "-i",
             help="Launch an interactive wizard (future enhancement; currently prints guidance).",
         ),
     ] = False,
-    projects: Annotated[
-        list[str] | None, typer.Option("--project", "-p", help="Limit export to specific project slugs or human keys.")
-    ] = None,
-    inline_threshold: Annotated[
-        int,
-        typer.Option(
-            "--inline-threshold",
-            help="Inline attachments ≤ this many bytes as data URIs.",
-            min=0,
-            show_default=True,
-        ),
-    ] = INLINE_ATTACHMENT_THRESHOLD,
-    detach_threshold: Annotated[
-        int,
-        typer.Option(
-            "--detach-threshold",
-            help="Mark attachments ≥ this many bytes as external (not bundled).",
-            min=0,
-            show_default=True,
-        ),
-    ] = DETACH_ATTACHMENT_THRESHOLD,
-    scrub_preset: Annotated[
-        str,
-        typer.Option(
-            "--scrub-preset",
-            help="Redaction preset to apply (e.g., standard, strict).",
-            case_sensitive=False,
-            show_default=True,
-        ),
-    ] = "standard",
-    chunk_threshold: Annotated[
-        int,
-        typer.Option(
-            "--chunk-threshold",
-            help="Chunk the SQLite database when it exceeds this size (bytes).",
-            min=0,
-            show_default=True,
-        ),
-    ] = DEFAULT_CHUNK_THRESHOLD,
-    chunk_size: Annotated[
-        int,
-        typer.Option(
-            "--chunk-size",
-            help="Chunk size in bytes when chunking is enabled.",
-            min=1024,
-            show_default=True,
-        ),
-    ] = DEFAULT_CHUNK_SIZE,
+    projects: list[str] | None = typer.Option(
+        None, "--project", "-p", help="Limit export to specific project slugs or human keys."
+    ),
+    inline_threshold: int = typer.Option(
+        INLINE_ATTACHMENT_THRESHOLD,
+        "--inline-threshold",
+        help="Inline attachments ≤ this many bytes as data URIs.",
+        min=0,
+        show_default=True,
+    ),
+    detach_threshold: int = typer.Option(
+        DETACH_ATTACHMENT_THRESHOLD,
+        "--detach-threshold",
+        help="Mark attachments ≥ this many bytes as external (not bundled).",
+        min=0,
+        show_default=True,
+    ),
+    scrub_preset: str = typer.Option(
+        "standard",
+        "--scrub-preset",
+        help="Redaction preset to apply (e.g., standard, strict).",
+        case_sensitive=False,
+        show_default=True,
+    ),
+    chunk_threshold: int = typer.Option(
+        DEFAULT_CHUNK_THRESHOLD,
+        "--chunk-threshold",
+        help="Chunk the SQLite database when it exceeds this size (bytes).",
+        min=0,
+        show_default=True,
+    ),
+    chunk_size: int = typer.Option(
+        DEFAULT_CHUNK_SIZE,
+        "--chunk-size",
+        help="Chunk size in bytes when chunking is enabled.",
+        min=1024,
+        show_default=True,
+    ),
     dry_run: Annotated[
         bool,
         typer.Option(
+            ...,
             "--dry-run/--no-dry-run",
             help="Generate a security summary without writing bundle artifacts.",
             show_default=True,
@@ -233,24 +702,23 @@ def share_export(
     zip_bundle: Annotated[
         bool,
         typer.Option(
+            ...,
             "--zip/--no-zip",
             help="Package the exported directory into a ZIP archive (enabled by default).",
             show_default=True,
         ),
     ] = True,
-    signing_key: Annotated[
-        Optional[Path], typer.Option("--signing-key", help="Path to Ed25519 signing key (32-byte seed).")
-    ] = None,
-    signing_public_out: Annotated[
-        Optional[Path], typer.Option("--signing-public-out", help="Write public key to this file after signing.")
-    ] = None,
-    age_recipients: Annotated[
-        Optional[list[str]],
-        typer.Option(
-            "--age-recipient",
-            help="Encrypt the ZIP archive with age using the provided recipient(s). May be passed multiple times.",
-        ),
-    ] = None,
+    signing_key: Optional[Path] = typer.Option(
+        None, "--signing-key", help="Path to Ed25519 signing key (32-byte seed)."
+    ),
+    signing_public_out: Optional[Path] = typer.Option(
+        None, "--signing-public-out", help="Write public key to this file after signing."
+    ),
+    age_recipients: Optional[list[str]] = typer.Option(
+        None,
+        "--age-recipient",
+        help="Encrypt the ZIP archive with age using the provided recipient(s). May be passed multiple times.",
+    ),
 ) -> None:
     """Export the MCP Agent Mail mailbox into a shareable static bundle (snapshot + scaffolding prototype)."""
 
@@ -476,7 +944,7 @@ def share_export(
         console.print("[green]✓ Built FTS5 index for full-text viewer search.[/]")
     else:
         console.print("[yellow]Search fallback active (FTS5 unavailable in current sqlite build).[/]")
-    console.print("[green]✓ Generated manifest, README.txt, HOW_TO_DEPLOY.md, and viewer assets.[/]")
+    console.print("[green]✓ Generated manifest, README.md, HOW_TO_DEPLOY.md, and viewer assets.[/]")
 
     if zip_bundle:
         archive_path = output_path.parent / f"{output_path.name}.zip"
@@ -676,55 +1144,45 @@ def share_update(
     bundle: Annotated[
         str, typer.Argument(help="Path to the existing bundle directory (e.g., your GitHub Pages repo).")
     ],
-    projects: Annotated[
-        list[str] | None,
-        typer.Option(
-            "--project",
-            "-p",
-            help="Override project scope for this update (slugs or human keys). May be provided multiple times.",
-        ),
-    ] = None,
-    inline_threshold_override: Annotated[
-        Optional[int],
-        typer.Option("--inline-threshold", help="Override inline attachment threshold (bytes).", min=0),
-    ] = None,
-    detach_threshold_override: Annotated[
-        Optional[int],
-        typer.Option("--detach-threshold", help="Override detach attachment threshold (bytes).", min=0),
-    ] = None,
-    chunk_threshold_override: Annotated[
-        Optional[int],
-        typer.Option("--chunk-threshold", help="Override chunking threshold (bytes).", min=0),
-    ] = None,
-    chunk_size_override: Annotated[
-        Optional[int],
-        typer.Option("--chunk-size", help="Override chunk size when chunking is enabled.", min=1024),
-    ] = None,
-    scrub_preset_override: Annotated[
-        Optional[str],
-        typer.Option(
-            "--scrub-preset",
-            help="Override scrub preset (standard, strict, ...).",
-            case_sensitive=False,
-        ),
-    ] = None,
+    projects: list[str] | None = typer.Option(
+        None,
+        "--project",
+        "-p",
+        help="Override project scope for this update (slugs or human keys). May be provided multiple times.",
+    ),
+    inline_threshold_override: Optional[int] = typer.Option(
+        None, "--inline-threshold", help="Override inline attachment threshold (bytes).", min=0
+    ),
+    detach_threshold_override: Optional[int] = typer.Option(
+        None, "--detach-threshold", help="Override detach attachment threshold (bytes).", min=0
+    ),
+    chunk_threshold_override: Optional[int] = typer.Option(
+        None, "--chunk-threshold", help="Override chunking threshold (bytes).", min=0
+    ),
+    chunk_size_override: Optional[int] = typer.Option(
+        None, "--chunk-size", help="Override chunk size when chunking is enabled.", min=1024
+    ),
+    scrub_preset_override: Optional[str] = typer.Option(
+        None,
+        "--scrub-preset",
+        help="Override scrub preset (standard, strict, ...).",
+        case_sensitive=False,
+    ),
     zip_bundle: Annotated[
         bool,
-        typer.Option("--zip/--no-zip", help="Package the updated bundle into a ZIP archive.", show_default=True),
+        typer.Option(..., "--zip/--no-zip", help="Package the updated bundle into a ZIP archive.", show_default=True),
     ] = False,
-    signing_key: Annotated[
-        Optional[Path], typer.Option("--signing-key", help="Path to Ed25519 signing key (32-byte seed).")
-    ] = None,
-    signing_public_out: Annotated[
-        Optional[Path], typer.Option("--signing-public-out", help="Write public key to this file after signing.")
-    ] = None,
-    age_recipients: Annotated[
-        Optional[list[str]],
-        typer.Option(
-            "--age-recipient",
-            help="Encrypt the ZIP archive with age using the provided recipient(s). May be passed multiple times.",
-        ),
-    ] = None,
+    signing_key: Optional[Path] = typer.Option(
+        None, "--signing-key", help="Path to Ed25519 signing key (32-byte seed)."
+    ),
+    signing_public_out: Optional[Path] = typer.Option(
+        None, "--signing-public-out", help="Write public key to this file after signing."
+    ),
+    age_recipients: Optional[list[str]] = typer.Option(
+        None,
+        "--age-recipient",
+        help="Encrypt the ZIP archive with age using the provided recipient(s). May be passed multiple times.",
+    ),
 ) -> None:
     """Refresh an existing static mailbox bundle using the previous export settings."""
 
@@ -958,12 +1416,11 @@ def share_update(
 @share_app.command("preview")
 def share_preview(
     bundle: Annotated[str, typer.Argument(help="Path to the exported bundle directory.")],
-    host: Annotated[str, typer.Option("--host", help="Host interface for the preview server.")] = "127.0.0.1",
-    port: Annotated[int, typer.Option("--port", help="Port for the preview server.")] = 9000,
-    open_browser: Annotated[
-        bool,
-        typer.Option("--open-browser/--no-open-browser", help="Automatically open the bundle in a browser."),
-    ] = False,
+    host: str = typer.Option("127.0.0.1", "--host", help="Host interface for the preview server."),
+    port: int = typer.Option(9000, "--port", help="Port for the preview server."),
+    open_browser: bool = typer.Option(
+        False, "--open-browser/--no-open-browser", help="Automatically open the bundle in a browser."
+    ),
 ) -> None:
     """Serve a static export bundle locally for inspection."""
 
@@ -1003,6 +1460,7 @@ def share_verify(
     public_key: Annotated[
         Optional[str],
         typer.Option(
+            ...,
             "--public-key",
             help="Ed25519 public key (base64) to verify signature. If omitted, uses key from manifest.sig.json.",
         ),
@@ -1046,6 +1504,7 @@ def share_decrypt(
     output: Annotated[
         Optional[str],
         typer.Option(
+            ...,
             "--output",
             "-o",
             help="Path where decrypted file should be written. Defaults to encrypted filename with .age removed.",
@@ -1054,19 +1513,18 @@ def share_decrypt(
     identity: Annotated[
         Optional[Path],
         typer.Option(
+            ...,
             "--identity",
             "-i",
             help="Path to age identity file (private key). Mutually exclusive with --passphrase.",
         ),
     ] = None,
-    passphrase: Annotated[
-        bool,
-        typer.Option(
-            "--passphrase",
-            "-p",
-            help="Prompt for passphrase interactively. Mutually exclusive with --identity.",
-        ),
-    ] = False,
+    passphrase: bool = typer.Option(
+        False,
+        "--passphrase",
+        "-p",
+        help="Prompt for passphrase interactively. Mutually exclusive with --identity.",
+    ),
 ) -> None:
     """Decrypt an age-encrypted bundle using identity file or passphrase."""
     from .share import decrypt_with_age
@@ -1448,10 +1906,11 @@ def list_projects(
 @guard_app.command("install")
 def guard_install(
     project: str,
-    repo: Annotated[Path, typer.Argument(..., help="Path to git repo")],
+    repo: Annotated[Path, typer.Argument(help="Path to git repo")],
     prepush: Annotated[
         bool,
         typer.Option(
+            ...,
             "--prepush/--no-prepush",
             help="Also install a pre-push guard.",
         ),
@@ -1485,7 +1944,7 @@ def guard_install(
 
 @guard_app.command("uninstall")
 def guard_uninstall(
-    repo: Annotated[Path, typer.Argument(..., help="Path to git repo")],
+    repo: Annotated[Path, typer.Argument(help="Path to git repo")],
 ) -> None:
     """Remove the advisory pre-commit guard from the repository."""
 
@@ -1548,15 +2007,15 @@ def file_reservations_list(
 
 @app.command("amctl-env")
 def amctl_env(
-    project_path: Annotated[
-        Path,
-        typer.Option(
-            "--path",
-            "-p",
-            help="Path to repo/worktree",
-        ),
-    ] = Path(),
-    agent: Annotated[Optional[str], typer.Option("--agent", "-a", help="Agent name (defaults to $AGENT_NAME)")] = None,
+    project_path: Path = typer.Option(
+        Path(),
+        "--path",
+        "-p",
+        help="Path to repo/worktree",
+    ),
+    agent: Annotated[
+        Optional[str], typer.Option(..., "--agent", "-a", help="Agent name (defaults to $AGENT_NAME)")
+    ] = None,
 ) -> None:
     """
     Print environment variables useful for build wrappers (slots, caches, artifacts).
@@ -1597,16 +2056,16 @@ def amctl_env(
 @app.command(name="am-run")
 def am_run(
     slot: Annotated[str, typer.Argument(help="Build slot name (e.g., frontend-build)")],
-    cmd: Annotated[list[str], typer.Argument(..., help="Command to run")],
-    project_path: Annotated[
-        Path,
-        typer.Option(
-            "--path",
-            "-p",
-            help="Path to repo/worktree",
-        ),
-    ] = Path(),
-    agent: Annotated[Optional[str], typer.Option("--agent", "-a", help="Agent name (defaults to $AGENT_NAME)")] = None,
+    cmd: Annotated[list[str], typer.Argument(help="Command to run")],
+    project_path: Path = typer.Option(
+        Path(),
+        "--path",
+        "-p",
+        help="Path to repo/worktree",
+    ),
+    agent: Annotated[
+        Optional[str], typer.Option(..., "--agent", "-a", help="Agent name (defaults to $AGENT_NAME)")
+    ] = None,
 ) -> None:
     """
     Build wrapper that prepares environment variables and manages a build slot:
@@ -1633,7 +2092,7 @@ def am_run(
             branch = "unknown"
     settings = get_settings()
     guard_mode = (os.environ.get("AGENT_MAIL_GUARD_MODE", "block") or "block").strip().lower()
-    worktrees_enabled = bool(getattr(settings, "worktrees_enabled", False))
+    worktrees_enabled = bool(settings.worktrees_enabled)
 
     async def _ensure_slot_paths() -> Path:
         archive = await ensure_archive(settings, slug, project_key=str(p))
@@ -1753,7 +2212,7 @@ def am_run(
 def mail_status(
     project_path: Annotated[
         Path,
-        typer.Argument(..., help="Absolute path to a repo/worktree directory (use '.' for current)."),
+        typer.Argument(help="Absolute path to a repo/worktree directory (use '.' for current)."),
     ],
 ) -> None:
     """
@@ -1827,7 +2286,7 @@ def mail_status(
 
 @guard_app.command("status")
 def guard_status(
-    repo: Annotated[Path, typer.Argument(..., help="Path to git repo")],
+    repo: Annotated[Path, typer.Argument(help="Path to git repo")],
 ) -> None:
     """
     Print guard status: gate/mode, resolved hooks directory, and presence of hooks.
@@ -1878,9 +2337,9 @@ def guard_status(
 
 @projects_app.command("adopt")
 def projects_adopt(
-    source: Annotated[str, typer.Argument(..., help="Old project slug or human key")],
-    target: Annotated[str, typer.Argument(..., help="New project slug or project_uid (future)")],
-    dry_run: Annotated[bool, typer.Option("--dry-run/--apply", help="Show plan without applying changes.")] = True,
+    source: Annotated[str, typer.Argument(help="Old project slug or human key")],
+    target: Annotated[str, typer.Argument(help="New project slug or project_uid (future)")],
+    dry_run: Annotated[bool, typer.Option(..., "--dry-run/--apply", help="Show plan without applying changes.")] = True,
 ) -> None:
     """
     Plan consolidation of legacy per-worktree projects into a canonical project.
@@ -1959,7 +2418,10 @@ def projects_adopt(
         # Move Git artifacts
         settings = get_settings()
         # local import to minimize top-level churn and keep ordering stable
-        from .storage import AsyncFileLock as _AsyncFileLock, ensure_archive as _ensure_archive  # type: ignore
+        from .storage import (
+            AsyncFileLock as _AsyncFileLock,  # type: ignore
+            ensure_archive as _ensure_archive,
+        )
 
         src_archive = asyncio.run(_ensure_archive(settings, src.slug, project_key=src.human_key))
         dst_archive = asyncio.run(_ensure_archive(settings, dst.slug, project_key=dst.human_key))
@@ -2405,7 +2867,7 @@ def list_acks(
 @config_app.command("set-port")
 def config_set_port(
     port: int = typer.Argument(..., help="HTTP server port number"),
-    env_file: Annotated[Optional[Path], typer.Option("--env-file", help="Path to .env file")] = None,
+    env_file: Annotated[Optional[Path], typer.Option(..., "--env-file", help="Path to .env file")] = None,
 ) -> None:
     """Set HTTP_PORT in .env file."""
     import re
@@ -2485,6 +2947,221 @@ def config_show_port() -> None:
     console.print(f"  Port: [bold]{settings.http.port}[/bold]")
     console.print(f"  Path: {settings.http.path}")
     console.print(f"\n[dim]Full URL: http://{settings.http.host}:{settings.http.port}{settings.http.path}[/dim]")
+
+
+# ---------- Documentation helpers ----------
+
+DOC_BLOCK_START = "<!-- MCP_AGENT_MAIL_AND_BEADS_SNIPPET_START -->"
+DOC_BLOCK_END = "<!-- MCP_AGENT_MAIL_AND_BEADS_SNIPPET_END -->"
+MAIL_SNIPPET_MARKERS = ("<!-- BEGIN_AGENT_MAIL_SNIPPET -->", "<!-- END_AGENT_MAIL_SNIPPET -->")
+BEADS_SNIPPET_MARKERS = ("<!-- BEGIN_BEADS_SNIPPET -->", "<!-- END_BEADS_SNIPPET -->")
+TARGET_DOC_FILENAMES = {"AGENTS.MD", "CLAUDE.MD"}
+SKIP_SCAN_DIRS = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".idea",
+    ".vscode",
+    ".tox",
+    ".ruff_cache",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".mcp-agent-mail",
+    "node_modules",
+    "__pycache__",
+    "venv",
+    ".venv",
+    "dist",
+    "build",
+    "out",
+    "logs",
+    "target",
+}
+
+
+@dataclass
+class DocCandidate:
+    path: Path
+    has_snippet: bool
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _extract_readme_section(markers: tuple[str, str]) -> str:
+    readme_path = _project_root() / "README.md"
+    if not readme_path.exists():
+        raise RuntimeError(f"README.md not found at {readme_path}")
+    data = readme_path.read_text(encoding="utf-8")
+    start_marker, end_marker = markers
+    try:
+        start_idx = data.index(start_marker) + len(start_marker)
+        end_idx = data.index(end_marker, start_idx)
+    except ValueError as exc:  # pragma: no cover - defensive branch
+        raise RuntimeError(f"Could not locate snippet markers {markers[0]}..{markers[1]} in README.md") from exc
+    snippet = data[start_idx:end_idx].strip()
+    return _strip_code_block(snippet)
+
+
+def _strip_code_block(snippet: str) -> str:
+    stripped = snippet.strip()
+    if stripped.startswith("```"):
+        stripped = "\n".join(stripped.splitlines()[1:])
+    stripped = stripped.rstrip()
+    if stripped.endswith("```"):
+        stripped = "\n".join(stripped.splitlines()[:-1])
+    return stripped.strip()
+
+
+def _combined_doc_snippet() -> str:
+    mail = _extract_readme_section(MAIL_SNIPPET_MARKERS).strip()
+    beads = _extract_readme_section(BEADS_SNIPPET_MARKERS).strip()
+    combined = f"{mail}\n\n{beads}".strip()
+    return combined + "\n"
+
+
+def _default_scan_roots() -> list[Path]:
+    cwd = Path.cwd().resolve()
+    home = Path.home()
+    candidates: list[Path] = [cwd]
+    if cwd.parent != cwd:
+        candidates.append(cwd.parent)
+    for rel in ("code", "codes", "projects", "workspace", "repos", "src"):
+        candidate = (home / rel).expanduser()
+        if candidate.exists():
+            candidates.append(candidate)
+    deduped: list[Path] = []
+    seen: set[Path] = set()
+    for path in candidates:
+        resolved = path.expanduser().resolve()
+        if resolved in seen or not resolved.exists() or not resolved.is_dir():
+            continue
+        seen.add(resolved)
+        deduped.append(resolved)
+    return deduped or [cwd]
+
+
+def _iter_doc_files(base: Path, max_depth: int) -> Iterable[Path]:
+    origin = base.resolve()
+    base_parts = len(origin.parts)
+
+    def _on_error(error: OSError) -> None:  # pragma: no cover - best effort logging
+        console.print(f"[yellow]Warning:[/yellow] Skipping {error.filename}: {error.strerror}")
+
+    for dirpath, dirnames, filenames in os.walk(origin, topdown=True, followlinks=False, onerror=_on_error):
+        current_depth = len(Path(dirpath).parts) - base_parts
+        if max_depth >= 0 and current_depth >= max_depth:
+            dirnames[:] = []
+        dirnames[:] = [d for d in dirnames if d not in SKIP_SCAN_DIRS]
+        for name in filenames:
+            if name.upper() in TARGET_DOC_FILENAMES:
+                yield Path(dirpath) / name
+
+
+def _collect_doc_candidates(roots: Sequence[Path], max_depth: int) -> list[DocCandidate]:
+    seen: set[Path] = set()
+    candidates: list[DocCandidate] = []
+    for root in roots:
+        if not root.exists() or not root.is_dir():
+            continue
+        for file_path in _iter_doc_files(root, max_depth):
+            resolved = file_path.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            try:
+                text = resolved.read_text(encoding="utf-8")
+            except OSError as exc:
+                console.print(f"[yellow]Warning:[/yellow] Could not read {resolved}: {exc}")
+                continue
+            candidates.append(DocCandidate(path=resolved, has_snippet=DOC_BLOCK_START in text))
+    return sorted(candidates, key=lambda c: str(c.path).lower())
+
+
+def _append_snippet_to_doc(path: Path, snippet: str) -> None:
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError as exc:  # pragma: no cover - IO failure protection
+        raise RuntimeError(f"Failed to read {path}: {exc}") from exc
+    if content and not content.endswith("\n"):
+        content += "\n"
+    addition = f"\n{DOC_BLOCK_START}\n\n{snippet}\n\n{DOC_BLOCK_END}\n"
+    try:
+        path.write_text(content + addition, encoding="utf-8")
+    except OSError as exc:  # pragma: no cover - IO failure protection
+        raise RuntimeError(f"Failed to write {path}: {exc}") from exc
+
+
+@docs_app.command("insert-blurbs")
+def docs_insert_blurbs(
+    scan_dir: Annotated[
+        Optional[List[Path]], typer.Option(..., "--scan-dir", "-d", help="Directories to scan (repeatable).")
+    ] = None,
+    yes: Annotated[bool, typer.Option(..., "--yes", help="Automatically confirm insertion for each file.")] = False,
+    dry_run: Annotated[bool, typer.Option(..., "--dry-run", help="Show actions without modifying files.")] = False,
+    max_depth: int = typer.Option(
+        6,
+        "--max-depth",
+        min=1,
+        help="Maximum directory depth to explore under each scan root (default: 6).",
+    ),
+) -> None:
+    """Detect AGENTS.md/CLAUDE.md files and append the latest Agent Mail + Beads blurbs."""
+
+    snippet = _combined_doc_snippet()
+    roots = [path.expanduser().resolve() for path in scan_dir if path] if scan_dir else _default_scan_roots()
+    roots = [path for path in roots if path.exists() and path.is_dir()]
+    if not roots:
+        console.print("[red]Error:[/red] No valid scan directories were provided.")
+        raise typer.Exit(code=1)
+
+    console.print("[cyan]Scanning for AGENTS.md / CLAUDE.md files in:[/cyan]")
+    for root in roots:
+        console.print(f"  • {root}")
+
+    candidates = _collect_doc_candidates(roots, max_depth=max_depth)
+    if not candidates:
+        console.print(
+            "[yellow]No AGENTS.md or CLAUDE.md files found. Provide additional roots with --scan-dir.[/yellow]"
+        )
+        return
+
+    table = Table(title="Detected Agent Instructions", show_lines=False)
+    table.add_column("#", justify="right")
+    table.add_column("File")
+    table.add_column("Project")
+    table.add_column("Status")
+    for idx, candidate in enumerate(candidates, start=1):
+        status = "has snippet" if candidate.has_snippet else "needs snippet"
+        table.add_row(str(idx), candidate.path.name, str(candidate.path.parent), status)
+    console.print(table)
+
+    inserted = 0
+    skipped = 0
+    for candidate in candidates:
+        if candidate.has_snippet:
+            console.print(f"[dim]Skipping {candidate.path} (snippet already present).[/dim]")
+            continue
+        prompt = f"Insert Agent Mail + Beads snippet into {candidate.path}?"
+        if not yes and not typer.confirm(prompt, default=True):
+            skipped += 1
+            console.print(f"[yellow]Skipped {candidate.path}[/yellow]")
+            continue
+        if dry_run:
+            console.print(f"[yellow]Dry run:[/yellow] would insert snippet into {candidate.path}")
+        else:
+            _append_snippet_to_doc(candidate.path, snippet)
+            console.print(f"[green]Inserted snippet into {candidate.path}[/green]")
+            inserted += 1
+
+    if dry_run:
+        console.print("\n[dim]Dry run complete. Rerun without --dry-run to apply the changes.[/dim]")
+    else:
+        console.print(
+            f"\n[cyan]Summary:[/cyan] inserted into {inserted} file(s); skipped {skipped} file(s); "
+            "other files already had the snippet."
+        )
 
 
 if __name__ == "__main__":
