@@ -329,13 +329,20 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS" or path.startswith("/health/"):
             return await call_next(request)
 
-        # Apply dedicated rate limiting for Slack webhooks
+        # Apply dedicated rate limiting for Slack webhooks (and bypass auth) before further processing
         if path in {"/slack/events", "/slackbox/incoming"}:
-            slack_rpm = int(getattr(self.settings.http, "rate_limit_slack_per_minute", 120) or 120)
-            slack_burst = int(getattr(self.settings.http, "rate_limit_slack_burst", 0) or 0)
+            if path == "/slackbox/incoming":
+                slack_rpm = int(getattr(self.settings.http, "rate_limit_slackbox_per_minute", 120) or 120)
+                slack_burst = int(getattr(self.settings.http, "rate_limit_slackbox_burst", 0) or 0)
+                route_label = "slackbox"
+            else:
+                slack_rpm = int(getattr(self.settings.http, "rate_limit_slack_per_minute", 120) or 120)
+                slack_burst = int(getattr(self.settings.http, "rate_limit_slack_burst", 0) or 0)
+                route_label = "slack"
+
             slack_burst = slack_burst if slack_burst > 0 else max(1, slack_rpm)
             client_ip = request.client.host if request.client else "unknown"
-            key = f"slack:{client_ip}"
+            key = f"{route_label}:{client_ip}"
             allowed = await self._consume_bucket(key, slack_rpm, slack_burst)
             if not allowed:
                 return JSONResponse({"detail": "Rate limit exceeded"}, status_code=status.HTTP_429_TOO_MANY_REQUESTS)

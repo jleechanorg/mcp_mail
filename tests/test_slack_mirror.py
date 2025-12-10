@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mcp_agent_mail.slack_integration import mirror_message_to_slack
+from mcp_agent_mail.slack_integration import format_mcp_message_for_slack, mirror_message_to_slack
 
 
 def test_mirror_message_to_slack_posts_when_enabled(monkeypatch):
@@ -40,3 +40,30 @@ def test_mirror_message_to_slack_skips_when_disabled(monkeypatch):
     resp = mirror_message_to_slack(frontmatter, body)
 
     assert resp is None
+
+
+def test_format_mcp_message_for_slack_includes_full_agent_details():
+    recipients = [f"Agent {i}" for i in range(1, 8)]
+
+    text, blocks = format_mcp_message_for_slack(
+        subject="Demo Subject",
+        body_md="Body content",
+        sender_name="Primary Sender",
+        recipients=recipients,
+        message_id="1234567890abcdef",
+        importance="high",
+    )
+
+    assert "Primary Sender" in text
+    assert "Agent 7" in text  # no truncation in fallback text
+
+    assert blocks is not None
+    fields = {field["text"] for field in blocks[1]["fields"]}
+
+    sender_field = next(text for text in fields if text.startswith("*From:*"))
+    recipient_field = next(text for text in fields if text.startswith("*To:*"))
+
+    assert "*Primary Sender*" in sender_field
+    # Should include all recipients in the block list
+    assert all(name in recipient_field for name in recipients)
+    assert recipient_field.count("•") == len(recipients)
