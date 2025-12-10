@@ -1,0 +1,99 @@
+import httpx
+import pytest
+from sqlalchemy import desc, select
+
+from mcp_agent_mail.config import get_settings
+from mcp_agent_mail.db import ensure_schema, get_session
+from mcp_agent_mail.http import build_http_app
+from mcp_agent_mail.models import Message
+
+
+@pytest.mark.asyncio
+async def test_slackbox_incoming_creates_message(monkeypatch):
+    monkeypatch.setenv("SLACK_ENABLED", "1")
+    monkeypatch.setenv("SLACKBOX_ENABLED", "1")
+    monkeypatch.setenv("SLACKBOX_TOKEN", "slackbox-token")
+    monkeypatch.setenv("SLACKBOX_CHANNELS", "CCHAN123")
+    monkeypatch.setenv("SLACK_SYNC_PROJECT_NAME", "slackbox-project")
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+    settings = get_settings()
+    app = build_http_app(settings)
+    await ensure_schema()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/slackbox/incoming",
+            data={
+                "token": "slackbox-token",
+                "channel_id": "CCHAN123",
+                "text": "Slackbox hello world",
+                "timestamp": "1111.2222",
+            },
+        )
+
+    assert resp.status_code == 200
+
+    async with get_session() as session:
+        result = await session.execute(select(Message).order_by(desc(Message.id)).limit(1))
+        message = result.scalars().first()
+
+    assert message is not None
+    assert settings.slack.slackbox_subject_prefix in (message.subject or "")
+    assert message.thread_id == "slackbox_CCHAN123_1111.2222"
+
+
+@pytest.mark.asyncio
+async def test_slackbox_rejects_invalid_token(monkeypatch):
+    monkeypatch.setenv("SLACK_ENABLED", "1")
+    monkeypatch.setenv("SLACKBOX_ENABLED", "1")
+    monkeypatch.setenv("SLACKBOX_TOKEN", "expected-token")
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+    settings = get_settings()
+    app = build_http_app(settings)
+    await ensure_schema()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/slackbox/incoming",
+            data={"token": "wrong", "text": "hi"},
+        )
+
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_slackbox_requires_configured_token(monkeypatch):
+    monkeypatch.setenv("SLACK_ENABLED", "1")
+    monkeypatch.setenv("SLACKBOX_ENABLED", "1")
+    monkeypatch.delenv("SLACKBOX_TOKEN", raising=False)
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+    settings = get_settings()
+    app = build_http_app(settings)
+    await ensure_schema()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/slackbox/incoming",
+            data={"text": "hi"},
+        )
+
+    assert resp.status_code == 503
+
+
+def test_slackbox_thread_pattern_allows_underscore_channel_names():
+    from mcp_agent_mail.slack_integration import _SLACK_THREAD_ID_PATTERN
+
+    thread_id = "slackbox_my_channel_1111.2222"
+    match = _SLACK_THREAD_ID_PATTERN.match(thread_id)
+
+    assert match is not None
+    channel, ts = match.groups()
+
+    assert channel == "my_channel"
+    assert ts == "1111.2222"
