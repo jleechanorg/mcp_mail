@@ -41,7 +41,9 @@ logger = logging.getLogger(__name__)
 # Regex pattern for extracting Slack user mentions (e.g., <@U123|name>)
 _SLACK_MENTION_PATTERN = re.compile(r"<@([A-Z0-9]+)(?:\|[^>]+)?>")
 # Thread id format: slack_<channel_id>_<thread_ts> or slackbox_<channel_id>_<thread_ts>
-_SLACK_THREAD_ID_PATTERN = re.compile(r"^(?:slack|slackbox)_([^_]+)_(.+)$")
+# Channel identifiers may include underscores (e.g., team_engineering), so capture
+# everything up to the final underscore before the thread timestamp.
+_SLACK_THREAD_ID_PATTERN = re.compile(r"^(?:slack|slackbox)_(.+)_([^_]+)$")
 
 
 @dataclass
