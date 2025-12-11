@@ -33,11 +33,13 @@ class HttpSettings:
     rate_limit_enabled: bool
     rate_limit_per_minute: int
     rate_limit_slack_per_minute: int
+    rate_limit_slackbox_per_minute: int
     # Robust token-bucket limiter
     rate_limit_backend: str  # "memory" | "redis"
     rate_limit_tools_per_minute: int
     rate_limit_resources_per_minute: int
     rate_limit_slack_burst: int
+    rate_limit_slackbox_burst: int
     rate_limit_redis_url: str
     # Optional bursts to control spikiness
     rate_limit_tools_burst: int
@@ -134,6 +136,12 @@ class SlackSettings:
     use_blocks: bool  # Use Slack Block Kit for rich formatting
     include_attachments: bool  # Include MCP message attachments in Slack
     webhook_url: str | None  # Optional incoming webhook URL (legacy)
+    # Slackbox (legacy outgoing webhook ingestion)
+    slackbox_enabled: bool  # Accept Slack outgoing webhook payloads
+    slackbox_token: str | None  # Verification token from Slack outgoing webhook
+    slackbox_channels: list[str]  # Allowed channel IDs or names
+    slackbox_sender_name: str  # Name for the synthetic sender agent
+    slackbox_subject_prefix: str  # Prefix to apply to Slackbox-derived subjects
 
 
 @dataclass(slots=True, frozen=True)
@@ -236,6 +244,9 @@ def get_settings() -> Settings:
         rate_limit_slack_per_minute=_int(
             _decouple_config("HTTP_RATE_LIMIT_SLACK_PER_MINUTE", default="120"), default=120
         ),
+        rate_limit_slackbox_per_minute=_int(
+            _decouple_config("HTTP_RATE_LIMIT_SLACKBOX_PER_MINUTE", default="120"), default=120
+        ),
         rate_limit_backend=_decouple_config("HTTP_RATE_LIMIT_BACKEND", default="memory").lower(),
         rate_limit_tools_per_minute=_int(
             _decouple_config("HTTP_RATE_LIMIT_TOOLS_PER_MINUTE", default="60"), default=60
@@ -247,6 +258,7 @@ def get_settings() -> Settings:
         rate_limit_tools_burst=_int(_decouple_config("HTTP_RATE_LIMIT_TOOLS_BURST", default="0"), default=0),
         rate_limit_resources_burst=_int(_decouple_config("HTTP_RATE_LIMIT_RESOURCES_BURST", default="0"), default=0),
         rate_limit_slack_burst=_int(_decouple_config("HTTP_RATE_LIMIT_SLACK_BURST", default="0"), default=0),
+        rate_limit_slackbox_burst=_int(_decouple_config("HTTP_RATE_LIMIT_SLACKBOX_BURST", default="0"), default=0),
         request_log_enabled=_bool(_decouple_config("HTTP_REQUEST_LOG_ENABLED", default="false"), default=False),
         otel_enabled=_bool(_decouple_config("HTTP_OTEL_ENABLED", default="false"), default=False),
         otel_service_name=_decouple_config("OTEL_SERVICE_NAME", default="mcp-agent-mail"),
@@ -349,6 +361,11 @@ def get_settings() -> Settings:
         use_blocks=_bool(_decouple_config("SLACK_USE_BLOCKS", default="true"), default=True),
         include_attachments=_bool(_decouple_config("SLACK_INCLUDE_ATTACHMENTS", default="true"), default=True),
         webhook_url=_decouple_config("SLACK_WEBHOOK_URL", default="") or None,
+        slackbox_enabled=_bool(_decouple_config("SLACKBOX_ENABLED", default="false"), default=False),
+        slackbox_token=_decouple_config("SLACKBOX_TOKEN", default="") or None,
+        slackbox_channels=_csv("SLACKBOX_CHANNELS", default=""),
+        slackbox_sender_name=_decouple_config("SLACKBOX_SENDER_NAME", default="Slackbox"),
+        slackbox_subject_prefix=_decouple_config("SLACKBOX_SUBJECT_PREFIX", default="[Slackbox]"),
     )
 
     def _agent_name_mode(value: str) -> str:
