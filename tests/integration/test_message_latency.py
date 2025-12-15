@@ -23,6 +23,19 @@ from mcp_agent_mail.app import build_mcp_server
 from mcp_agent_mail.db import reset_database_state
 
 
+# Test configuration constants
+MAX_RETRY_ATTEMPTS = 20  # Maximum number of retry attempts for message visibility
+RETRY_DELAY_SECONDS = 0.1  # Delay between retry attempts in seconds
+NUM_RAPID_CYCLES = 10  # Number of rapid send-fetch cycles to test
+NUM_FETCH_MEASUREMENTS = 20  # Number of fetch operations to measure latency
+MAX_FETCH_LATENCY_SECONDS = 0.5  # Maximum acceptable average fetch latency
+NUM_FRESH_SESSION_TESTS = 5  # Number of fresh session test iterations
+MAX_WAIT_SECONDS = 5.0  # Maximum time to wait for message visibility
+POLL_INTERVAL_SECONDS = 0.1  # Polling interval for message visibility checks
+NUM_STRESS_SENDERS = 5  # Number of concurrent senders in stress test
+MESSAGES_PER_SENDER = 5  # Number of messages each sender sends in stress test
+
+
 def extract_inbox(inbox_result) -> list[dict[str, Any]]:
     """Extract inbox messages from various result formats."""
     # Handle different response formats from fastmcp
@@ -200,7 +213,7 @@ async def test_concurrent_send_and_fetch(isolated_env):
             results["message_id"] = send_data["deliveries"][0]["payload"]["id"]
             return result
 
-        async def fetch_with_retry(max_retries: int = 20, delay: float = 0.1):
+        async def fetch_with_retry(max_retries: int = MAX_RETRY_ATTEMPTS, delay: float = RETRY_DELAY_SECONDS):
             """Fetch inbox with retry to measure how long until message appears."""
             for attempt in range(max_retries):
                 results["attempts"] = attempt + 1
@@ -257,7 +270,7 @@ async def test_rapid_send_fetch_cycles(isolated_env):
         timings: list[dict[str, float]] = []
         failures: list[int] = []
 
-        for i in range(10):
+        for i in range(NUM_RAPID_CYCLES):
             send_start = time.perf_counter()
             send_result = await client.call_tool(
                 "send_message",
@@ -299,7 +312,7 @@ async def test_rapid_send_fetch_cycles(isolated_env):
         fetch_times = [t["fetch"] for t in timings]
         total_times = [t["total"] for t in timings]
 
-        print("\n[TIMING] Rapid cycles (n=10):")
+        print(f"\n[TIMING] Rapid cycles (n={NUM_RAPID_CYCLES}):")
         print(f"  Send  - min: {min(send_times):.3f}s, max: {max(send_times):.3f}s, avg: {sum(send_times)/len(send_times):.3f}s")
         print(f"  Fetch - min: {min(fetch_times):.3f}s, max: {max(fetch_times):.3f}s, avg: {sum(fetch_times)/len(fetch_times):.3f}s")
         print(f"  Total - min: {min(total_times):.3f}s, max: {max(total_times):.3f}s, avg: {sum(total_times)/len(total_times):.3f}s")
@@ -447,7 +460,7 @@ async def test_fetch_latency_measurement(isolated_env):
 
         # Measure fetch latency
         fetch_times: list[float] = []
-        for _ in range(20):
+        for _ in range(NUM_FETCH_MEASUREMENTS):
             start = time.perf_counter()
             await client.call_tool(
                 "fetch_inbox",
@@ -456,13 +469,13 @@ async def test_fetch_latency_measurement(isolated_env):
             fetch_times.append(time.perf_counter() - start)
 
         avg = sum(fetch_times) / len(fetch_times)
-        print("\n[TIMING] Fetch latency (n=20):")
+        print(f"\n[TIMING] Fetch latency (n={NUM_FETCH_MEASUREMENTS}):")
         print(f"  min: {min(fetch_times)*1000:.1f}ms")
         print(f"  max: {max(fetch_times)*1000:.1f}ms")
         print(f"  avg: {avg*1000:.1f}ms")
 
         # Fetch should be fast for empty inbox
-        assert avg < 0.5, f"Average fetch latency {avg:.3f}s exceeds 500ms threshold"
+        assert avg < MAX_FETCH_LATENCY_SECONDS, f"Average fetch latency {avg:.3f}s exceeds {MAX_FETCH_LATENCY_SECONDS}s threshold"
 
 
 @pytest.mark.asyncio
@@ -487,7 +500,7 @@ async def test_message_visibility_with_fresh_db_sessions(isolated_env):
 
         latencies: list[tuple[int, float]] = []  # (attempt, time_to_find)
 
-        for i in range(5):
+        for i in range(NUM_FRESH_SESSION_TESTS):
             # Send message
             send_result = await client.call_tool(
                 "send_message",
@@ -509,7 +522,7 @@ async def test_message_visibility_with_fresh_db_sessions(isolated_env):
             start = time.perf_counter()
             found = False
             attempts = 0
-            max_attempts = 50  # 5 seconds max with 100ms delay
+            max_attempts = int(MAX_WAIT_SECONDS / POLL_INTERVAL_SECONDS)
 
             while not found and attempts < max_attempts:
                 attempts += 1
@@ -521,7 +534,7 @@ async def test_message_visibility_with_fresh_db_sessions(isolated_env):
                 if any(m["id"] == message_id for m in inbox):
                     found = True
                 else:
-                    await asyncio.sleep(0.1)
+                    await asyncio.sleep(POLL_INTERVAL_SECONDS)
 
             elapsed = time.perf_counter() - start
             latencies.append((attempts, elapsed))
@@ -550,8 +563,8 @@ async def test_stress_many_concurrent_messages(isolated_env):
     server = build_mcp_server()
 
     async with Client(server) as client:
-        # Setup: 5 senders, 1 receiver
-        senders = [f"StressSender{i}" for i in range(5)]
+        # Setup: NUM_STRESS_SENDERS senders, 1 receiver
+        senders = [f"StressSender{i}" for i in range(NUM_STRESS_SENDERS)]
         for name in senders:
             await client.call_tool(
                 "register_agent",
@@ -563,7 +576,7 @@ async def test_stress_many_concurrent_messages(isolated_env):
             {"project_key": "/latency/stress", "program": "receiver", "model": "test", "name": "StressReceiver"},
         )
 
-        # Each sender sends 5 messages = 25 total messages
+        # Each sender sends MESSAGES_PER_SENDER messages
         async def send_messages(sender: str, count: int):
             results = []
             for i in range(count):
@@ -583,14 +596,15 @@ async def test_stress_many_concurrent_messages(isolated_env):
 
         # Send from all senders in parallel
         start = time.perf_counter()
-        all_results = await asyncio.gather(*[send_messages(s, 5) for s in senders])
+        all_results = await asyncio.gather(*[send_messages(s, MESSAGES_PER_SENDER) for s in senders])
         send_elapsed = time.perf_counter() - start
 
         all_message_ids = set()
         for sender_results in all_results:
             all_message_ids.update(sender_results)
 
-        assert len(all_message_ids) == 25, f"Expected 25 message IDs, got {len(all_message_ids)}"
+        expected_total = NUM_STRESS_SENDERS * MESSAGES_PER_SENDER
+        assert len(all_message_ids) == expected_total, f"Expected {expected_total} message IDs, got {len(all_message_ids)}"
 
         # Now fetch inbox and check all messages are visible
         fetch_start = time.perf_counter()
@@ -605,10 +619,11 @@ async def test_stress_many_concurrent_messages(isolated_env):
 
         missing = all_message_ids - found_ids
 
-        print("\n[TIMING] Stress test (25 messages from 5 senders):")
+        expected_total = NUM_STRESS_SENDERS * MESSAGES_PER_SENDER
+        print(f"\n[TIMING] Stress test ({expected_total} messages from {NUM_STRESS_SENDERS} senders):")
         print(f"  Total send time: {send_elapsed:.3f}s")
         print(f"  Fetch time: {fetch_elapsed:.3f}s")
-        print(f"  Messages found: {len(found_ids)}/25")
+        print(f"  Messages found: {len(found_ids)}/{expected_total}")
 
         if missing:
             print(f"  MISSING: {len(missing)} messages")
