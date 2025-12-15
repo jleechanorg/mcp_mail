@@ -604,10 +604,13 @@ async def write_message_bundle(
     git_commit_elapsed = time.perf_counter() - git_commit_start
     total_elapsed = time.perf_counter() - bundle_start
     logger.debug(
-        "[LATENCY] write_message_bundle: total=%.3fs mkdir=%.3fs write=%.3fs git_commit=%.3fs "
-        "files=%d msg_id=%s",
-        total_elapsed, mkdir_elapsed, write_elapsed, git_commit_elapsed,
-        len(rel_paths), message.get("id")
+        "[LATENCY] write_message_bundle: total=%.3fs mkdir=%.3fs write=%.3fs git_commit=%.3fs files=%d msg_id=%s",
+        total_elapsed,
+        mkdir_elapsed,
+        write_elapsed,
+        git_commit_elapsed,
+        len(rel_paths),
+        message.get("id"),
     )
 
 

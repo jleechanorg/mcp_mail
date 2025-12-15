@@ -2011,9 +2011,7 @@ async def _create_message(
             raise RuntimeError("Message id was not assigned after flush().")
         for recipient, kind in recipients:
             if recipient.id is None:
-                raise ValueError(
-                    f"Recipient '{recipient.name}' must have an id before sending messages."
-                )
+                raise ValueError(f"Recipient '{recipient.name}' must have an id before sending messages.")
             entry = MessageRecipient(message_id=message.id, agent_id=recipient.id, kind=kind)
             session.add(entry)
         sender.last_active_ts = datetime.now(timezone.utc)
@@ -2029,8 +2027,13 @@ async def _create_message(
     logger.debug(
         "[LATENCY] _create_message: total=%.3fs schema=%.3fs session=%.3fs "
         "(flush=%.3fs commit=%.3fs refresh=%.3fs) msg_id=%s",
-        total_elapsed, schema_elapsed, session_elapsed,
-        flush_elapsed, commit_elapsed, refresh_elapsed, message.id
+        total_elapsed,
+        schema_elapsed,
+        session_elapsed,
+        flush_elapsed,
+        commit_elapsed,
+        refresh_elapsed,
+        message.id,
     )
     return message
 
@@ -2307,7 +2310,9 @@ async def _list_inbox(
         elapsed = time.perf_counter() - list_inbox_start
         logger.debug(
             "[LATENCY] _list_inbox (global inbox agent): total=%.3fs count=%d agent=%s",
-            elapsed, len(messages), agent.name
+            elapsed,
+            len(messages),
+            agent.name,
         )
         return messages
 
@@ -2315,14 +2320,21 @@ async def _list_inbox(
     basic_start = time.perf_counter()
     messages = await _list_inbox_basic(agent, limit, urgent_only, include_bodies, since_ts)
     basic_elapsed = time.perf_counter() - basic_start
-    message_ids_in_inbox: set[int] = {
-        int(msg["id"]) for msg in messages if msg.get("id") is not None
-    }
+    message_ids_in_inbox: set[int] = set()
+    for msg in messages:
+        msg_id = msg.get("id")
+        if msg_id is None:
+            continue
+        try:
+            message_ids_in_inbox.add(int(msg_id))
+        except (TypeError, ValueError):
+            continue
 
     # Scan global inbox for messages mentioning this agent using FTS5 (much faster than regex)
     fts_elapsed = 0.0
     basic_count = len(messages)  # Track count before FTS merge
-    fts_count = 0
+    fts_requested_count = 0
+    fts_included_count = 0
     try:
         fts_start = time.perf_counter()
         global_inbox_agent = await _get_agent_by_name(global_inbox_name)
@@ -2337,29 +2349,29 @@ async def _list_inbox(
             limit=30,  # Reduced from 100 - FTS5 query is precise, doesn't need to over-fetch
         )
         fts_elapsed = time.perf_counter() - fts_start
+        fts_requested_count = len(mentioned_messages)
 
         # Merge with regular inbox, respecting the limit
         messages.extend(mentioned_messages)
-        fts_count = len(mentioned_messages)
-        messages = messages[:limit]
-        final_basic_count = min(basic_count, limit)
-        fts_count = max(0, min(fts_count, limit - final_basic_count))
+        if len(messages) > limit:
+            messages = messages[:limit]
+        # Calculate actual FTS count included after truncation
+        fts_included_count = max(0, len(messages) - basic_count)
 
     except Exception as exc:
         # If global inbox doesn't exist or there's an error, just return regular inbox
         logger.debug("global_inbox_fts_failed", exc_info=exc)
 
-    final_basic_count = min(basic_count, limit)
-
     total_elapsed = time.perf_counter() - list_inbox_start
     logger.debug(
-        "[LATENCY] _list_inbox: total=%.3fs basic=%.3fs fts=%.3fs "
-        "basic_count=%d fts_count=%d final_count=%d agent=%s",
+        "[LATENCY] _list_inbox: total=%.3fs basic=%.3fs fts=%.3fs basic_count=%d "
+        "fts_included=%d fts_requested=%d final_count=%d agent=%s",
         total_elapsed,
         basic_elapsed,
         fts_elapsed,
-        final_basic_count,
-        fts_count,
+        basic_count,
+        fts_included_count,
+        fts_requested_count,
         len(messages),
         agent.name,
     )
@@ -2420,7 +2432,9 @@ async def _find_mentions_in_global_inbox(
     messages: list[dict[str, Any]] = []
     for message, recipient_kind, sender_name in rows:
         # Skip if already in regular inbox
-        if message.id is not None and message.id in exclude_message_ids:
+        if message.id is None:
+            continue
+        if message.id in exclude_message_ids:
             continue
 
         payload = _message_to_dict(message, include_body=include_bodies)
@@ -2478,7 +2492,11 @@ async def _list_inbox_basic(
     total_elapsed = time.perf_counter() - basic_start
     logger.debug(
         "[LATENCY] _list_inbox_basic: total=%.3fs schema=%.3fs query=%.3fs count=%d agent=%s",
-        total_elapsed, schema_elapsed, query_elapsed, len(messages), agent.name
+        total_elapsed,
+        schema_elapsed,
+        query_elapsed,
+        len(messages),
+        agent.name,
     )
     return messages
 
@@ -3128,7 +3146,7 @@ def build_mcp_server() -> FastMCP:
         lock_acquire_start = time.perf_counter()
 
         async with _archive_write_lock(archive):
-            lock_acquired_elapsed = time.perf_counter() - lock_acquire_start
+            lock_wait_elapsed = time.perf_counter() - lock_acquire_start
             # Server-side file_reservations enforcement: block if conflicting active exclusive file_reservation exists
             if settings.file_reservations_enforcement_enabled:
                 await _expire_stale_file_reservations(project.id or 0)
@@ -3262,9 +3280,14 @@ def build_mcp_server() -> FastMCP:
         logger.info(
             "[LATENCY] _deliver_message: total=%.3fs recipients=%.3fs archive_init=%.3fs "
             "lock_wait=%.3fs attachments=%.3fs db_write=%.3fs git_write=%.3fs msg_id=%s",
-            total_elapsed, recipient_lookup_elapsed, archive_elapsed,
-            lock_acquired_elapsed, attachments_elapsed, db_write_elapsed, git_write_elapsed,
-            message.id
+            total_elapsed,
+            recipient_lookup_elapsed,
+            archive_elapsed,
+            lock_wait_elapsed,
+            attachments_elapsed,
+            db_write_elapsed,
+            git_write_elapsed,
+            message.id,
         )
         await ctx.info(f"Message {message.id} created by {sender.name} (to {', '.join(recipients_for_archive)})")
 
