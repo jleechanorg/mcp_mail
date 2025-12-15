@@ -2007,7 +2007,13 @@ async def _create_message(
         flush_start = time.perf_counter()
         await session.flush()
         flush_elapsed = time.perf_counter() - flush_start
+        if message.id is None:
+            raise RuntimeError("Message id was not assigned after flush().")
         for recipient, kind in recipients:
+            if recipient.id is None:
+                raise ValueError(
+                    f"Recipient '{recipient.name}' must have an id before sending messages."
+                )
             entry = MessageRecipient(message_id=message.id, agent_id=recipient.id, kind=kind)
             session.add(entry)
         sender.last_active_ts = datetime.now(timezone.utc)
@@ -2309,7 +2315,9 @@ async def _list_inbox(
     basic_start = time.perf_counter()
     messages = await _list_inbox_basic(agent, limit, urgent_only, include_bodies, since_ts)
     basic_elapsed = time.perf_counter() - basic_start
-    message_ids_in_inbox = {msg["id"] for msg in messages}
+    message_ids_in_inbox: set[int] = {
+        int(msg["id"]) for msg in messages if msg.get("id") is not None
+    }
 
     # Scan global inbox for messages mentioning this agent using FTS5 (much faster than regex)
     fts_elapsed = 0.0
@@ -2332,20 +2340,28 @@ async def _list_inbox(
 
         # Merge with regular inbox, respecting the limit
         messages.extend(mentioned_messages)
+        fts_count = len(mentioned_messages)
         messages = messages[:limit]
-        # Calculate actual FTS count included after truncation
-        fts_count = max(0, len(messages) - basic_count)
+        final_basic_count = min(basic_count, limit)
+        fts_count = max(0, min(fts_count, limit - final_basic_count))
 
-    except Exception:
+    except Exception as exc:
         # If global inbox doesn't exist or there's an error, just return regular inbox
-        pass
+        logger.debug("global_inbox_fts_failed", exc_info=exc)
+
+    final_basic_count = min(basic_count, limit)
 
     total_elapsed = time.perf_counter() - list_inbox_start
     logger.debug(
         "[LATENCY] _list_inbox: total=%.3fs basic=%.3fs fts=%.3fs "
         "basic_count=%d fts_count=%d final_count=%d agent=%s",
-        total_elapsed, basic_elapsed, fts_elapsed,
-        basic_count, fts_count, len(messages), agent.name
+        total_elapsed,
+        basic_elapsed,
+        fts_elapsed,
+        final_basic_count,
+        fts_count,
+        len(messages),
+        agent.name,
     )
     return messages
 
@@ -2353,7 +2369,7 @@ async def _list_inbox(
 async def _find_mentions_in_global_inbox(
     agent_name: str,
     global_inbox_agent: Agent,
-    exclude_message_ids: set[str],
+    exclude_message_ids: set[int],
     include_bodies: bool,
     since_ts: Optional[str],
     limit: int = 30,
@@ -2404,7 +2420,7 @@ async def _find_mentions_in_global_inbox(
     messages: list[dict[str, Any]] = []
     for message, recipient_kind, sender_name in rows:
         # Skip if already in regular inbox
-        if message.id in exclude_message_ids:
+        if message.id is not None and message.id in exclude_message_ids:
             continue
 
         payload = _message_to_dict(message, include_body=include_bodies)
