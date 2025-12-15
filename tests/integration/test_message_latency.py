@@ -20,7 +20,7 @@ import pytest
 from fastmcp import Client
 
 from mcp_agent_mail.app import build_mcp_server
-from mcp_agent_mail.db import get_session, reset_database_state
+from mcp_agent_mail.db import reset_database_state
 
 
 def extract_inbox(inbox_result) -> list[dict[str, Any]]:
@@ -228,7 +228,7 @@ async def test_concurrent_send_and_fetch(isolated_env):
         fetch_task = asyncio.create_task(fetch_with_retry())
 
         await send_task
-        attempts, final_inbox = await fetch_task
+        attempts, _ = await fetch_task
         elapsed = time.perf_counter() - start
 
         assert results["found"], f"Message not found after {attempts} attempts ({elapsed:.3f}s total)"
@@ -299,7 +299,7 @@ async def test_rapid_send_fetch_cycles(isolated_env):
         fetch_times = [t["fetch"] for t in timings]
         total_times = [t["total"] for t in timings]
 
-        print(f"\n[TIMING] Rapid cycles (n=10):")
+        print("\n[TIMING] Rapid cycles (n=10):")
         print(f"  Send  - min: {min(send_times):.3f}s, max: {max(send_times):.3f}s, avg: {sum(send_times)/len(send_times):.3f}s")
         print(f"  Fetch - min: {min(fetch_times):.3f}s, max: {max(fetch_times):.3f}s, avg: {sum(fetch_times)/len(fetch_times):.3f}s")
         print(f"  Total - min: {min(total_times):.3f}s, max: {max(total_times):.3f}s, avg: {sum(total_times)/len(total_times):.3f}s")
@@ -417,7 +417,7 @@ async def test_parallel_sends_then_fetch(isolated_env):
 
         missing = message_ids - found_ids
 
-        print(f"\n[TIMING] Parallel sends:")
+        print("\n[TIMING] Parallel sends:")
         print(f"  Total parallel send time: {parallel_send_elapsed:.3f}s")
         for sender, elapsed in timings.items():
             print(f"  {sender}: {elapsed:.3f}s")
@@ -456,7 +456,7 @@ async def test_fetch_latency_measurement(isolated_env):
             fetch_times.append(time.perf_counter() - start)
 
         avg = sum(fetch_times) / len(fetch_times)
-        print(f"\n[TIMING] Fetch latency (n=20):")
+        print("\n[TIMING] Fetch latency (n=20):")
         print(f"  min: {min(fetch_times)*1000:.1f}ms")
         print(f"  max: {max(fetch_times)*1000:.1f}ms")
         print(f"  avg: {avg*1000:.1f}ms")
@@ -528,7 +528,7 @@ async def test_message_visibility_with_fresh_db_sessions(isolated_env):
 
             assert found, f"Message {i} not found after {attempts} attempts"
 
-        print(f"\n[TIMING] Fresh DB session tests:")
+        print("\n[TIMING] Fresh DB session tests:")
         for i, (attempts, elapsed) in enumerate(latencies):
             print(f"  Message {i}: found after {attempts} attempts ({elapsed:.3f}s)")
 
@@ -605,7 +605,7 @@ async def test_stress_many_concurrent_messages(isolated_env):
 
         missing = all_message_ids - found_ids
 
-        print(f"\n[TIMING] Stress test (25 messages from 5 senders):")
+        print("\n[TIMING] Stress test (25 messages from 5 senders):")
         print(f"  Total send time: {send_elapsed:.3f}s")
         print(f"  Fetch time: {fetch_elapsed:.3f}s")
         print(f"  Messages found: {len(found_ids)}/25")

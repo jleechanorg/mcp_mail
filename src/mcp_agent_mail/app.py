@@ -2313,7 +2313,8 @@ async def _list_inbox(
 
     # Scan global inbox for messages mentioning this agent using FTS5 (much faster than regex)
     fts_elapsed = 0.0
-    mentioned_count = 0
+    basic_count = len(messages)  # Track count before FTS merge
+    fts_count = 0
     try:
         fts_start = time.perf_counter()
         global_inbox_agent = await _get_agent_by_name(global_inbox_name)
@@ -2328,11 +2329,12 @@ async def _list_inbox(
             limit=30,  # Reduced from 100 - FTS5 query is precise, doesn't need to over-fetch
         )
         fts_elapsed = time.perf_counter() - fts_start
-        mentioned_count = len(mentioned_messages)
 
         # Merge with regular inbox, respecting the limit
         messages.extend(mentioned_messages)
         messages = messages[:limit]
+        # Calculate actual FTS count included after truncation
+        fts_count = max(0, len(messages) - basic_count)
 
     except Exception:
         # If global inbox doesn't exist or there's an error, just return regular inbox
@@ -2341,9 +2343,9 @@ async def _list_inbox(
     total_elapsed = time.perf_counter() - list_inbox_start
     logger.debug(
         "[LATENCY] _list_inbox: total=%.3fs basic=%.3fs fts=%.3fs "
-        "basic_count=%d fts_count=%d agent=%s",
+        "basic_count=%d fts_count=%d final_count=%d agent=%s",
         total_elapsed, basic_elapsed, fts_elapsed,
-        len(messages) - mentioned_count, mentioned_count, agent.name
+        basic_count, fts_count, len(messages), agent.name
     )
     return messages
 
