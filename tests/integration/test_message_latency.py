@@ -642,9 +642,7 @@ async def test_stress_many_concurrent_messages(isolated_env):
 
         missing = all_message_ids - found_ids
 
-        rich_print(
-            f"\n[TIMING] Stress test ({expected_total} messages from {NUM_STRESS_SENDERS} senders):"
-        )
+        rich_print(f"\n[TIMING] Stress test ({expected_total} messages from {NUM_STRESS_SENDERS} senders):")
         rich_print(f"  Total send time: {send_elapsed:.3f}s")
         rich_print(f"  Fetch time: {fetch_elapsed:.3f}s")
         rich_print(f"  Messages found: {len(found_ids)}/{expected_total}")
