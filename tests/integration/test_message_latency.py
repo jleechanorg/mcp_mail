@@ -104,7 +104,9 @@ async def test_immediate_message_visibility_single_client(isolated_env):
 
         # Should find message immediately
         matching = [m for m in inbox if m["id"] == message_id]
-        assert matching, f"Message {message_id} not found. Send took {send_elapsed:.3f}s, fetch took {fetch_elapsed:.3f}s"
+        assert matching, (
+            f"Message {message_id} not found. Send took {send_elapsed:.3f}s, fetch took {fetch_elapsed:.3f}s"
+        )
 
         print(f"\n[TIMING] Single client - Send: {send_elapsed:.3f}s, Fetch: {fetch_elapsed:.3f}s")
 
@@ -157,7 +159,9 @@ async def test_immediate_message_visibility_separate_clients(isolated_env):
         inbox = extract_inbox(inbox_result)
 
         matching = [m for m in inbox if m["id"] == message_id]
-        assert matching, f"Message {message_id} not found with separate client. Send: {send_elapsed:.3f}s, Fetch: {fetch_elapsed:.3f}s"
+        assert matching, (
+            f"Message {message_id} not found with separate client. Send: {send_elapsed:.3f}s, Fetch: {fetch_elapsed:.3f}s"
+        )
 
         print(f"\n[TIMING] Separate clients - Send: {send_elapsed:.3f}s, Fetch: {fetch_elapsed:.3f}s")
 
@@ -180,7 +184,12 @@ async def test_concurrent_send_and_fetch(isolated_env):
         )
         await client.call_tool(
             "register_agent",
-            {"project_key": "/latency/concurrent", "program": "receiver", "model": "test", "name": "ConcurrentReceiver"},
+            {
+                "project_key": "/latency/concurrent",
+                "program": "receiver",
+                "model": "test",
+                "name": "ConcurrentReceiver",
+            },
         )
 
         results: dict[str, Any] = {"message_id": None, "found": False, "attempts": 0}
@@ -283,13 +292,15 @@ async def test_rapid_send_fetch_cycles(isolated_env):
             inbox = extract_inbox(inbox_result)
             found = any(m["id"] == message_id for m in inbox)
 
-            timings.append({
-                "cycle": i,
-                "send": send_elapsed,
-                "fetch": fetch_elapsed,
-                "total": send_elapsed + fetch_elapsed,
-                "found": found,
-            })
+            timings.append(
+                {
+                    "cycle": i,
+                    "send": send_elapsed,
+                    "fetch": fetch_elapsed,
+                    "total": send_elapsed + fetch_elapsed,
+                    "found": found,
+                }
+            )
 
             if not found:
                 failures.append(i)
@@ -300,9 +311,15 @@ async def test_rapid_send_fetch_cycles(isolated_env):
         total_times = [t["total"] for t in timings]
 
         print("\n[TIMING] Rapid cycles (n=10):")
-        print(f"  Send  - min: {min(send_times):.3f}s, max: {max(send_times):.3f}s, avg: {sum(send_times)/len(send_times):.3f}s")
-        print(f"  Fetch - min: {min(fetch_times):.3f}s, max: {max(fetch_times):.3f}s, avg: {sum(fetch_times)/len(fetch_times):.3f}s")
-        print(f"  Total - min: {min(total_times):.3f}s, max: {max(total_times):.3f}s, avg: {sum(total_times)/len(total_times):.3f}s")
+        print(
+            f"  Send  - min: {min(send_times):.3f}s, max: {max(send_times):.3f}s, avg: {sum(send_times) / len(send_times):.3f}s"
+        )
+        print(
+            f"  Fetch - min: {min(fetch_times):.3f}s, max: {max(fetch_times):.3f}s, avg: {sum(fetch_times) / len(fetch_times):.3f}s"
+        )
+        print(
+            f"  Total - min: {min(total_times):.3f}s, max: {max(total_times):.3f}s, avg: {sum(total_times) / len(total_times):.3f}s"
+        )
 
         if failures:
             print(f"  FAILURES at cycles: {failures}")
@@ -457,9 +474,9 @@ async def test_fetch_latency_measurement(isolated_env):
 
         avg = sum(fetch_times) / len(fetch_times)
         print("\n[TIMING] Fetch latency (n=20):")
-        print(f"  min: {min(fetch_times)*1000:.1f}ms")
-        print(f"  max: {max(fetch_times)*1000:.1f}ms")
-        print(f"  avg: {avg*1000:.1f}ms")
+        print(f"  min: {min(fetch_times) * 1000:.1f}ms")
+        print(f"  max: {max(fetch_times) * 1000:.1f}ms")
+        print(f"  avg: {avg * 1000:.1f}ms")
 
         # Fetch should be fast for empty inbox
         assert avg < 0.5, f"Average fetch latency {avg:.3f}s exceeds 500ms threshold"

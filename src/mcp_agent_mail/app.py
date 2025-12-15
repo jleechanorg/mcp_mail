@@ -2023,8 +2023,13 @@ async def _create_message(
     logger.debug(
         "[LATENCY] _create_message: total=%.3fs schema=%.3fs session=%.3fs "
         "(flush=%.3fs commit=%.3fs refresh=%.3fs) msg_id=%s",
-        total_elapsed, schema_elapsed, session_elapsed,
-        flush_elapsed, commit_elapsed, refresh_elapsed, message.id
+        total_elapsed,
+        schema_elapsed,
+        session_elapsed,
+        flush_elapsed,
+        commit_elapsed,
+        refresh_elapsed,
+        message.id,
     )
     return message
 
@@ -2301,7 +2306,9 @@ async def _list_inbox(
         elapsed = time.perf_counter() - list_inbox_start
         logger.debug(
             "[LATENCY] _list_inbox (global inbox agent): total=%.3fs count=%d agent=%s",
-            elapsed, len(messages), agent.name
+            elapsed,
+            len(messages),
+            agent.name,
         )
         return messages
 
@@ -2342,10 +2349,14 @@ async def _list_inbox(
 
     total_elapsed = time.perf_counter() - list_inbox_start
     logger.debug(
-        "[LATENCY] _list_inbox: total=%.3fs basic=%.3fs fts=%.3fs "
-        "basic_count=%d fts_count=%d final_count=%d agent=%s",
-        total_elapsed, basic_elapsed, fts_elapsed,
-        basic_count, fts_count, len(messages), agent.name
+        "[LATENCY] _list_inbox: total=%.3fs basic=%.3fs fts=%.3fs basic_count=%d fts_count=%d final_count=%d agent=%s",
+        total_elapsed,
+        basic_elapsed,
+        fts_elapsed,
+        basic_count,
+        fts_count,
+        len(messages),
+        agent.name,
     )
     return messages
 
@@ -2462,7 +2473,11 @@ async def _list_inbox_basic(
     total_elapsed = time.perf_counter() - basic_start
     logger.debug(
         "[LATENCY] _list_inbox_basic: total=%.3fs schema=%.3fs query=%.3fs count=%d agent=%s",
-        total_elapsed, schema_elapsed, query_elapsed, len(messages), agent.name
+        total_elapsed,
+        schema_elapsed,
+        query_elapsed,
+        len(messages),
+        agent.name,
     )
     return messages
 
@@ -3246,9 +3261,14 @@ def build_mcp_server() -> FastMCP:
         logger.info(
             "[LATENCY] _deliver_message: total=%.3fs recipients=%.3fs archive_init=%.3fs "
             "lock_wait=%.3fs attachments=%.3fs db_write=%.3fs git_write=%.3fs msg_id=%s",
-            total_elapsed, recipient_lookup_elapsed, archive_elapsed,
-            lock_acquired_elapsed, attachments_elapsed, db_write_elapsed, git_write_elapsed,
-            message.id
+            total_elapsed,
+            recipient_lookup_elapsed,
+            archive_elapsed,
+            lock_acquired_elapsed,
+            attachments_elapsed,
+            db_write_elapsed,
+            git_write_elapsed,
+            message.id,
         )
         await ctx.info(f"Message {message.id} created by {sender.name} (to {', '.join(recipients_for_archive)})")
 
