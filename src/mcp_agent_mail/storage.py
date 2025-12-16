@@ -564,8 +564,10 @@ async def write_message_bundle(
     write_elapsed = time.perf_counter() - write_start
 
     # Update thread-level digest for human review if thread_id present
+    digest_elapsed = 0.0
     thread_id_obj = message.get("thread_id")
     if isinstance(thread_id_obj, str) and thread_id_obj.strip():
+        digest_start = time.perf_counter()
         canonical_rel = canonical_path.relative_to(archive.repo_root).as_posix()
         digest_rel = await _update_thread_digest(
             archive,
@@ -581,6 +583,7 @@ async def write_message_bundle(
         )
         if digest_rel:
             rel_paths.append(digest_rel)
+        digest_elapsed = time.perf_counter() - digest_start
 
     if extra_paths:
         rel_paths.extend(extra_paths)
@@ -604,10 +607,12 @@ async def write_message_bundle(
     git_commit_elapsed = time.perf_counter() - git_commit_start
     total_elapsed = time.perf_counter() - bundle_start
     logger.debug(
-        "[LATENCY] write_message_bundle: total=%.3fs mkdir=%.3fs write=%.3fs git_commit=%.3fs files=%d msg_id=%s",
+        "[LATENCY] write_message_bundle: total=%.3fs mkdir=%.3fs write=%.3fs "
+        "digest=%.3fs git_commit=%.3fs files=%d msg_id=%s",
         total_elapsed,
         mkdir_elapsed,
         write_elapsed,
+        digest_elapsed,
         git_commit_elapsed,
         len(rel_paths),
         message.get("id"),
