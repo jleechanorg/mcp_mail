@@ -470,11 +470,10 @@ def _lifespan_factory(settings: Settings):
             )
         await ensure_schema(settings)
 
-        # Initialize Slack client if enabled
+        # Initialize Slack client if enabled (using singleton to share thread mappings)
         if settings.slack.enabled:
             try:
-                _slack_client = SlackClient(settings.slack)
-                await _slack_client.connect()
+                _slack_client = await SlackClient.get_instance(settings.slack)
                 logger.info("Slack integration initialized successfully")
             except Exception as e:
                 logger.error(f"Failed to initialize Slack integration: {e}")

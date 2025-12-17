@@ -335,7 +335,7 @@ def get_settings() -> Settings:
         project_key_storage_enabled=_bool(
             _decouple_config("STORAGE_PROJECT_KEY_ENABLED", default="false"), default=False
         ),
-        local_archive_enabled=_bool(_decouple_config("STORAGE_LOCAL_ARCHIVE_ENABLED", default="false"), default=False),
+        local_archive_enabled=_bool(_get_config_value("STORAGE_LOCAL_ARCHIVE_ENABLED", default="false"), default=False),
         project_key_prompt_enabled=_bool(
             _decouple_config("STORAGE_PROJECT_KEY_PROMPT_ENABLED", default="true"), default=True
         ),
@@ -383,11 +383,11 @@ def get_settings() -> Settings:
         app_token=_get_config_value("SLACK_APP_TOKEN", default="") or None,
         signing_secret=_get_config_value("SLACK_SIGNING_SECRET", default="") or None,
         default_channel=_get_config_value("SLACK_DEFAULT_CHANNEL", default="general"),
-        notify_on_message=_bool(_decouple_config("SLACK_NOTIFY_ON_MESSAGE", default="true"), default=True),
-        notify_on_ack=_bool(_decouple_config("SLACK_NOTIFY_ON_ACK", default="false"), default=False),
+        notify_on_message=_bool(_get_config_value("SLACK_NOTIFY_ON_MESSAGE", default="true"), default=True),
+        notify_on_ack=_bool(_get_config_value("SLACK_NOTIFY_ON_ACK", default="false"), default=False),
         notify_mention_format=mention_format,
-        sync_enabled=_bool(_decouple_config("SLACK_SYNC_ENABLED", default="false"), default=False),
-        sync_project_name=_decouple_config("SLACK_SYNC_PROJECT_NAME", default="Slack Sync"),
+        sync_enabled=_bool(_get_config_value("SLACK_SYNC_ENABLED", default="false"), default=False),
+        sync_project_name=_get_config_value("SLACK_SYNC_PROJECT_NAME", default="Slack Sync"),
         sync_channels=_csv("SLACK_SYNC_CHANNELS", default=""),
         sync_thread_replies=_bool(_decouple_config("SLACK_SYNC_THREAD_REPLIES", default="true"), default=True),
         sync_reactions=_bool(_decouple_config("SLACK_SYNC_REACTIONS", default="true"), default=True),
