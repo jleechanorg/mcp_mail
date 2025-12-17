@@ -1492,10 +1492,11 @@ async def _get_or_create_agent(
                             session.add(agent)
                             await session.commit()
                             await session.refresh(agent)
-                            # Write updated profile to archive
-                            archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-                            async with _archive_write_lock(archive):
-                                await write_agent_profile(archive, _agent_to_dict(agent))
+                            # Write updated profile to archive (only if archive is enabled)
+                            if is_archive_enabled(settings):
+                                archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+                                async with _archive_write_lock(archive):
+                                    await write_agent_profile(archive, _agent_to_dict(agent))
                             return agent
                 # If we couldn't find the agent, fall through to regular logic
             # Check if the user-provided name is globally unique
@@ -1619,9 +1620,11 @@ async def _get_or_create_agent(
                         "hint": "Retry the operation; if it persists, call register_agent with force_reclaim=True",
                     },
                 ) from exc
-    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-    async with _archive_write_lock(archive):
-        await write_agent_profile(archive, _agent_to_dict(agent))
+    # Write agent profile to archive (only if archive is enabled)
+    if is_archive_enabled(settings):
+        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+        async with _archive_write_lock(archive):
+            await write_agent_profile(archive, _agent_to_dict(agent))
     return agent
 
 
