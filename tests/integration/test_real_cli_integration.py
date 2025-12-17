@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-"""Real CLI Integration Tests for MCP Agent Mail.
+"""Real CLI Availability Tests for MCP Agent Mail.
 
-These tests invoke actual CLI tools (Claude, Cursor, Codex, Gemini) using the
-orchestration framework and verify MCP Agent Mail functionality.
+These tests verify that CLI tools (Claude, Cursor, Codex, Gemini) are installed
+and can be invoked using the orchestration framework. They are prerequisite checks
+before running full MCP Agent Mail integration tests.
+
+For full MCP Agent Mail functionality tests that verify register_agent, send_message,
+and fetch_inbox operations, see testing_llm/run_real_cli_test.py.
 
 Usage:
-    # Run Claude integration test
+    # Run Claude availability test
     python -m pytest tests/integration/test_real_cli_integration.py -k claude -v
 
-    # Run all real CLI tests (requires CLIs installed)
+    # Run all CLI availability tests (requires CLIs installed)
     python -m pytest tests/integration/test_real_cli_integration.py -v
 
     # Run as standalone script
@@ -36,7 +40,6 @@ sys.path.insert(0, str(project_root))
 
 from tests.integration.test_harness_utils import (
     ORCHESTRATION_AVAILABLE,
-    BaseCLITest,
     ClaudeCLITest,
     CodexCLITest,
     CursorCLITest,
@@ -53,10 +56,12 @@ pytestmark = pytest.mark.skipif(
 
 
 class MCPMailClaudeCLITest(ClaudeCLITest):
-    """Claude CLI integration test for MCP Agent Mail.
+    """Claude CLI availability test for MCP Agent Mail integration.
 
-    This test verifies that Claude Code CLI can interact with
-    MCP Agent Mail tools when properly configured.
+    This test verifies that Claude Code CLI is installed and responding.
+    For full MCP Agent Mail functionality tests (register_agent, send_message,
+    fetch_inbox), see testing_llm/run_real_cli_test.py which runs multi-agent
+    workflows.
     """
 
     def run_all_tests(self) -> int:
@@ -107,10 +112,11 @@ class MCPMailClaudeCLITest(ClaudeCLITest):
 
 
 class MCPMailCursorCLITest(CursorCLITest):
-    """Cursor CLI integration test for MCP Agent Mail.
+    """Cursor CLI availability test for MCP Agent Mail integration.
 
+    This test verifies that cursor-agent CLI is installed and responding.
     Note: cursor-agent CLI may use different storage than Cursor IDE.
-    This test is expected to work with Cursor agent configurations.
+    For full MCP Agent Mail functionality tests, see testing_llm/run_real_cli_test.py.
     """
 
     def run_all_tests(self) -> int:
@@ -143,7 +149,11 @@ class MCPMailCursorCLITest(CursorCLITest):
 
 
 class MCPMailCodexCLITest(CodexCLITest):
-    """Codex CLI integration test for MCP Agent Mail."""
+    """Codex CLI availability test for MCP Agent Mail integration.
+
+    This test verifies that Codex CLI is installed and responding.
+    For full MCP Agent Mail functionality tests, see testing_llm/run_real_cli_test.py.
+    """
 
     def run_all_tests(self) -> int:
         """Run Codex-specific MCP Mail integration tests."""
@@ -175,7 +185,11 @@ class MCPMailCodexCLITest(CodexCLITest):
 
 
 class MCPMailGeminiCLITest(GeminiCLITest):
-    """Gemini CLI integration test for MCP Agent Mail."""
+    """Gemini CLI availability test for MCP Agent Mail integration.
+
+    This test verifies that Gemini CLI is installed and responding.
+    For full MCP Agent Mail functionality tests, see testing_llm/run_real_cli_test.py.
+    """
 
     def run_all_tests(self) -> int:
         """Run Gemini-specific MCP Mail integration tests."""
