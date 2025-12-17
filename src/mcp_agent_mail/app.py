@@ -85,6 +85,9 @@ CLUSTER_FILE_RESERVATIONS = "file_reservations"
 CLUSTER_MACROS = "workflow_macros"
 CLUSTER_PRODUCT = "product"
 
+# Default project for agents when project_key is not specified
+DEFAULT_PROJECT_KEY = "global"
+
 
 # Global inbox configuration
 
@@ -842,6 +845,29 @@ async def _ensure_project(human_key: str) -> Project:
         await session.refresh(project)
         # Create global inbox agent for new project
         await _ensure_global_inbox_agent(project, session)
+        return project
+
+
+async def _get_default_project() -> Project:
+    """Get or create the default global project for agents without explicit project context.
+    
+    This enables backwards compatibility: agents can be created without specifying a project,
+    and they'll be associated with this default global project.
+    """
+    return await _ensure_project(DEFAULT_PROJECT_KEY)
+
+
+async def _get_project_for_agent(agent: Agent) -> Optional[Project]:
+    """Get the project associated with an agent, if any.
+    
+    Returns None if the agent has no project_id (new schema allows this).
+    For backwards compatibility, existing agents retain their project association.
+    """
+    if agent.project_id is None:
+        return None
+    await ensure_schema()
+    async with get_session() as session:
+        project = await session.get(Project, agent.project_id)
         return project
 
 
@@ -1974,7 +2000,7 @@ async def _find_similar_agents(name: str, limit: int = 5) -> list[str]:
 
 
 async def _create_message(
-    project: Project,
+    project: Optional[Project],
     sender: Agent,
     subject: str,
     body_md: str,
@@ -1984,8 +2010,8 @@ async def _create_message(
     thread_id: Optional[str],
     attachments: Sequence[dict[str, Any]],
 ) -> Message:
-    if project.id is None:
-        raise ValueError("Project must have an id before creating messages.")
+    # project_id is now optional - messages can exist without project context
+    project_id = project.id if project else None
     if sender.id is None:
         raise ValueError("Sender must have an id before sending messages.")
     create_start = time.perf_counter()
@@ -1994,7 +2020,7 @@ async def _create_message(
     async with get_session() as session:
         session_start = time.perf_counter()
         message = Message(
-            project_id=project.id,
+            project_id=project_id,
             sender_id=sender.id,
             subject=subject,
             body_md=body_md,
@@ -3583,10 +3609,10 @@ def build_mcp_server() -> FastMCP:
     )
     async def register_agent(
         ctx: Context,
-        project_key: str,
         program: str,
         model: str,
         name: Optional[str] = None,
+        project_key: Optional[str] = None,
         task_description: str = "",
         attachments_policy: str = "auto",
         force_reclaim: bool = False,
@@ -3678,7 +3704,11 @@ def build_mcp_server() -> FastMCP:
         - Use the same `project_key` consistently across cooperating agents.
         """
         # Auto-create project if it doesn't exist (allows any string as project_key)
-        project = await _ensure_project(project_key)
+        # If project_key is None, use the default global project
+        if project_key is None:
+            project = await _get_default_project()
+        else:
+            project = await _ensure_project(project_key)
         await ensure_archive(settings, project.slug, project_key=project.human_key)
 
         if settings.tools_log_enabled:
@@ -4005,11 +4035,11 @@ def build_mcp_server() -> FastMCP:
     )
     async def send_message(
         ctx: Context,
-        project_key: str,
         sender_name: str,
         to: list[str],
         subject: str,
         body_md: str,
+        project_key: Optional[str] = None,
         cc: Optional[list[str]] = None,
         bcc: Optional[list[str]] = None,
         attachment_paths: Optional[list[str]] = None,
@@ -4124,7 +4154,13 @@ def build_mcp_server() -> FastMCP:
         }}}
         ```
         """
-        project = await _get_project_by_identifier(project_key)
+        # If project_key is None, use sender's project or default project
+        # Messages are routed by agent name (globally unique), so project is informational only
+        if project_key is not None:
+            project = await _get_project_by_identifier(project_key)
+        else:
+            # We'll determine project after getting sender; for now use None placeholder
+            project = None
         # Normalize cc/bcc inputs and validate types for friendlier UX
         if isinstance(cc, str):
             cc = [cc]
@@ -4188,6 +4224,13 @@ def build_mcp_server() -> FastMCP:
             except Exception:
                 pass
         sender = await _get_agent_by_name(sender_name)
+        
+        # If project wasn't specified, derive from sender's project or use default
+        if project is None:
+            project = await _get_project_for_agent(sender)
+            if project is None:
+                project = await _get_default_project()
+        
         settings_local = get_settings()
         # Collect all recipients (project boundaries don't matter anymore)
         all_to: list[str] = []

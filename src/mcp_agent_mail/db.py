@@ -382,3 +382,143 @@ def _ensure_agent_active_columns(connection) -> None:
         connection.exec_driver_sql("ALTER TABLE agents ADD COLUMN is_placeholder INTEGER NOT NULL DEFAULT 0")
     connection.exec_driver_sql("UPDATE agents SET is_active = 1 WHERE is_active IS NULL")
     connection.exec_driver_sql("UPDATE agents SET contact_policy = 'auto' WHERE contact_policy IS NULL")
+
+    # MIGRATION v0.2.0: Make project_id nullable on agents and messages tables
+    # This allows agents and messages to exist without project context
+    _migrate_project_id_nullable(connection)
+
+
+def _migrate_project_id_nullable(connection) -> None:
+    """Migrate agents and messages tables to make project_id nullable.
+
+    SQLite doesn't support ALTER COLUMN, so we need to recreate tables.
+    This migration:
+    1. Checks if project_id is NOT NULL (needs migration)
+    2. Recreates table with nullable project_id
+    3. Copies all data
+    4. Drops old table and renames new one
+
+    Existing data retains its project_id values; new records can have NULL.
+    """
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    # Check if agents.project_id is NOT NULL
+    agents_info = connection.exec_driver_sql("PRAGMA table_info('agents')").fetchall()
+    agents_project_id_notnull = False
+    for col in agents_info:
+        # col format: (cid, name, type, notnull, dflt_value, pk)
+        if col[1] == "project_id" and col[3] == 1:  # notnull == 1
+            agents_project_id_notnull = True
+            break
+
+    if agents_project_id_notnull:
+        logger.info("Migrating agents table: making project_id nullable...")
+        _recreate_agents_table_nullable_project_id(connection)
+        logger.info("agents table migration complete")
+
+    # Check if messages.project_id is NOT NULL
+    messages_info = connection.exec_driver_sql("PRAGMA table_info('messages')").fetchall()
+    messages_project_id_notnull = False
+    for col in messages_info:
+        if col[1] == "project_id" and col[3] == 1:
+            messages_project_id_notnull = True
+            break
+
+    if messages_project_id_notnull:
+        logger.info("Migrating messages table: making project_id nullable...")
+        _recreate_messages_table_nullable_project_id(connection)
+        logger.info("messages table migration complete")
+
+
+def _recreate_agents_table_nullable_project_id(connection) -> None:
+    """Recreate agents table with nullable project_id."""
+    # Create new table with nullable project_id
+    connection.exec_driver_sql(
+        """
+        CREATE TABLE agents_new (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER REFERENCES projects(id),
+            name VARCHAR(128) NOT NULL,
+            program VARCHAR(128) NOT NULL,
+            model VARCHAR(128) NOT NULL,
+            task_description VARCHAR(2048) DEFAULT '',
+            inception_ts TIMESTAMP,
+            last_active_ts TIMESTAMP,
+            attachments_policy VARCHAR(16) DEFAULT 'auto',
+            contact_policy VARCHAR(16) DEFAULT 'auto',
+            is_active INTEGER DEFAULT 1,
+            deleted_ts TIMESTAMP,
+            is_placeholder INTEGER DEFAULT 0
+        )
+        """
+    )
+
+    # Copy data from old table
+    connection.exec_driver_sql(
+        """
+        INSERT INTO agents_new (
+            id, project_id, name, program, model, task_description,
+            inception_ts, last_active_ts, attachments_policy, contact_policy,
+            is_active, deleted_ts, is_placeholder
+        )
+        SELECT
+            id, project_id, name, program, model, task_description,
+            inception_ts, last_active_ts, attachments_policy, contact_policy,
+            is_active, deleted_ts, is_placeholder
+        FROM agents
+        """
+    )
+
+    # Drop old table and rename new one
+    connection.exec_driver_sql("DROP TABLE agents")
+    connection.exec_driver_sql("ALTER TABLE agents_new RENAME TO agents")
+
+    # Recreate indexes
+    connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_agents_project_id ON agents(project_id)")
+    connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_agents_name ON agents(name)")
+
+
+def _recreate_messages_table_nullable_project_id(connection) -> None:
+    """Recreate messages table with nullable project_id."""
+    # Create new table with nullable project_id
+    connection.exec_driver_sql(
+        """
+        CREATE TABLE messages_new (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER REFERENCES projects(id),
+            sender_id INTEGER NOT NULL REFERENCES agents(id),
+            thread_id VARCHAR(128),
+            subject VARCHAR(512) NOT NULL,
+            body_md TEXT NOT NULL,
+            importance VARCHAR(16) DEFAULT 'normal',
+            ack_required INTEGER DEFAULT 0,
+            created_ts TIMESTAMP,
+            attachments JSON DEFAULT '[]'
+        )
+        """
+    )
+
+    # Copy data from old table
+    connection.exec_driver_sql(
+        """
+        INSERT INTO messages_new (
+            id, project_id, sender_id, thread_id, subject, body_md,
+            importance, ack_required, created_ts, attachments
+        )
+        SELECT
+            id, project_id, sender_id, thread_id, subject, body_md,
+            importance, ack_required, created_ts, attachments
+        FROM messages
+        """
+    )
+
+    # Drop old table and rename new one
+    connection.exec_driver_sql("DROP TABLE messages")
+    connection.exec_driver_sql("ALTER TABLE messages_new RENAME TO messages")
+
+    # Recreate indexes
+    connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_messages_project_id ON messages(project_id)")
+    connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_messages_sender_id ON messages(sender_id)")
+    connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_messages_thread_id ON messages(thread_id)")

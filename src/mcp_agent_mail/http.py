@@ -22,7 +22,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError, NoResultFound
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.types import Receive, Scope, Send
@@ -30,6 +30,7 @@ from starlette.types import Receive, Scope, Send
 from .app import (
     _create_message,
     _ensure_project,
+    _get_default_project,
     _expire_stale_file_reservations,
     _get_agent_by_name_optional,
     _message_frontmatter,
@@ -1027,8 +1028,29 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
                     # Create MCP message from Slack event
                     try:
-                        # Ensure project exists
-                        project = await _ensure_project(settings.slack.sync_project_name)
+                        # Determine project from thread context or use default
+                        # For thread replies, try to find the original message's project
+                        thread_id = message_info.get("thread_id")
+                        project = None
+                        
+                        if thread_id:
+                            # Try to look up project from existing thread messages
+                            async with get_session() as session:
+                                result = await session.execute(
+                                    text("SELECT project_id FROM messages WHERE thread_id = :tid LIMIT 1"),
+                                    {"tid": thread_id}
+                                )
+                                row = result.fetchone()
+                                if row and row[0]:
+                                    from .models import Project
+                                    project = await session.get(Project, row[0])
+                        
+                        # If no project from thread context, use default or sync project for backwards compat
+                        if project is None:
+                            if settings.slack.sync_project_name:
+                                project = await _ensure_project(settings.slack.sync_project_name)
+                            else:
+                                project = await _get_default_project()
 
                         # Get or create SlackBridge agent
                         sender_name = message_info["sender_name"]
@@ -1052,10 +1074,10 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                     logger.info("slack_bridge_agent_created", agent_name=sender_name)
                                 except IntegrityError:
                                     await session.rollback()
+                                    # Agent names are globally unique; look up without project filter
                                     result = await session.execute(
                                         select(Agent).where(
-                                            cast(Any, Agent.project_id) == project.id,
-                                            cast(Any, Agent.name) == sender_name,
+                                            func.lower(Agent.name) == func.lower(sender_name),
                                         )
                                     )
                                     existing_agent = result.scalars().first()
