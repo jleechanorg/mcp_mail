@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import base64
 import contextlib
+import hmac
 import importlib
 import json
 import logging
@@ -1227,7 +1228,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
         token_raw = form.get("token")
         token = token_raw.strip() if isinstance(token_raw, str) else ""
-        if token != settings.slack.slackbox_token:
+        if not hmac.compare_digest(token, settings.slack.slackbox_token):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Slackbox token")
 
         text_raw = form.get("text")

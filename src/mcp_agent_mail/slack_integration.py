@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -73,7 +74,7 @@ class SlackClient:
     - Socket Mode event streaming (for bidirectional sync)
 
     Thread Mapping Limitation:
-        Thread mappings between MCP threads and Slack threads are stored in-memory
+    Thread mappings between MCP threads and Slack threads are stored in-memory
         and will be lost on server restart. After a restart, messages in an existing
         MCP thread will create new top-level Slack messages instead of replying to
         the existing Slack thread. For production use, persist mappings to database.
@@ -81,6 +82,7 @@ class SlackClient:
 
     _instance: Optional["SlackClient"] = None
     _instance_lock: asyncio.Lock | None = None
+    _instance_lock_init = threading.Lock()
 
     @classmethod
     async def get_instance(cls, settings: SlackSettings) -> "SlackClient":
@@ -89,9 +91,15 @@ class SlackClient:
         This ensures thread mappings are shared across all callers.
         """
         if cls._instance_lock is None:
-            cls._instance_lock = asyncio.Lock()
+            with cls._instance_lock_init:
+                if cls._instance_lock is None:
+                    cls._instance_lock = asyncio.Lock()
 
-        async with cls._instance_lock:
+        lock = cls._instance_lock
+        if lock is None:
+            raise SlackIntegrationError("Slack client lock not initialized")
+
+        async with lock:
             if cls._instance is None:
                 cls._instance = cls(settings)
                 await cls._instance.connect()
@@ -147,6 +155,8 @@ class SlackClient:
         if self._http_client:
             await self._http_client.aclose()
             self._http_client = None
+        # Reset singleton to allow clean reinitialization after shutdown
+        self.__class__._instance = None
 
     def _check_client(self) -> None:
         """Ensure client is connected."""
@@ -296,8 +306,11 @@ class SlackClient:
         try:
             request_time = int(timestamp)
             current_time = int(time.time())
-            if abs(current_time - request_time) > 60 * 15:  # 15 min tolerance for clock skew
-                logger.warning("Slack request timestamp too old", diff=abs(current_time - request_time))
+            if abs(current_time - request_time) > 60 * 5:  # Slack recommends a 5 minute tolerance for replay safety
+                logger.warning(
+                    "Slack request timestamp outside tolerance (possible replay)",
+                    extra={"diff": abs(current_time - request_time)},
+                )
                 return False
 
             sig_basestring = f"v0:{timestamp}:{body.decode('utf-8')}"
@@ -527,7 +540,6 @@ async def notify_slack_message(
         slack_thread_ts: Optional[str] = None
         thread_key = thread_id or message_id
         thread_mapping: SlackThreadMapping | None = None
-        thread_mapping: SlackThreadMapping | None = None
         if thread_key:
             thread_mapping = await client.get_slack_thread(thread_key)
             if thread_mapping:
@@ -602,6 +614,7 @@ async def notify_slack_ack(
         channel = settings.slack.default_channel
         slack_thread_ts: Optional[str] = None
         thread_key = thread_id or message_id
+        thread_mapping: SlackThreadMapping | None = None
 
         if thread_key:
             thread_mapping = await client.get_slack_thread(thread_key)
@@ -674,7 +687,12 @@ async def handle_slack_message_event(
         logger.debug("slack_ignoring_bot_message")
         return None
 
-    channel_id = event.get("channel")
+    channel_id_raw = event.get("channel")
+    if not isinstance(channel_id_raw, str) or not channel_id_raw:
+        logger.debug("Slack event missing channel id")
+        return None
+
+    channel_id = channel_id_raw
     text = event.get("text", "")
     user_id = event.get("user")
     message_ts = event.get("ts")
@@ -704,20 +722,23 @@ async def handle_slack_message_event(
     if settings.slack.sync_thread_replies:
         base_ts = thread_ts or message_ts
         if base_ts:
+            base_ts_str = str(base_ts)
             # Try to get client to check reverse mapping
             try:
                 client = await SlackClient.get_instance(settings.slack)
                 # Check reverse mapping: (channel, thread_ts) -> mcp_thread_id
-                existing_mcp_thread = await client.get_mcp_thread_id(channel_id, base_ts)
+                existing_mcp_thread = await client.get_mcp_thread_id(channel_id, base_ts_str)
                 if existing_mcp_thread:
                     mcp_thread_id = existing_mcp_thread
-                    logger.debug(f"Found existing MCP thread mapping: Slack ({channel_id}, {base_ts}) -> MCP {existing_mcp_thread}")
+                    logger.debug(
+                        f"Found existing MCP thread mapping: Slack ({channel_id}, {base_ts_str}) -> MCP {existing_mcp_thread}"
+                    )
                 else:
                     # No existing mapping, create new slack-based thread_id
-                    mcp_thread_id = f"slack_{channel_id}_{base_ts}"
+                    mcp_thread_id = f"slack_{channel_id}_{base_ts_str}"
             except Exception:
                 # If client unavailable, fall back to generating thread_id
-                mcp_thread_id = f"slack_{channel_id}_{base_ts}"
+                mcp_thread_id = f"slack_{channel_id}_{base_ts_str}"
 
     # Create subject from first line of text
     subject_parts = text.split("\n", 1)
