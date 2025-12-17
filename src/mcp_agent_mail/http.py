@@ -155,7 +155,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         path = request.url.path or ""
         if request.method == "OPTIONS":  # allow CORS preflight
             return await call_next(request)
-        if path.startswith("/health/") or path == "/slack/events":
+        if path.startswith("/health/") or path in {"/slack/events", "/slackbox/incoming"}:
             return await call_next(request)
         # Allow localhost without Authorization when enabled
         try:
@@ -329,13 +329,20 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS" or path.startswith("/health/"):
             return await call_next(request)
 
-        # Apply dedicated rate limiting for Slack webhooks
-        if path == "/slack/events":
-            slack_rpm = int(getattr(self.settings.http, "rate_limit_slack_per_minute", 120) or 120)
-            slack_burst = int(getattr(self.settings.http, "rate_limit_slack_burst", 0) or 0)
+        # Apply dedicated rate limiting for Slack webhooks (and bypass auth) before further processing
+        if path in {"/slack/events", "/slackbox/incoming"}:
+            if path == "/slackbox/incoming":
+                slack_rpm = int(getattr(self.settings.http, "rate_limit_slackbox_per_minute", 120) or 120)
+                slack_burst = int(getattr(self.settings.http, "rate_limit_slackbox_burst", 0) or 0)
+                route_label = "slackbox"
+            else:
+                slack_rpm = int(getattr(self.settings.http, "rate_limit_slack_per_minute", 120) or 120)
+                slack_burst = int(getattr(self.settings.http, "rate_limit_slack_burst", 0) or 0)
+                route_label = "slack"
+
             slack_burst = slack_burst if slack_burst > 0 else max(1, slack_rpm)
             client_ip = request.client.host if request.client else "unknown"
-            key = f"slack:{client_ip}"
+            key = f"{route_label}:{client_ip}"
             allowed = await self._consume_bucket(key, slack_rpm, slack_burst)
             if not allowed:
                 return JSONResponse({"detail": "Rate limit exceeded"}, status_code=status.HTTP_429_TOO_MANY_REQUESTS)
@@ -967,12 +974,18 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         sender_agent = await _get_agent_by_name_optional(sender_name)
 
         if not sender_agent:
+            if source in {"slack", "slack_events"}:
+                program = "slack_bridge"
+                model = "slack-events"
+            else:
+                program = "slack_ingestion"
+                model = "slack-webhook"
             async with get_session() as session:
                 sender_agent = Agent(
                     name=sender_name,
                     project_id=project.id,
-                    program="slack_bridge",
-                    model="slack-events",
+                    program=program,
+                    model=model,
                     task_description="Bridges Slack messages into MCP Agent Mail",
                     is_active=True,
                 )
@@ -1052,10 +1065,11 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         _ = _archive_task
 
         if cache_key:
+            if len(_slack_event_cache_order) >= _slack_event_cache_order.maxlen:
+                old = _slack_event_cache_order.popleft()
+                _slack_event_cache.discard(old)
             _slack_event_cache.add(cache_key)
             _slack_event_cache_order.append(cache_key)
-            _slack_event_cache.clear()
-            _slack_event_cache.update(_slack_event_cache_order)
 
         slack_client_ref = None
         try:
@@ -1189,10 +1203,16 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         if not settings.slack.slackbox_enabled:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Slackbox disabled")
 
+        if not settings.slack.slackbox_token:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Slackbox token not configured",
+            )
+
         form = await request.form()
 
         token = (form.get("token") or "").strip()
-        if settings.slack.slackbox_token and token != settings.slack.slackbox_token:
+        if token != settings.slack.slackbox_token:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Slackbox token")
 
         text = (form.get("text") or "").strip()

@@ -268,9 +268,9 @@ When an agent sends a message via `send_message`, here's what happens:
   
 **Configuration:**
 - Storage location: `STORAGE_ROOT` env var (default: `.mcp_mail`)
-  - **Project-local (default)**: `.mcp_mail` - messages stored in project directory and committed to Git
-  - **Optional project-key anchored**: set `STORAGE_PROJECT_KEY_ENABLED=true` to store under `<project_key>/.mcp_mail` (project_key must be the git repo root)
-  - **Disable local archive**: set `STORAGE_LOCAL_ARCHIVE_ENABLED=false` to require project-key storage; otherwise defaults to `.mcp_mail`
+  - **Project-local**: set `STORAGE_LOCAL_ARCHIVE_ENABLED=true` to store in `.mcp_mail` - messages stored in project directory and committed to Git
+  - **Project-key anchored**: set `STORAGE_PROJECT_KEY_ENABLED=true` to store under `<project_key>/.mcp_mail` (project_key must be the git repo root)
+  - **Default behavior**: Both storage modes disabled by default; must explicitly enable one to use MCP Agent Mail
   - **Global alternative**: `~/.mcp_agent_mail_git_mailbox_repo` - messages stored in user home directory
 - Git author: `GIT_AUTHOR_NAME` and `GIT_AUTHOR_EMAIL` env vars
 
@@ -325,7 +325,92 @@ This project provides a lightweight, interoperable layer so agents can:
 
 It's designed for: FastMCP clients and CLI tools (Claude Code, Codex, Gemini CLI, etc.) coordinating across one or more codebases.
 
+## From Idea Spark to Shipping Swarm
+
+If a blank repo feels daunting, follow the field-tested workflow we documented in `project_idea_and_guide.md` ("Appendix: From Blank Repo to Coordinated Swarm"):
+
+- **Ideate fast:** Write a scrappy email-style blurb about the problem, desired UX, and any must-have stack picks (≈15 minutes).
+- **Promote it to a plan:** Feed that blurb to GPT-5 Pro (and optionally Grok4 Heavy / Opus 4.1) until you get a granular Markdown plan, then iterate on the plan file while it's still cheap to change. The Markdown Web Browser sample plan shows the level of detail to aim for.
+- **Codify the rules:** Clone a tuned `AGENTS.md`, add any tech-specific best-practice guides, and let Codex scaffold the repo plus Beads tasks straight from the plan.
+- **Spin up the swarm:** Launch multiple Codex panes (or any agent mix), register each identity with Agent Mail, and have them acknowledge `AGENTS.md`, the plan document, and the Beads backlog before touching code.
+- **Keep everyone fed:** Reuse the canned instruction cadence from the tweet thread or, better yet, let the commercial Companion app's Message Stacks broadcast those prompts automatically so you never hand-feed panes again.
+
+Watch the full 23-minute walkthrough ([YouTube link](https://youtu.be/68VVcqMEDrs?si=pCm6AiJAndtZ6u7q)) to see the loop in action.
+
+## Productivity Math & Automation Loop
+
+One disciplined hour of GPT-5 Codex—when it isn't waiting on human prompts—often produces 10–20 "human hours" of work because the agents reason and type at machine speed. Agent Mail multiplies that advantage in two layers:
+
+1. **Base OSS server:** Git-backed mailboxes, advisory file reservations, Typer CLI helpers, and searchable archives keep independent agents aligned without babysitting. Every instruction, lease, and attachment is auditable.
+2. **Companion stack (commercial):** The iOS app + host automation can provision, pair, and steer heterogeneous fleets (Claude Code, Codex, Gemini CLI, etc.) from your phone using customizable Message Stacks, Human Overseer broadcasts, Beads awareness, and plan editing tools—no manual tmux choreography required. The automation closes the loop by scheduling prompts, honoring Limited Mode, and enforcing Double-Arm confirmations for destructive work.
+
+Result: you invest 1–2 hours of human supervision, but dozens of agent-hours execute in parallel with clear audit trails and conflict-avoidance baked in.
+
+## TLDR Quickstart
+
+### One-line installer
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jleechanorg/mcp_mail/main/scripts/install.sh | bash -s -- --yes
+```
+
+What this does:
+
+- Installs uv if missing and updates your PATH for this session
+- Creates a Python 3.14 virtual environment and installs dependencies with uv
+- Runs the auto-detect integration to wire up supported agent tools
+- Starts the MCP HTTP server on port 8765 and prints a masked bearer token
+- Creates helper scripts under `scripts/` (including `run_server_with_token.sh`)
+- Installs/updates, verifies, and wires the Beads `bd` CLI into your PATH via its official curl installer so the task planner is ready out of the box (pass `--skip-beads` to opt out or install manually)
+- Prints a short on-exit summary of each setup step so you immediately know what changed
+
+Prefer a specific location or options? Add flags like `--dir <path>`, `--project-dir <path>`, `--no-start`, `--start-only`, `--port <number>`, or `--token <hex>`.
+
+Already have Beads installed or want to handle it yourself? Append `--skip-beads` to the installer command to bypass the automatic `bd` setup and PATH wiring.
+
+**Port conflicts?** Use `--port` to specify a different port (default: 8765):
+
+```bash
+# Install with custom port
+curl -fsSL https://raw.githubusercontent.com/jleechanorg/mcp_mail/main/scripts/install.sh | bash -s -- --port 9000 --yes
+
+# Or use the CLI command after installation
+uv run python -m mcp_agent_mail.cli config set-port 9000
+```
+
+### If you want to do it yourself
+
+Clone the repo, set up and install with uv in a python 3.14 venv (install uv if you don't have it already), and then run `scripts/automatically_detect_all_installed_coding_agents_and_install_mcp_agent_mail_in_all.sh`. This will automatically set things up for your various installed coding agent tools and start the MCP server on port 8765. If you want to run the MCP server again in the future, simply run `scripts/run_server_with_token.sh`:
+
+```bash
+# Install uv (if you don't have it already)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+
+# Clone the repo
+git clone https://github.com/jleechanorg/mcp_mail
+cd mcp_mail
+
+# Create a Python 3.14 virtual environment and install dependencies
+uv python install 3.14
+uv venv -p 3.14
+source .venv/bin/activate
+uv sync
+
+# Detect installed coding agents, integrate, and start the MCP server on port 8765
+scripts/automatically_detect_all_installed_coding_agents_and_install_mcp_agent_mail_in_all.sh
+
+# Later, to run the MCP server again with the same token
+scripts/run_server_with_token.sh
+
+# Now, simply launch Codex-CLI or Claude Code or other agent tools in other consoles; they should have the mail tool available. See below for a ready-made chunk of text you can add to the end of your existing AGENTS.md or CLAUDE.md files to help your agents better utilize the new tools.
+
+# Change port after installation
+uv run python -m mcp_agent_mail.cli config set-port 9000
+```
+
 ## Ready-Made Blurb to Add to Your AGENTS.md or CLAUDE.md Files:
+<!-- BEGIN_AGENT_MAIL_SNIPPET -->
 ```
 ## MCP Agent Mail: coordination for multi-agent workflows
 
@@ -359,6 +444,7 @@ Common pitfalls
 - "FILE_RESERVATION_CONFLICT": adjust patterns, wait for expiry, or use a non-exclusive reservation when appropriate.
 - Auth errors: if JWT+JWKS is enabled, include a bearer token with a `kid` that matches server JWKS; static bearer is used only when JWT is disabled.
 ```
+<!-- END_AGENT_MAIL_SNIPPET -->
 
 ## Integrating with Beads (dependency-aware task planning)
 
@@ -371,6 +457,7 @@ Highlights:
 
 Copy/paste blurb for agent-facing docs (leave as-is for reuse):
 
+<!-- BEGIN_BEADS_SNIPPET -->
 ```
 
 ## Integrating with Beads (dependency-aware task planning)
@@ -411,6 +498,58 @@ Pitfalls to avoid
 - Always include `bd-###` in message `thread_id` to avoid ID drift across tools.
 
 ```
+<!-- END_BEADS_SNIPPET -->
+
+Prefer automation? Run `uv run python -m mcp_agent_mail.cli docs insert-blurbs` to scan your code directories for `AGENTS.md`/`CLAUDE.md` files and append the latest Agent Mail + Beads snippets with per-project confirmation. The installer also offers to launch this helper right after setup so you can take care of onboarding docs immediately.
+
+## Slack Integration
+
+MCP Agent Mail includes full Slack integration, enabling agents to send notifications and post messages to Slack channels. See [SLACK_BIDIRECTIONAL_SYNC.md](SLACK_BIDIRECTIONAL_SYNC.md) for complete documentation.
+
+**Quick Setup:**
+
+1. Create a Slack app at [https://api.slack.com/apps](https://api.slack.com/apps)
+2. Add bot token scopes: `chat:write`, `channels:read`, `groups:read`, `channels:history`, `groups:history`, `reactions:read`, `app_mentions:read`
+3. Install to workspace and copy the bot token
+4. Configure in `.env`:
+   ```bash
+   SLACK_ENABLED=true
+   SLACK_BOT_TOKEN=xoxb-your-token-here
+   SLACK_DEFAULT_CHANNEL=general
+   ```
+5. Restart the server
+
+**Features:**
+
+- **Automatic Notifications**: MCP messages automatically posted to Slack
+- **Manual Posting**: `slack_post_message()` tool for direct Slack posts
+- **Channel Discovery**: `slack_list_channels()` to explore available channels
+- **Channel Insights**: `slack_get_channel_info()` to inspect metadata and member counts before posting
+- **Thread Support**: MCP threads map to Slack threads for conversation continuity
+- **Rich Formatting**: Uses Slack Block Kit for enhanced message presentation
+- **Webhook Support**: Receive Slack events for future bidirectional sync
+
+**Example:**
+```python
+# Automatically notify Slack when sending an MCP message
+send_message(
+    project_key="myproject",
+    agent_name="BlueWhale",
+    to=["GreenCastle"],
+    subject="Deploy completed",
+    body_md="Production deployment successful ✅",
+    importance="normal"
+)
+# → Slack notification appears in configured channel
+
+# Or post directly to Slack
+slack_post_message(
+    channel="deployments",
+    text="🚀 Build #1234 deployed to production"
+)
+```
+
+See [SLACK_BIDIRECTIONAL_SYNC.md](SLACK_BIDIRECTIONAL_SYNC.md) for full configuration options, MCP tools reference, webhook setup, and troubleshooting.
 
 ## Slack Integration
 
@@ -1682,6 +1821,24 @@ sequenceDiagram
     - `exclusive=true` reports conflicts if another active exclusive holder exists
     - Intended for long-running tasks (dev servers, watchers); pair with `am-run` and `amctl env`
 
+## Product Bus
+
+Group multiple repositories (e.g., frontend, backend, infra) under a single product for product‑wide inbox/search and shared threads.
+
+- Ensure a product:
+  - `mcp-agent-mail products ensure MyProduct --name "My Product"`
+- Link a project (slug or path) into the product:
+  - `mcp-agent-mail products link MyProduct .`
+- Inspect product and linked projects:
+  - `mcp-agent-mail products status MyProduct`
+- Product‑wide message search (FTS):
+  - `mcp-agent-mail products search MyProduct "urgent AND deploy" --limit 50`
+
+Notes
+- A unique `product_uid` is stored for each product; you can reference a product by uid or name.
+- Server tools also exist for orchestration: `ensure_product`, `products_link`, `search_messages_product`, and `resource://product/{key}`.
+
+
 Exclusive file reservations are advisory but visible and auditable:
 
 - A reservation JSON is written to `file_reservations/<sha1(path)>.json` capturing holder, pattern, exclusivity, created/expires
@@ -1815,7 +1972,7 @@ result = await client.call_tool("list_extended_tools", {})
 | :-- | :-- | :-- |
 | `STORAGE_ROOT` | `.mcp_mail` | Root for per-project repos and SQLite DB (project-local by default) |
 | `STORAGE_PROJECT_KEY_ENABLED` | `false` | When true, use `<project_key>/.mcp_mail` as archive root (project_key must be git repo root) |
-| `STORAGE_LOCAL_ARCHIVE_ENABLED` | `true` | When false, disable default `.mcp_mail` archive; requires project-key storage |
+| `STORAGE_LOCAL_ARCHIVE_ENABLED` | `false` | When true, enable `.mcp_mail` archive; when false, requires project-key storage |
 | `HTTP_HOST` | `127.0.0.1` | Bind host for HTTP transport |
 | `HTTP_PORT` | `8765` | Bind port for HTTP transport |
 | `HTTP_PATH` | `/mcp/` | HTTP path where MCP endpoint is mounted |

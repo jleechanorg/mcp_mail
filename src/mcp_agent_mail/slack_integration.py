@@ -40,6 +40,10 @@ logger = logging.getLogger(__name__)
 
 # Regex pattern for extracting Slack user mentions (e.g., <@U123|name>)
 _SLACK_MENTION_PATTERN = re.compile(r"<@([A-Z0-9]+)(?:\|[^>]+)?>")
+# Thread id format: slack_<channel_id>_<thread_ts> or slackbox_<channel_id>_<thread_ts>
+# Channel identifiers may include underscores (e.g., team_engineering), so capture
+# everything up to the final underscore before the thread timestamp.
+_SLACK_THREAD_ID_PATTERN = re.compile(r"^(?:slack|slackbox)_(.+)_([^_]+)$")
 
 
 @dataclass
@@ -318,12 +322,28 @@ def mirror_message_to_slack(frontmatter: dict[str, Any], body_md: str) -> str | 
 
     project = frontmatter.get("project", "")
     subject = frontmatter.get("subject", "")
+    sender_name = frontmatter.get("from", "")
+
+    recipients: list[str] = []
+    for key in ("to", "cc", "bcc"):
+        value = frontmatter.get(key)
+        if isinstance(value, str):
+            recipients.append(value)
+        elif isinstance(value, list):
+            recipients.extend(value)
     thread = frontmatter.get("thread_id")
     title = f"{project} | {subject}".strip(" |")
     if thread:
         title = f"{title} (thread {thread})"
 
-    text = f"*{title}*\n{body_md}"
+    lines = [f"*{title}*"]
+    if sender_name:
+        lines.append(f"*From:* {sender_name}")
+    if recipients:
+        lines.append(f"*To:* {', '.join(recipients)}")
+    lines.append(body_md)
+
+    text = "\n".join(lines)
     payload = {"text": text}
     return _post_webhook(webhook, payload)
 
@@ -360,8 +380,19 @@ def format_mcp_message_for_slack(
         "low": ":information_source:",
     }.get(importance, ":email:")
 
-    # Fallback text for notifications with importance indicator
-    text = f"{importance_emoji} *{subject}* from {sender_name}"
+    # Limit recipient expansion to avoid Slack field limits while preserving counts
+    max_recipients = 5
+    displayed_recipients = recipients[:max_recipients]
+    extra_recipient_count = max(len(recipients) - max_recipients, 0)
+
+    # Fallback text for notifications with importance indicator and routing info
+    if recipients:
+        truncated_list = ", ".join(displayed_recipients)
+        if extra_recipient_count:
+            truncated_list = f"{truncated_list}, +{extra_recipient_count} more"
+        text = f"{importance_emoji} *{subject}* from *{sender_name}* to {truncated_list}"
+    else:
+        text = f"{importance_emoji} *{subject}* from *{sender_name}*"
 
     if not use_blocks:
         return (text, None)
@@ -383,9 +414,17 @@ def format_mcp_message_for_slack(
     )
 
     # Metadata section
+    if recipients:
+        lines = [f"• {name}" for name in displayed_recipients]
+        if extra_recipient_count:
+            lines.append(f"• +{extra_recipient_count} more")
+        recipient_lines = "\n".join(lines)
+    else:
+        recipient_lines = "—"
+
     metadata_fields = [
-        {"type": "mrkdwn", "text": f"*From:*\n{sender_name}"},
-        {"type": "mrkdwn", "text": f"*To:*\n{', '.join(recipients[:5])}"},
+        {"type": "mrkdwn", "text": f"*From:*\n*{sender_name}*"},
+        {"type": "mrkdwn", "text": f"*To:*\n{recipient_lines}"},
     ]
 
     if message_id:
@@ -469,11 +508,18 @@ async def notify_slack_message(
         # Check for existing thread mapping (fallback to message_id for new threads)
         slack_thread_ts: Optional[str] = None
         thread_key = thread_id or message_id
+        thread_mapping: SlackThreadMapping | None = None
         if thread_key:
             thread_mapping = await client.get_slack_thread(thread_key)
             if thread_mapping:
                 slack_thread_ts = thread_mapping.slack_thread_ts
                 channel = thread_mapping.slack_channel_id
+            else:
+                match = _SLACK_THREAD_ID_PATTERN.match(thread_key)
+                if match:
+                    derived_channel, derived_ts = match.groups()
+                    slack_thread_ts = derived_ts
+                    channel = derived_channel
 
         # Post to Slack
         response = await client.post_message(
@@ -483,12 +529,12 @@ async def notify_slack_message(
             thread_ts=slack_thread_ts,
         )
 
-        # If this is a new thread, create mapping
-        if thread_key and not slack_thread_ts:
-            msg_ts = response.get("ts")
-            channel_id = response.get("channel")
-            if msg_ts and channel_id:
-                await client.map_thread(thread_key, channel_id, msg_ts)
+        # If this is a new thread or mapping was missing, create mapping
+        if thread_key and not thread_mapping:
+            mapped_ts = slack_thread_ts or response.get("ts")
+            channel_id = response.get("channel") or channel
+            if mapped_ts and channel_id:
+                await client.map_thread(thread_key, channel_id, mapped_ts)
 
         logger.info(f"Sent Slack notification for message {message_id[:8]} to channel {channel}")
         return response
