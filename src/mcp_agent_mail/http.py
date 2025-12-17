@@ -1033,6 +1033,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         thread_id = message_info.get("thread_id")
                         project = None
                         
+                        thread_project_found = False
                         if thread_id:
                             # Try to look up project from existing thread messages
                             async with get_session() as session:
@@ -1041,12 +1042,17 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                     {"tid": thread_id}
                                 )
                                 row = result.fetchone()
-                                if row and row[0]:
-                                    from .models import Project
-                                    project = await session.get(Project, row[0])
+                                # If we found a message, use its project (which may be NULL)
+                                if row is not None:
+                                    thread_project_found = True
+                                    project_id = row[0]
+                                    if project_id is not None:
+                                        from .models import Project
+                                        project = await session.get(Project, project_id)
+                                    # else: project remains None, which is valid for NULL project_id
                         
-                        # If no project from thread context, use default or sync project for backwards compat
-                        if project is None:
+                        # If no thread context found, use fallback to default or sync project
+                        if not thread_project_found:
                             if settings.slack.sync_project_name:
                                 project = await _ensure_project(settings.slack.sync_project_name)
                             else:
