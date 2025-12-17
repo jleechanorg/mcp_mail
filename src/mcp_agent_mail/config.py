@@ -335,7 +335,7 @@ def get_settings() -> Settings:
         project_key_storage_enabled=_bool(
             _decouple_config("STORAGE_PROJECT_KEY_ENABLED", default="false"), default=False
         ),
-        local_archive_enabled=_bool(_get_config_value("STORAGE_LOCAL_ARCHIVE_ENABLED", default="true"), default=True),
+        local_archive_enabled=_bool(_get_config_value("STORAGE_LOCAL_ARCHIVE_ENABLED", default="false"), default=False),
         project_key_prompt_enabled=_bool(
             _decouple_config("STORAGE_PROJECT_KEY_PROMPT_ENABLED", default="true"), default=True
         ),
