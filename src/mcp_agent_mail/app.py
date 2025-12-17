@@ -1988,8 +1988,11 @@ async def _create_message(
         raise ValueError("Project must have an id before creating messages.")
     if sender.id is None:
         raise ValueError("Sender must have an id before sending messages.")
+    create_start = time.perf_counter()
     await ensure_schema()
+    schema_elapsed = time.perf_counter() - create_start
     async with get_session() as session:
+        session_start = time.perf_counter()
         message = Message(
             project_id=project.id,
             sender_id=sender.id,
@@ -2001,14 +2004,37 @@ async def _create_message(
             attachments=list(attachments),
         )
         session.add(message)
+        flush_start = time.perf_counter()
         await session.flush()
+        flush_elapsed = time.perf_counter() - flush_start
+        if message.id is None:
+            raise RuntimeError("Message id was not assigned after flush().")
         for recipient, kind in recipients:
+            if recipient.id is None:
+                raise ValueError(f"Recipient '{recipient.name}' must have an id before sending messages.")
             entry = MessageRecipient(message_id=message.id, agent_id=recipient.id, kind=kind)
             session.add(entry)
         sender.last_active_ts = datetime.now(timezone.utc)
         session.add(sender)
+        commit_start = time.perf_counter()
         await session.commit()
+        commit_elapsed = time.perf_counter() - commit_start
+        refresh_start = time.perf_counter()
         await session.refresh(message)
+        refresh_elapsed = time.perf_counter() - refresh_start
+        session_elapsed = time.perf_counter() - session_start
+    total_elapsed = time.perf_counter() - create_start
+    logger.debug(
+        "[LATENCY] _create_message: total=%.3fs schema=%.3fs session=%.3fs "
+        "(flush=%.3fs commit=%.3fs refresh=%.3fs) msg_id=%s",
+        total_elapsed,
+        schema_elapsed,
+        session_elapsed,
+        flush_elapsed,
+        commit_elapsed,
+        refresh_elapsed,
+        message.id,
+    )
     return message
 
 
@@ -2272,6 +2298,7 @@ async def _list_inbox(
     include_bodies: bool,
     since_ts: Optional[str],
 ) -> list[dict[str, Any]]:
+    list_inbox_start = time.perf_counter()
     if agent.id is None:
         raise ValueError("Agent must have an id before listing inbox.")
 
@@ -2279,14 +2306,37 @@ async def _list_inbox(
 
     # Skip global inbox scanning if the agent IS the global inbox (prevent recursion)
     if agent.name == global_inbox_name:
-        return await _list_inbox_basic(agent, limit, urgent_only, include_bodies, since_ts)
+        messages = await _list_inbox_basic(agent, limit, urgent_only, include_bodies, since_ts)
+        elapsed = time.perf_counter() - list_inbox_start
+        logger.debug(
+            "[LATENCY] _list_inbox (global inbox agent): total=%.3fs count=%d agent=%s",
+            elapsed,
+            len(messages),
+            agent.name,
+        )
+        return messages
 
     # Get regular inbox messages
+    basic_start = time.perf_counter()
     messages = await _list_inbox_basic(agent, limit, urgent_only, include_bodies, since_ts)
-    message_ids_in_inbox = {msg["id"] for msg in messages}
+    basic_elapsed = time.perf_counter() - basic_start
+    message_ids_in_inbox: set[int] = set()
+    for msg in messages:
+        msg_id = msg.get("id")
+        if msg_id is None:
+            continue
+        try:
+            message_ids_in_inbox.add(int(msg_id))
+        except (TypeError, ValueError):
+            continue
 
     # Scan global inbox for messages mentioning this agent using FTS5 (much faster than regex)
+    fts_elapsed = 0.0
+    basic_count = len(messages)  # Track count before FTS merge
+    fts_requested_count = 0
+    fts_included_count = 0
     try:
+        fts_start = time.perf_counter()
         global_inbox_agent = await _get_agent_by_name(global_inbox_name)
         # Use FTS5-based mention search - only fetches messages that actually mention the agent
         # This is significantly faster than the old approach which loaded 100 messages with bodies
@@ -2298,22 +2348,40 @@ async def _list_inbox(
             since_ts=since_ts,
             limit=30,  # Reduced from 100 - FTS5 query is precise, doesn't need to over-fetch
         )
+        fts_elapsed = time.perf_counter() - fts_start
+        fts_requested_count = len(mentioned_messages)
 
         # Merge with regular inbox, respecting the limit
         messages.extend(mentioned_messages)
-        messages = messages[:limit]
+        if len(messages) > limit:
+            messages = messages[:limit]
+        # Calculate actual FTS count included after truncation
+        fts_included_count = max(0, len(messages) - basic_count)
 
-    except Exception:
+    except Exception as exc:
         # If global inbox doesn't exist or there's an error, just return regular inbox
-        pass
+        logger.debug("global_inbox_fts_failed", exc_info=exc)
 
+    total_elapsed = time.perf_counter() - list_inbox_start
+    logger.debug(
+        "[LATENCY] _list_inbox: total=%.3fs basic=%.3fs fts=%.3fs basic_count=%d "
+        "fts_included=%d fts_requested=%d final_count=%d agent=%s",
+        total_elapsed,
+        basic_elapsed,
+        fts_elapsed,
+        basic_count,
+        fts_included_count,
+        fts_requested_count,
+        len(messages),
+        agent.name,
+    )
     return messages
 
 
 async def _find_mentions_in_global_inbox(
     agent_name: str,
     global_inbox_agent: Agent,
-    exclude_message_ids: set[str],
+    exclude_message_ids: set[int],
     include_bodies: bool,
     since_ts: Optional[str],
     limit: int = 30,
@@ -2364,6 +2432,8 @@ async def _find_mentions_in_global_inbox(
     messages: list[dict[str, Any]] = []
     for message, recipient_kind, sender_name in rows:
         # Skip if already in regular inbox
+        if message.id is None:
+            continue
         if message.id in exclude_message_ids:
             continue
 
@@ -2384,10 +2454,14 @@ async def _list_inbox_basic(
     since_ts: Optional[str],
 ) -> list[dict[str, Any]]:
     """Basic inbox listing without global inbox scanning."""
+    basic_start = time.perf_counter()
     if agent.id is None:
         raise ValueError("Agent must have an id before listing inbox.")
     sender_alias = aliased(Agent)
+    schema_start = time.perf_counter()
     await ensure_schema()
+    schema_elapsed = time.perf_counter() - schema_start
+    query_start = time.perf_counter()
     async with get_session() as session:
         stmt = (
             select(Message, MessageRecipient.kind, sender_alias.name)
@@ -2408,12 +2482,22 @@ async def _list_inbox_basic(
         stmt = stmt.limit(limit)
         result = await session.execute(stmt)
         rows = result.all()
+    query_elapsed = time.perf_counter() - query_start
     messages: list[dict[str, Any]] = []
     for message, recipient_kind, sender_name in rows:
         payload = _message_to_dict(message, include_body=include_bodies)
         payload["from"] = sender_name
         payload["kind"] = recipient_kind
         messages.append(payload)
+    total_elapsed = time.perf_counter() - basic_start
+    logger.debug(
+        "[LATENCY] _list_inbox_basic: total=%.3fs schema=%.3fs query=%.3fs count=%d agent=%s",
+        total_elapsed,
+        schema_elapsed,
+        query_elapsed,
+        len(messages),
+        agent.name,
+    )
     return messages
 
 
@@ -3017,6 +3101,7 @@ def build_mcp_server() -> FastMCP:
         bcc_names = _unique(bcc_names)
 
         # Check if global inbox exists (will be added directly to cc_agents to avoid race condition)
+        recipient_lookup_start = time.perf_counter()
         global_inbox_name = get_global_inbox_name(project)
         global_inbox_agent = await _get_agent_by_name_optional(global_inbox_name)
         # Only add to cc if sender is not the global inbox itself
@@ -3043,8 +3128,11 @@ def build_mcp_server() -> FastMCP:
         recipient_records: list[tuple[Agent, str]] = [(agent, "to") for agent in to_agents]
         recipient_records.extend((agent, "cc") for agent in cc_agents)
         recipient_records.extend((agent, "bcc") for agent in bcc_agents)
+        recipient_lookup_elapsed = time.perf_counter() - recipient_lookup_start
 
+        archive_start = time.perf_counter()
         archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+        archive_elapsed = time.perf_counter() - archive_start
         convert_markdown = (
             convert_images_override if convert_images_override is not None else settings.storage.convert_images
         )
@@ -3055,8 +3143,10 @@ def build_mcp_server() -> FastMCP:
             embed_policy = sender.attachments_policy
 
         payload: dict[str, Any] | None = None
+        lock_acquire_start = time.perf_counter()
 
         async with _archive_write_lock(archive):
+            lock_wait_elapsed = time.perf_counter() - lock_acquire_start
             # Server-side file_reservations enforcement: block if conflicting active exclusive file_reservation exists
             if settings.file_reservations_enforcement_enabled:
                 await _expire_stale_file_reservations(project.id or 0)
@@ -3103,6 +3193,7 @@ def build_mcp_server() -> FastMCP:
                         }
                     }
 
+            attachments_start = time.perf_counter()
             processed_body, attachments_meta, attachment_files = await process_attachments(
                 archive,
                 body_md,
@@ -3110,9 +3201,11 @@ def build_mcp_server() -> FastMCP:
                 convert_markdown,
                 embed_policy=embed_policy,
             )
+            attachments_elapsed = time.perf_counter() - attachments_start
             # Fallback: if body contains inline data URI, reflect that in attachments meta for API parity
             if not attachments_meta and ("data:image" in body_md):
                 attachments_meta.append({"type": "inline", "media_type": "image/webp"})
+            db_write_start = time.perf_counter()
             message = await _create_message(
                 project,
                 sender,
@@ -3124,6 +3217,7 @@ def build_mcp_server() -> FastMCP:
                 thread_id,
                 attachments_meta,
             )
+            db_write_elapsed = time.perf_counter() - db_write_start
             frontmatter = _message_frontmatter(
                 message,
                 project,
@@ -3163,6 +3257,7 @@ def build_mcp_server() -> FastMCP:
                 result_snapshot,
                 frontmatter.get("created"),
             )
+            git_write_start = time.perf_counter()
             await write_message_bundle(
                 archive,
                 frontmatter,
@@ -3172,6 +3267,7 @@ def build_mcp_server() -> FastMCP:
                 attachment_files,
                 commit_panel_text,
             )
+            git_write_elapsed = time.perf_counter() - git_write_start
 
             # Optional Slack mirror via incoming webhook (env-driven)
             try:
@@ -3180,6 +3276,19 @@ def build_mcp_server() -> FastMCP:
                 mirror_message_to_slack(frontmatter, body_md)
             except Exception:
                 logger.exception("Slack mirror failed (non-blocking)")
+        total_elapsed = time.perf_counter() - call_start
+        logger.info(
+            "[LATENCY] _deliver_message: total=%.3fs recipients=%.3fs archive_init=%.3fs "
+            "lock_wait=%.3fs attachments=%.3fs db_write=%.3fs git_write=%.3fs msg_id=%s",
+            total_elapsed,
+            recipient_lookup_elapsed,
+            archive_elapsed,
+            lock_wait_elapsed,
+            attachments_elapsed,
+            db_write_elapsed,
+            git_write_elapsed,
+            message.id,
+        )
         await ctx.info(f"Message {message.id} created by {sender.name} (to {', '.join(recipients_for_archive)})")
 
         # Send Slack notification if enabled (fire-and-forget, non-blocking)
