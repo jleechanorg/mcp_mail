@@ -277,6 +277,7 @@ class BaseCLITest:
             try:
                 os.unlink(prompt_file)
             except OSError:
+                # Ignore errors when cleaning up temp file (may already be deleted)
                 pass
 
     def print_summary(self) -> None:

@@ -207,7 +207,9 @@ def run_cli_agent(
 
     try:
         # Open output file for writing - keep it open so subprocess can write to it
-        # File will be closed when process completes (caller's responsibility)
+        # Note: File handle intentionally not closed here - it must remain open for
+        # the subprocess to write output. The caller is responsible for closing it
+        # after the process completes (typically via process.wait() or process.kill()).
         out_f = open(output_file, "w")
         
         # Start process (non-blocking)
@@ -227,6 +229,7 @@ def run_cli_agent(
             if 'out_f' in locals():
                 out_f.close()
         except Exception:
+            # Ignore errors when closing file - primary exception is more important
             pass
         return False, f"Failed to start: {e}", None
 
