@@ -472,6 +472,24 @@ def _recreate_agents_table_nullable_project_id(connection) -> None:
             "in required columns (name, program, or model)."
         )
 
+    # Validate no duplicate active agent names (case-insensitive)
+    duplicate_names_result = connection.exec_driver_sql(
+        """
+        SELECT lower(name) as name_lower, COUNT(*) as cnt
+        FROM agents
+        WHERE is_active = 1
+        GROUP BY lower(name)
+        HAVING COUNT(*) > 1
+        """
+    )
+    duplicate_names = duplicate_names_result.fetchall()
+    if duplicate_names:
+        duplicate_list = ", ".join([f"'{row[0]}' (count: {row[1]})" for row in duplicate_names])
+        raise RuntimeError(
+            f"Cannot migrate agents table: duplicate active agent names found (case-insensitive): {duplicate_list}. "
+            "Agent names must be globally unique."
+        )
+
     # Copy data from old table with explicit error handling
     try:
         connection.exec_driver_sql(
@@ -488,7 +506,7 @@ def _recreate_agents_table_nullable_project_id(connection) -> None:
             FROM agents
             """
         )
-    except (IntegrityError, OperationalError, DatabaseError) as exc:  # pragma: no cover - defensive migration logging
+    except (IntegrityError, OperationalError, DatabaseError) as exc:  # pragma: no cover - critical migration error handling
         raise RuntimeError("Failed to migrate data from agents to agents_new") from exc
 
     # Drop old table and rename new one
@@ -562,7 +580,7 @@ def _recreate_messages_table_nullable_project_id(connection) -> None:
             FROM messages
             """
         )
-    except (IntegrityError, OperationalError, DatabaseError) as exc:  # pragma: no cover - defensive migration logging
+    except (IntegrityError, OperationalError, DatabaseError) as exc:  # pragma: no cover - critical migration error handling
         raise RuntimeError("Failed to migrate data from messages to messages_new") from exc
 
     # Drop old table and rename new one
