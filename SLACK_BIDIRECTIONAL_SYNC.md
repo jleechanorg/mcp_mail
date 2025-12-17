@@ -51,8 +51,8 @@ With bidirectional sync enabled:
 1. Navigate to **Event Subscriptions** in your Slack app
 2. Enable Events: **ON**
 3. **Request URL**: `https://your-server.com/slack/events`
-   - For local testing: Use ngrok or similar tunnel
-   - Example: `https://abc123.ngrok.io/slack/events`
+   - For local testing: Use Cloudflare Tunnel (recommended) or ngrok
+   - See **Section 3.1** below for tunnel setup
 4. **Subscribe to bot events**:
    - `message.channels` - Messages in public channels
    - `message.groups` - Messages in private channels (optional)
@@ -60,7 +60,85 @@ With bidirectional sync enabled:
 
 5. Save Changes
 
-### 4. Configure Environment Variables
+### 3.1 Exposing Local Server with Cloudflare Tunnel (Recommended)
+
+For local development and testing, you need to expose your local MCP Mail server to receive Slack webhooks. **Cloudflare Tunnel (cloudflared)** is the recommended approach as it's free and doesn't require authentication.
+
+#### Install cloudflared
+
+```bash
+# macOS
+brew install cloudflared
+
+# Linux
+curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o cloudflared
+chmod +x cloudflared
+sudo mv cloudflared /usr/local/bin/
+```
+
+#### Start the Tunnel
+
+```bash
+# Start MCP Mail server first (default port 8765)
+./scripts/run_server_with_token.sh &
+
+# Start Cloudflare tunnel pointing to local server
+cloudflared tunnel --url http://localhost:8765 --ha-connections 1 2>&1 | tee /tmp/cloudflared.log &
+
+# Wait for the tunnel URL
+sleep 5
+grep -o 'https://[^"]*\.trycloudflare\.com' /tmp/cloudflared.log
+```
+
+You'll get a URL like: `https://earl-bloomberg-partner-russell.trycloudflare.com`
+
+#### Configure Slack with Tunnel URL
+
+1. Go to your Slack app → **Event Subscriptions**
+2. Set **Request URL** to: `https://your-tunnel-url.trycloudflare.com/slack/events`
+3. Slack will verify the endpoint (should show "Verified ✓")
+4. Save changes
+
+**Important Notes:**
+- The tunnel URL changes each time you restart cloudflared
+- For production, use a permanent Cloudflare Tunnel with a custom domain
+- The tunnel must be running whenever you want to receive Slack events
+
+#### Alternative: ngrok (Requires Account)
+
+```bash
+# Requires ngrok account and authtoken
+ngrok http 8765
+
+# Use the https://xxx.ngrok.io URL for Slack Event Subscriptions
+```
+
+### 4. Configure Credentials
+
+You have two options for configuration:
+
+#### Option A: credentials.json (Recommended for PyPI installs)
+
+Create or update `~/.mcp_mail/credentials.json`:
+
+```json
+{
+  "slack": {
+    "enabled": true,
+    "bot_token": "xoxb-your-bot-token-here",
+    "signing_secret": "your-signing-secret",
+    "default_channel": "C0A0AG6EELB",
+    "notify_on_message": true,
+    "use_blocks": true,
+    "sync_enabled": true,
+    "sync_channels": ["C0A0AG6EELB"],
+    "sync_thread_replies": true,
+    "sync_reactions": true
+  }
+}
+```
+
+#### Option B: Environment Variables (.env file)
 
 Update your `.env` file:
 
@@ -97,6 +175,8 @@ SLACK_SYNC_REACTIONS=true
 # Optional: Webhook URL for fallback posting (if bot token unavailable)
 SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
 ```
+
+**Note**: The `credentials.json` file takes precedence. If both are configured, values from `credentials.json` will be used.
 
 ### 5. Find Channel IDs
 
@@ -202,14 +282,25 @@ Check Slack - you should see the message with:
 
 ## Thread Mapping
 
+Thread linking enables proper conversation continuity between Slack and MCP.
+
 **Slack Thread → MCP Thread**:
-- Slack `thread_ts`: `1503435956.000247`
-- MCP `thread_id`: `slack_C1234567890_1503435956.000247`
+- When you reply to an MCP agent's message in Slack, the reply gets the **original MCP message ID** as its `thread_id`
+- Example: MCP message #181 → Slack thread reply → MCP message #182 with `thread_id=181`
+- New Slack threads without an MCP origin get IDs like: `slack_C1234567890_1503435956.000247`
 
 **MCP Thread → Slack Thread**:
 - MCP messages with matching `thread_id` post as Slack thread replies
-- Note: Thread mappings are **in-memory** and lost on server restart
-- For production: Consider persisting mappings to database
+- Thread mappings use a **singleton pattern** ensuring consistency across all code paths
+
+**Thread Flow Example**:
+```
+#181 (Claude → Slack) "Hello from Claude!"
+  └── #182 (Slack → MCP) "test reply" [thread_id=181] ✓
+      └── #183 (Claude → Slack) "Got it!" [thread_id=181] ✓
+```
+
+**Technical Note**: The SlackClient singleton maintains forward/reverse thread mappings in memory. Mappings persist while the server is running but are lost on restart. For production with high availability, consider persisting mappings to the database.
 
 ## Agent Collaboration Examples
 
