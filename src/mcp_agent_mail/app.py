@@ -4910,6 +4910,7 @@ def build_mcp_server() -> FastMCP:
                             message_id=str(message.id),
                             agent_name=agent.name,
                             subject=message.subject,
+                            thread_id=message.thread_id,
                         )
 
                     task = asyncio.create_task(_send_ack_notification())

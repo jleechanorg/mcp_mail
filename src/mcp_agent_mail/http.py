@@ -938,6 +938,156 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
     async def oauth_meta_root_mcp() -> JSONResponse:
         return JSONResponse({"mcp_oauth": False})
 
+    async def _ingest_slack_bridge_message(
+        message_info: dict[str, Any],
+        *,
+        logger: structlog.stdlib.BoundLogger,
+        dedupe_key: tuple[str, str] | None = None,
+        source: str = "slack",
+    ) -> JSONResponse:
+        """Shared ingestion path for Slack-derived payloads."""
+        from .models import Agent
+
+        slack_ts = message_info.get("slack_ts")
+        slack_channel = message_info.get("slack_channel")
+        cache_key = dedupe_key or ((slack_channel, slack_ts) if slack_ts and slack_channel else None)
+
+        if cache_key and cache_key in _slack_event_cache:
+            logger.info(
+                "slack_message_duplicate_skipped",
+                slack_ts=slack_ts,
+                channel=slack_channel,
+                source=source,
+            )
+            return JSONResponse({"ok": True, "message": "Duplicate Slack event skipped"})
+
+        project = await _ensure_project(settings.slack.sync_project_name)
+
+        sender_name = message_info["sender_name"]
+        sender_agent = await _get_agent_by_name_optional(sender_name)
+
+        if not sender_agent:
+            async with get_session() as session:
+                sender_agent = Agent(
+                    name=sender_name,
+                    project_id=project.id,
+                    program="slack_bridge",
+                    model="slack-events",
+                    task_description="Bridges Slack messages into MCP Agent Mail",
+                    is_active=True,
+                )
+                session.add(sender_agent)
+                try:
+                    await session.commit()
+                    await session.refresh(sender_agent)
+                    logger.info("slack_bridge_agent_created", agent_name=sender_name)
+                except IntegrityError:
+                    await session.rollback()
+                    result = await session.execute(
+                        select(Agent).where(
+                            cast(Any, Agent.project_id) == project.id,
+                            cast(Any, Agent.name) == sender_name,
+                        )
+                    )
+                    existing_agent = result.scalars().first()
+                    if not existing_agent:
+                        raise
+                    sender_agent = existing_agent
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(Agent).where(
+                    cast(Any, Agent.project_id) == project.id,
+                    cast(Any, Agent.is_active).is_(True),
+                    cast(Any, Agent.id) != sender_agent.id,
+                )
+            )
+            recipient_agents = list(result.scalars().all())
+
+        if not recipient_agents:
+            logger.warning("slack_no_recipients", project=project.slug, source=source)
+            return JSONResponse({"ok": True, "message": "No active recipients"})
+
+        recipients_list = [(agent, "to") for agent in recipient_agents]
+        message = await _create_message(
+            project=project,
+            sender=sender_agent,
+            subject=message_info["subject"],
+            body_md=message_info["body_md"],
+            recipients=recipients_list,
+            importance="normal",
+            ack_required=False,
+            thread_id=message_info.get("thread_id"),
+            attachments=[],
+        )
+
+        to_agents = [r[0] for r in recipients_list if r[1] == "to"]
+        cc_agents = [r[0] for r in recipients_list if r[1] == "cc"]
+        bcc_agents = [r[0] for r in recipients_list if r[1] == "bcc"]
+        frontmatter = _message_frontmatter(
+            message=message,
+            project=project,
+            sender=sender_agent,
+            to_agents=to_agents,
+            cc_agents=cc_agents,
+            bcc_agents=bcc_agents,
+            attachments=[],
+        )
+
+        async def _persist_archive() -> None:
+            try:
+                archive = await ensure_archive(settings, project.slug)
+                await write_message_bundle(
+                    archive=archive,
+                    message=frontmatter,
+                    body_md=message.body_md,
+                    sender=sender_agent.name,
+                    recipients=[agent.name for agent in recipient_agents],
+                    extra_paths=[],
+                )
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.error("slack_archive_write_failed", error=str(exc), source=source)
+
+        _archive_task = asyncio.create_task(_persist_archive())
+        _ = _archive_task
+
+        if cache_key:
+            _slack_event_cache.add(cache_key)
+            _slack_event_cache_order.append(cache_key)
+            while len(_slack_event_cache_order) > _slack_event_cache_order.maxlen:
+                old = _slack_event_cache_order.popleft()
+                _slack_event_cache.discard(old)
+
+        slack_client_ref = None
+        try:
+            from .app import _slack_client as _global_slack_client
+
+            slack_client_ref = _global_slack_client
+        except Exception:
+            slack_client_ref = None
+
+        slack_thread_ts = message_info.get("slack_thread_ts") or message_info.get("slack_ts")
+        slack_channel_id = message_info.get("slack_channel")
+        if slack_client_ref and message_info.get("thread_id") and slack_thread_ts and slack_channel_id:
+            try:
+                await slack_client_ref.map_thread(
+                    mcp_thread_id=message_info["thread_id"],
+                    slack_channel_id=slack_channel_id,
+                    slack_thread_ts=slack_thread_ts,
+                )
+            except Exception as exc:
+                logger.warning("slack_thread_map_failed", error=str(exc), source=source)
+
+        logger.info(
+            "slack_message_ingested",
+            message_id=message.id,
+            thread_id=message.thread_id,
+            slack_ts=slack_ts,
+            source=source,
+        )
+
+        return JSONResponse({"ok": True, "message": "Message created"})
+
     # Slack Events API webhook endpoint for bidirectional sync
     @fastapi_app.post("/slack/events")
     async def slack_events_webhook(request: Request) -> JSONResponse:
@@ -952,7 +1102,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         Reference: https://api.slack.com/apis/connections/events-api
         """
         logger = structlog.get_logger("slack")
-        from .models import Agent
 
         if not settings.slack.enabled:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Slack integration disabled")
@@ -1005,175 +1154,23 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
             # Handle message events
             if event_subtype == "message":
-                # Import handler function
                 from .slack_integration import handle_slack_message_event
 
-                # Process Slack message and get MCP message details
                 message_info = await handle_slack_message_event(event, settings)
 
                 if message_info:
-                    # Idempotency: skip duplicates on slack_ts + channel (best-effort, in-memory)
                     slack_ts = message_info.get("slack_ts")
                     slack_channel = message_info.get("slack_channel")
-                    if slack_ts and slack_channel:
-                        key = (slack_channel, slack_ts)
-                        if key in _slack_event_cache:
-                            logger.info(
-                                "slack_message_duplicate_skipped",
-                                slack_ts=slack_ts,
-                                channel=slack_channel,
-                            )
-                            return JSONResponse({"ok": True, "message": "Duplicate Slack event skipped"})
+                    dedupe_key = (slack_channel, slack_ts) if slack_ts and slack_channel else None
 
-                    # Create MCP message from Slack event
-                    try:
-                        # Ensure project exists
-                        project = await _ensure_project(settings.slack.sync_project_name)
+                    return await _ingest_slack_bridge_message(
+                        message_info,
+                        logger=logger,
+                        dedupe_key=dedupe_key,
+                        source="slack_events",
+                    )
 
-                        # Get or create SlackBridge agent
-                        sender_name = message_info["sender_name"]
-                        sender_agent = await _get_agent_by_name_optional(sender_name)
-
-                        if not sender_agent:
-                            # Auto-create SlackBridge system agent; tolerate concurrent creation
-                            async with get_session() as session:
-                                sender_agent = Agent(
-                                    name=sender_name,
-                                    project_id=project.id,
-                                    program="slack_bridge",
-                                    model="slack-events",
-                                    task_description="Bridges Slack messages into MCP Agent Mail",
-                                    is_active=True,
-                                )
-                                session.add(sender_agent)
-                                try:
-                                    await session.commit()
-                                    await session.refresh(sender_agent)
-                                    logger.info("slack_bridge_agent_created", agent_name=sender_name)
-                                except IntegrityError:
-                                    await session.rollback()
-                                    result = await session.execute(
-                                        select(Agent).where(
-                                            cast(Any, Agent.project_id) == project.id,
-                                            cast(Any, Agent.name) == sender_name,
-                                        )
-                                    )
-                                    existing_agent = result.scalars().first()
-                                    if not existing_agent:
-                                        raise
-                                    sender_agent = existing_agent
-
-                        # Get all active agents as recipients (broadcast)
-                        async with get_session() as session:
-                            result = await session.execute(
-                                select(Agent).where(
-                                    cast(Any, Agent.project_id) == project.id,
-                                    cast(Any, Agent.is_active).is_(True),
-                                    cast(Any, Agent.id) != sender_agent.id,  # Don't send to self
-                                )
-                            )
-                            recipient_agents = list(result.scalars().all())
-
-                        if not recipient_agents:
-                            logger.warning("slack_no_recipients", project=project.slug)
-                            return JSONResponse({"ok": True, "message": "No active recipients"})
-
-                        # Create message
-                        recipients_list = [(agent, "to") for agent in recipient_agents]
-                        message = await _create_message(
-                            project=project,
-                            sender=sender_agent,
-                            subject=message_info["subject"],
-                            body_md=message_info["body_md"],
-                            recipients=recipients_list,
-                            importance="normal",
-                            ack_required=False,
-                            thread_id=message_info.get("thread_id"),
-                            attachments=[],
-                        )
-
-                        # Write message to archive in background to avoid webhook timeout
-                        to_agents = [r[0] for r in recipients_list if r[1] == "to"]
-                        cc_agents = [r[0] for r in recipients_list if r[1] == "cc"]
-                        bcc_agents = [r[0] for r in recipients_list if r[1] == "bcc"]
-                        frontmatter = _message_frontmatter(
-                            message=message,
-                            project=project,
-                            sender=sender_agent,
-                            to_agents=to_agents,
-                            cc_agents=cc_agents,
-                            bcc_agents=bcc_agents,
-                            attachments=[],
-                        )
-
-                        async def _persist_archive() -> None:
-                            try:
-                                archive = await ensure_archive(settings, project.slug)
-                                await write_message_bundle(
-                                    archive=archive,
-                                    message=frontmatter,
-                                    body_md=message.body_md,
-                                    sender=sender_agent.name,
-                                    recipients=[agent.name for agent in recipient_agents],
-                                    extra_paths=[],
-                                )
-                            except Exception as exc:
-                                logger.error("slack_archive_write_failed", error=str(exc))
-
-                        _archive_task = asyncio.create_task(_persist_archive())
-                        _ = _archive_task
-
-                        # Record dedupe key after successful creation
-                        if slack_ts and slack_channel:
-                            key = (slack_channel, slack_ts)
-                            _slack_event_cache.add(key)
-                            _slack_event_cache_order.append(key)
-                            # Trim cache if over capacity (deque handles oldest eviction)
-                            while len(_slack_event_cache_order) > _slack_event_cache_order.maxlen:
-                                old = _slack_event_cache_order.popleft()
-                                _slack_event_cache.discard(old)
-
-                        # Capture thread mapping so outbound replies stay in the same Slack thread
-                        slack_client_ref = None
-                        try:
-                            from .app import _slack_client as _global_slack_client  # lazy import to avoid cycles
-
-                            slack_client_ref = _global_slack_client
-                        except Exception:
-                            slack_client_ref = None
-
-                        if (
-                            slack_client_ref
-                            and message_info.get("thread_id")
-                            and message_info.get("slack_thread_ts")
-                            and message_info.get("slack_channel")
-                        ):
-                            try:
-                                await slack_client_ref.map_thread(
-                                    mcp_thread_id=message_info["thread_id"],
-                                    slack_channel_id=message_info["slack_channel"],
-                                    slack_thread_ts=message_info["slack_thread_ts"],
-                                )
-                            except Exception as exc:  # best-effort; do not block ingestion
-                                logger.warning("slack_thread_map_failed", error=str(exc))
-
-                        logger.info(
-                            "slack_message_created",
-                            message_id=message.id,
-                            subject=message.subject[:50],
-                            recipients=len(recipient_agents),
-                        )
-
-                        return JSONResponse({"ok": True, "message_id": str(message.id)})
-
-                    except Exception as e:
-                        logger.error("slack_message_creation_failed", error=str(e))
-                        raise HTTPException(
-                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to create message: {e}"
-                        ) from e
-                else:
-                    # Message was filtered/ignored (e.g., bot message, wrong channel)
-                    return JSONResponse({"ok": True, "message": "Event ignored"})
+                return JSONResponse({"ok": True, "message": "Event ignored"})
 
             # Handle reaction_added events (future: map to acknowledgments)
             elif event_subtype == "reaction_added":
@@ -1183,6 +1180,63 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
         # Return success for unhandled event types
         return JSONResponse({"ok": True})
+
+    @fastapi_app.post("/slackbox/incoming")
+    async def slackbox_incoming(request: Request) -> JSONResponse:
+        """Handle legacy Slack outgoing webhook payloads (Slackbox)."""
+
+        logger = structlog.get_logger("slackbox")
+
+        if not settings.slack.slackbox_enabled:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Slackbox disabled")
+
+        form = await request.form()
+
+        token = (form.get("token") or "").strip()
+        expected_token = (settings.slack.slackbox_token or "").strip()
+        if not expected_token:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Slackbox token not configured",
+            )
+
+        if token != expected_token:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Slackbox token")
+
+        text = (form.get("text") or "").strip()
+        if not text:
+            return JSONResponse({"ok": True, "message": "No text provided"})
+
+        channel_id = (form.get("channel_id") or form.get("channel_name") or "").strip()
+        if settings.slack.slackbox_channels and channel_id not in settings.slack.slackbox_channels:
+            logger.info("slackbox_channel_skipped", channel=channel_id)
+            return JSONResponse({"ok": True, "message": "Channel not allowed"})
+
+        timestamp = (form.get("timestamp") or form.get("ts") or "").strip()
+        dedupe_key = (channel_id, timestamp) if channel_id and timestamp else None
+
+        subject_line = text.split("\n", 1)[0].strip() or "Slackbox message"
+        subject_prefixed = f"{settings.slack.slackbox_subject_prefix} {subject_line}".strip()
+        subject = subject_prefixed[:120]
+
+        thread_id = f"slackbox_{channel_id}_{timestamp}" if channel_id and timestamp else None
+
+        message_info = {
+            "sender_name": settings.slack.slackbox_sender_name,
+            "subject": subject,
+            "body_md": text,
+            "thread_id": thread_id,
+            "slack_channel": channel_id,
+            "slack_ts": timestamp,
+            "slack_thread_ts": timestamp,
+        }
+
+        return await _ingest_slack_bridge_message(
+            message_info,
+            logger=logger,
+            dedupe_key=dedupe_key,
+            source="slackbox",
+        )
 
     # A minimal stateless ASGI adapter that does not rely on ASGI lifespan management
     # and runs a fresh StreamableHTTP transport per request.
