@@ -1701,10 +1701,11 @@ async def _create_placeholder_agent(
                 return existing
             raise ValueError(f"Failed to create placeholder agent: {sanitized}") from exc
 
-    # Write placeholder profile to archive
-    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-    async with _archive_write_lock(archive):
-        await write_agent_profile(archive, _agent_to_dict(agent))
+    # Write placeholder profile to archive (only if archive is enabled)
+    if is_archive_enabled(settings):
+        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+        async with _archive_write_lock(archive):
+            await write_agent_profile(archive, _agent_to_dict(agent))
     return agent
 
 
@@ -1771,10 +1772,11 @@ async def _delete_agent(project: Project, name: str, settings: Settings) -> dict
         # 5) Finally, delete the agent itself
         await session.execute(delete(Agent).where(Agent.id == agent_id))
 
-    # Write deletion marker to Git archive
-    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-    async with _archive_write_lock(archive):
-        await write_agent_deletion_marker(archive, agent_name, stats)
+    # Write deletion marker to Git archive (only if archive is enabled)
+    if is_archive_enabled(settings):
+        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+        async with _archive_write_lock(archive):
+            await write_agent_deletion_marker(archive, agent_name, stats)
 
     return stats
 
@@ -1824,9 +1826,11 @@ async def _retire_agent(agent: Agent, project: Project, settings: Settings) -> A
         await session.refresh(db_agent)
         agent = db_agent
 
-    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-    async with _archive_write_lock(archive):
-        await write_agent_profile(archive, _agent_to_dict(agent))
+    # Write updated profile to archive (only if archive is enabled)
+    if is_archive_enabled(settings):
+        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+        async with _archive_write_lock(archive):
+            await write_agent_profile(archive, _agent_to_dict(agent))
     return agent
 
 
