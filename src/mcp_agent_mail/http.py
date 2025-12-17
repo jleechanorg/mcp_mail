@@ -974,8 +974,13 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     )
                     return JSONResponse({"ok": True, "message": "Duplicate Slack event skipped"})
 
+                # Handle eviction before append if deque is at capacity
+                if len(_slack_event_cache_order) >= _slack_event_cache_order.maxlen:
+                    evicted = _slack_event_cache_order[0]
+                    _slack_event_cache.discard(evicted)
+
                 _slack_event_cache_order.append(cache_key)
-                _slack_event_cache = set(_slack_event_cache_order)
+                _slack_event_cache.add(cache_key)
                 cache_key_added = True
 
         try:
