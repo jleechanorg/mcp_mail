@@ -551,6 +551,7 @@ async def notify_slack_ack(
     message_id: str,
     agent_name: str,
     subject: str,
+    thread_id: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
     """Send a notification to Slack when a message is acknowledged.
 
@@ -578,10 +579,34 @@ async def notify_slack_ack(
 
     try:
         text = f":white_check_mark: {agent_name} acknowledged: {subject}"
+
+        channel = settings.slack.default_channel
+        slack_thread_ts: Optional[str] = None
+        thread_key = thread_id or message_id
+
+        if thread_key:
+            thread_mapping = await client.get_slack_thread(thread_key)
+            if thread_mapping:
+                slack_thread_ts = thread_mapping.slack_thread_ts
+                channel = thread_mapping.slack_channel_id
+            else:
+                match = _SLACK_THREAD_ID_PATTERN.match(thread_key)
+                if match:
+                    derived_channel, derived_ts = match.groups()
+                    channel = derived_channel
+                    slack_thread_ts = derived_ts
+
         response = await client.post_message(
-            channel=settings.slack.default_channel,
+            channel=channel,
             text=text,
+            thread_ts=slack_thread_ts,
         )
+
+        if thread_key and not slack_thread_ts:
+            msg_ts = response.get("ts")
+            channel_id = response.get("channel")
+            if msg_ts and channel_id:
+                await client.map_thread(thread_key, channel_id, msg_ts)
 
         logger.info(f"Sent Slack ack notification for message {message_id[:8]}")
         return response
