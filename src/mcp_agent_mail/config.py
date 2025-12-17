@@ -1,7 +1,15 @@
-"""Application configuration loaded via python-decouple with typed helpers."""
+"""Application configuration loaded via python-decouple with typed helpers.
+
+Configuration sources (in order of precedence):
+1. Environment variables
+2. ~/.mcp_mail/credentials.json (for secrets, recommended for PyPI installs)
+3. .env file in current directory (for development)
+"""
 
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -9,7 +17,32 @@ from typing import Final, Literal, cast
 
 from decouple import Config as DecoupleConfig, RepositoryEnv
 
+# User-level credentials file (preferred for PyPI installs)
+_USER_CREDENTIALS_PATH: Final[Path] = Path.home() / ".mcp_mail" / "credentials.json"
 _DOTENV_PATH: Final[Path] = Path(".env")
+
+# Load user credentials from ~/.mcp_mail/credentials.json
+_user_credentials: dict[str, str] = {}
+if _USER_CREDENTIALS_PATH.exists():
+    try:
+        with _USER_CREDENTIALS_PATH.open() as f:
+            _user_credentials = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        pass  # Silently ignore malformed credentials file
+
+
+def _get_config_value(name: str, default: str = "") -> str:
+    """Get config value with precedence: env > credentials.json > .env > default."""
+    # 1. Check environment variables first
+    env_value = os.environ.get(name)
+    if env_value is not None:
+        return env_value
+    # 2. Check user credentials file
+    if name in _user_credentials:
+        return str(_user_credentials[name])
+    # 3. Fall through to decouple (handles .env and defaults)
+    return _decouple_config(name, default=default)
+
 
 # Create config that gracefully handles missing .env file
 if _DOTENV_PATH.exists():
@@ -345,11 +378,11 @@ def get_settings() -> Settings:
     )
 
     slack_settings = SlackSettings(
-        enabled=_bool(_decouple_config("SLACK_ENABLED", default="false"), default=False),
-        bot_token=_decouple_config("SLACK_BOT_TOKEN", default="") or None,
-        app_token=_decouple_config("SLACK_APP_TOKEN", default="") or None,
-        signing_secret=_decouple_config("SLACK_SIGNING_SECRET", default="") or None,
-        default_channel=_decouple_config("SLACK_DEFAULT_CHANNEL", default="general"),
+        enabled=_bool(_get_config_value("SLACK_ENABLED", default="false"), default=False),
+        bot_token=_get_config_value("SLACK_BOT_TOKEN", default="") or None,
+        app_token=_get_config_value("SLACK_APP_TOKEN", default="") or None,
+        signing_secret=_get_config_value("SLACK_SIGNING_SECRET", default="") or None,
+        default_channel=_get_config_value("SLACK_DEFAULT_CHANNEL", default="general"),
         notify_on_message=_bool(_decouple_config("SLACK_NOTIFY_ON_MESSAGE", default="true"), default=True),
         notify_on_ack=_bool(_decouple_config("SLACK_NOTIFY_ON_ACK", default="false"), default=False),
         notify_mention_format=mention_format,

@@ -121,19 +121,54 @@ echo ""
 read -p "Press Enter when you've completed the Slack App setup..."
 
 # =============================================================================
-# Step 3: Configure Environment Variables
+# Step 3: Configure Credentials
 # =============================================================================
-print_header "Step 3: Configure Environment Variables"
+print_header "Step 3: Configure Credentials"
 
-# Function to prompt for env var
-configure_env() {
+# Create ~/.mcp_mail directory if it doesn't exist
+CREDS_DIR="$HOME/.mcp_mail"
+CREDS_FILE="$CREDS_DIR/credentials.json"
+mkdir -p "$CREDS_DIR"
+chmod 700 "$CREDS_DIR"
+
+# Initialize credentials file if it doesn't exist
+if [[ ! -f "$CREDS_FILE" ]]; then
+    echo '{}' > "$CREDS_FILE"
+    chmod 600 "$CREDS_FILE"
+fi
+
+print_info "Credentials will be saved to: $CREDS_FILE"
+echo ""
+
+# Function to get current value from credentials.json
+get_cred() {
+    local key="$1"
+    python3 -c "import json; d=json.load(open('$CREDS_FILE')); print(d.get('$key', ''))" 2>/dev/null || echo ""
+}
+
+# Function to set value in credentials.json
+set_cred() {
+    local key="$1"
+    local value="$2"
+    python3 -c "
+import json
+with open('$CREDS_FILE', 'r') as f:
+    d = json.load(f)
+d['$key'] = '$value'
+with open('$CREDS_FILE', 'w') as f:
+    json.dump(d, f, indent=2)
+"
+}
+
+# Function to prompt for credential
+configure_cred() {
     local var_name="$1"
     local description="$2"
     local default_value="${3:-}"
     local is_secret="${4:-false}"
 
     # Check if already set
-    current_value=$(grep "^${var_name}=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || echo "")
+    current_value=$(get_cred "$var_name")
 
     if [[ -n "$current_value" ]]; then
         if [[ "$is_secret" == "true" ]]; then
@@ -160,47 +195,32 @@ configure_env() {
         fi
     fi
 
-    # Update .env file
-    if grep -q "^${var_name}=" "$ENV_FILE" 2>/dev/null; then
-        # Update existing
-        if [[ "$(uname)" == "Darwin" ]]; then
-            sed -i '' "s|^${var_name}=.*|${var_name}=${value}|" "$ENV_FILE"
-        else
-            sed -i "s|^${var_name}=.*|${var_name}=${value}|" "$ENV_FILE"
-        fi
-    else
-        # Add new
-        echo "${var_name}=${value}" >> "$ENV_FILE"
-    fi
-
+    # Save to credentials file
+    set_cred "$var_name" "$value"
     print_success "$var_name configured"
 }
 
-print_step "Configuring Slack settings..."
+print_step "Configuring Slack credentials..."
 echo ""
 
-configure_env "SLACK_ENABLED" "Enable Slack integration" "true"
-configure_env "SLACK_BOT_TOKEN" "Bot OAuth Token (xoxb-...)" "" "true"
-configure_env "SLACK_SIGNING_SECRET" "Signing Secret" "" "true"
-configure_env "SLACK_SYNC_ENABLED" "Enable bidirectional sync" "true"
-configure_env "SLACK_DEFAULT_CHANNEL" "Default channel ID (e.g., C1234567890)"
-configure_env "SLACK_SYNC_PROJECT_NAME" "MCP project for Slack messages" "slack-sync"
-configure_env "SLACK_NOTIFY_ON_MESSAGE" "Notify Slack on new MCP messages" "true"
+configure_cred "SLACK_ENABLED" "Enable Slack integration" "true"
+configure_cred "SLACK_BOT_TOKEN" "Bot OAuth Token (xoxb-...)" "" "true"
+configure_cred "SLACK_SIGNING_SECRET" "Signing Secret" "" "true"
+configure_cred "SLACK_SYNC_ENABLED" "Enable bidirectional sync" "true"
+configure_cred "SLACK_DEFAULT_CHANNEL" "Default channel ID (e.g., C1234567890)"
+configure_cred "SLACK_SYNC_PROJECT_NAME" "MCP project for Slack messages" "slack-sync"
+configure_cred "SLACK_NOTIFY_ON_MESSAGE" "Notify Slack on new MCP messages" "true"
 
 echo ""
-print_success "Environment variables configured in $ENV_FILE"
+print_success "Credentials saved to $CREDS_FILE"
+print_info "This file is user-local and not part of any git repo."
 
 # =============================================================================
 # Step 4: Validate Configuration
 # =============================================================================
 print_header "Step 4: Validating Configuration"
 
-# Load env file
-set -a
-source "$ENV_FILE"
-set +a
-
-# Check required vars
+# Check required vars from credentials file
 REQUIRED_VARS=(
     "SLACK_ENABLED"
     "SLACK_BOT_TOKEN"
@@ -210,7 +230,8 @@ REQUIRED_VARS=(
 
 all_valid=true
 for var in "${REQUIRED_VARS[@]}"; do
-    if [[ -z "${!var:-}" ]]; then
+    value=$(get_cred "$var")
+    if [[ -z "$value" ]]; then
         print_error "$var is not set"
         all_valid=false
     else
@@ -222,6 +243,11 @@ if [[ "$all_valid" != "true" ]]; then
     print_error "Some required variables are missing. Please run this script again."
     exit 1
 fi
+
+# Export for testing
+SLACK_BOT_TOKEN=$(get_cred "SLACK_BOT_TOKEN")
+SLACK_SIGNING_SECRET=$(get_cred "SLACK_SIGNING_SECRET")
+SLACK_DEFAULT_CHANNEL=$(get_cred "SLACK_DEFAULT_CHANNEL")
 
 # =============================================================================
 # Step 5: Test Slack Connection
@@ -288,16 +314,18 @@ echo "     • Post a message in the configured Slack channel"
 echo "     • Check the MCP Agent Mail server logs for the incoming event"
 echo "     • Use the MCP tools to reply and see it appear in Slack"
 echo ""
-echo "  ${YELLOW}Configuration file:${NC} $ENV_FILE"
+echo "  ${YELLOW}Credentials file:${NC} $CREDS_FILE"
 echo "  ${YELLOW}Documentation:${NC} $PROJECT_ROOT/docs/slack_bot_sync_design.md"
 echo ""
-echo "  ${BLUE}Environment variables configured:${NC}"
-grep "^SLACK_" "$ENV_FILE" | while read -r line; do
-    var_name=$(echo "$line" | cut -d'=' -f1)
-    if [[ "$var_name" == "SLACK_BOT_TOKEN" ]] || [[ "$var_name" == "SLACK_SIGNING_SECRET" ]]; then
-        echo "    $var_name=****hidden****"
-    else
-        echo "    $line"
-    fi
-done
+echo "  ${BLUE}Credentials configured:${NC}"
+python3 -c "
+import json
+with open('$CREDS_FILE') as f:
+    d = json.load(f)
+for k, v in d.items():
+    if 'TOKEN' in k or 'SECRET' in k:
+        print(f'    {k}=****hidden****')
+    else:
+        print(f'    {k}={v}')
+" 2>/dev/null || echo "    (unable to read credentials file)"
 echo ""
