@@ -956,6 +956,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         """Shared ingestion path for Slack-derived payloads."""
         from .models import Agent
 
+        global _slack_event_cache
+
         slack_ts = message_info.get("slack_ts")
         slack_channel = message_info.get("slack_channel")
         cache_key = dedupe_key or ((slack_channel, slack_ts) if slack_ts and slack_channel else None)
