@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from functools import wraps
 from typing import Any, TypeVar
 
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import DatabaseError, IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 
@@ -488,7 +488,7 @@ def _recreate_agents_table_nullable_project_id(connection) -> None:
             FROM agents
             """
         )
-    except Exception as exc:  # pragma: no cover - defensive migration logging
+    except (IntegrityError, OperationalError, DatabaseError) as exc:  # pragma: no cover - defensive migration logging
         raise RuntimeError("Failed to migrate data from agents to agents_new") from exc
 
     # Drop old table and rename new one
@@ -562,7 +562,7 @@ def _recreate_messages_table_nullable_project_id(connection) -> None:
             FROM messages
             """
         )
-    except Exception as exc:  # pragma: no cover - defensive migration logging
+    except (IntegrityError, OperationalError, DatabaseError) as exc:  # pragma: no cover - defensive migration logging
         raise RuntimeError("Failed to migrate data from messages to messages_new") from exc
 
     # Drop old table and rename new one
