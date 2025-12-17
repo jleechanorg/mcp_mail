@@ -92,7 +92,7 @@ def test_format_mcp_message_for_slack_includes_full_agent_details():
     )
 
     assert "Primary Sender" in text
-    assert "Agent 7" in text  # no truncation in fallback text
+    assert "+2 more" in text  # fallback text reflects truncated recipients
 
     assert blocks is not None
     fields = {field["text"] for field in blocks[1]["fields"]}
@@ -101,6 +101,7 @@ def test_format_mcp_message_for_slack_includes_full_agent_details():
     recipient_field = next(text for text in fields if text.startswith("*To:*"))
 
     assert "*Primary Sender*" in sender_field
-    # Should include all recipients in the block list
-    assert all(name in recipient_field for name in recipients)
-    assert recipient_field.count("•") == len(recipients)
+    # Should include displayed recipients and a "+N more" indicator
+    assert all(name in recipient_field for name in recipients[:5])
+    assert "+2 more" in recipient_field
+    assert recipient_field.count("•") == 6  # 5 recipients + "+2 more"

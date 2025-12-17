@@ -40,6 +40,10 @@ logger = logging.getLogger(__name__)
 
 # Regex pattern for extracting Slack user mentions (e.g., <@U123|name>)
 _SLACK_MENTION_PATTERN = re.compile(r"<@([A-Z0-9]+)(?:\|[^>]+)?>")
+# Thread id format: slack_<channel_id>_<thread_ts> or slackbox_<channel_id>_<thread_ts>
+# Channel identifiers may include underscores (e.g., team_engineering), so capture
+# everything up to the final underscore before the thread timestamp.
+_SLACK_THREAD_ID_PATTERN = re.compile(r"^(?:slack|slackbox)_(.+)_([^_]+)$")
 
 
 @dataclass
@@ -376,10 +380,17 @@ def format_mcp_message_for_slack(
         "low": ":information_source:",
     }.get(importance, ":email:")
 
-    # Fallback text for notifications with importance indicator and full routing info
+    # Limit recipient expansion to avoid Slack field limits while preserving counts
+    max_recipients = 5
+    displayed_recipients = recipients[:max_recipients]
+    extra_recipient_count = max(len(recipients) - max_recipients, 0)
+
+    # Fallback text for notifications with importance indicator and routing info
     if recipients:
-        recipient_list = ", ".join(recipients)
-        text = f"{importance_emoji} *{subject}* from *{sender_name}* to {recipient_list}"
+        truncated_list = ", ".join(displayed_recipients)
+        if extra_recipient_count:
+            truncated_list = f"{truncated_list}, +{extra_recipient_count} more"
+        text = f"{importance_emoji} *{subject}* from *{sender_name}* to {truncated_list}"
     else:
         text = f"{importance_emoji} *{subject}* from *{sender_name}*"
 
@@ -403,7 +414,13 @@ def format_mcp_message_for_slack(
     )
 
     # Metadata section
-    recipient_lines = "\n".join(f"• {name}" for name in recipients) if recipients else "—"
+    if recipients:
+        lines = [f"• {name}" for name in displayed_recipients]
+        if extra_recipient_count:
+            lines.append(f"• +{extra_recipient_count} more")
+        recipient_lines = "\n".join(lines)
+    else:
+        recipient_lines = "—"
 
     metadata_fields = [
         {"type": "mrkdwn", "text": f"*From:*\n*{sender_name}*"},
@@ -491,11 +508,18 @@ async def notify_slack_message(
         # Check for existing thread mapping (fallback to message_id for new threads)
         slack_thread_ts: Optional[str] = None
         thread_key = thread_id or message_id
+        thread_mapping: SlackThreadMapping | None = None
         if thread_key:
             thread_mapping = await client.get_slack_thread(thread_key)
             if thread_mapping:
                 slack_thread_ts = thread_mapping.slack_thread_ts
                 channel = thread_mapping.slack_channel_id
+            else:
+                match = _SLACK_THREAD_ID_PATTERN.match(thread_key)
+                if match:
+                    derived_channel, derived_ts = match.groups()
+                    slack_thread_ts = derived_ts
+                    channel = derived_channel
 
         # Post to Slack
         response = await client.post_message(
@@ -505,12 +529,12 @@ async def notify_slack_message(
             thread_ts=slack_thread_ts,
         )
 
-        # If this is a new thread, create mapping
-        if thread_key and not slack_thread_ts:
-            msg_ts = response.get("ts")
-            channel_id = response.get("channel")
-            if msg_ts and channel_id:
-                await client.map_thread(thread_key, channel_id, msg_ts)
+        # If this is a new thread or mapping was missing, create mapping
+        if thread_key and not thread_mapping:
+            mapped_ts = slack_thread_ts or response.get("ts")
+            channel_id = response.get("channel") or channel
+            if mapped_ts and channel_id:
+                await client.map_thread(thread_key, channel_id, mapped_ts)
 
         logger.info(f"Sent Slack notification for message {message_id[:8]} to channel {channel}")
         return response
@@ -654,7 +678,7 @@ async def handle_slack_message_event(
         "thread_id": mcp_thread_id,
         "slack_channel": channel_id,
         "slack_ts": message_ts,
-        "slack_thread_ts": thread_ts,
+        "slack_thread_ts": thread_ts or message_ts,
         "mentioned_users": mentioned_users,
     }
 
