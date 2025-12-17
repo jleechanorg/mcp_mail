@@ -982,7 +982,33 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 cache_key_added = True
 
         try:
-            project = await _ensure_project(settings.slack.sync_project_name)
+            # Determine project: If thread_id is a numeric MCP message ID, use that message's
+            # original project so Slack replies go to the same project as the original message.
+            # Otherwise, fall back to sync_project_name for new threads from Slack.
+            thread_id = message_info.get("thread_id")
+            project = None
+
+            if thread_id and thread_id.isdigit():
+                # thread_id is a numeric MCP message ID - look up its project
+                async with get_session() as session:
+                    result = await session.execute(
+                        text("SELECT p.id, p.slug, p.human_key FROM messages m JOIN projects p ON p.id = m.project_id WHERE m.id = :mid"),
+                        {"mid": int(thread_id)},
+                    )
+                    row = result.fetchone()
+                    if row:
+                        from .models import Project
+                        project = Project(id=row[0], slug=row[1], human_key=row[2])
+                        logger.info(
+                            "slack_reply_routed_to_original_project",
+                            thread_id=thread_id,
+                            project_slug=project.slug,
+                            source=source,
+                        )
+
+            if not project:
+                # Fall back to sync_project_name for new Slack-originated threads
+                project = await _ensure_project(settings.slack.sync_project_name)
 
             sender_name = message_info["sender_name"]
             sender_agent = await _get_agent_by_name_optional(sender_name)
