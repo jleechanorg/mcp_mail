@@ -509,6 +509,7 @@ async def notify_slack_message(
         slack_thread_ts: Optional[str] = None
         thread_key = thread_id or message_id
         thread_mapping: SlackThreadMapping | None = None
+        thread_mapping: SlackThreadMapping | None = None
         if thread_key:
             thread_mapping = await client.get_slack_thread(thread_key)
             if thread_mapping:
@@ -602,9 +603,9 @@ async def notify_slack_ack(
             thread_ts=slack_thread_ts,
         )
 
-        if thread_key and not slack_thread_ts:
-            msg_ts = response.get("ts")
-            channel_id = response.get("channel")
+        if thread_key and not thread_mapping:
+            msg_ts = slack_thread_ts or response.get("ts")
+            channel_id = response.get("channel") or channel
             if msg_ts and channel_id:
                 await client.map_thread(thread_key, channel_id, msg_ts)
 

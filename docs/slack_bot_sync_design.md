@@ -16,7 +16,7 @@ This document describes the standard Slack **bot-based** integration that provid
 - Outbound Slack notifications (`notify_slack_message` / `notify_slack_ack`) use the thread mapping to reply inline; otherwise they fall back to the configured default channel.
 
 ## Configuration (env)
-```
+```bash
 SLACK_ENABLED=true
 SLACK_BOT_TOKEN=xoxb-...
 SLACK_SIGNING_SECRET=...
