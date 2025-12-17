@@ -58,6 +58,7 @@ from .storage import (
     collect_lock_status,
     ensure_archive,
     heal_archive_locks,
+    is_archive_enabled,
     process_attachments,
     write_agent_deletion_marker,
     write_agent_profile,
@@ -3460,7 +3461,9 @@ def build_mcp_server() -> FastMCP:
         """
         await ctx.info(f"Ensuring project for key '{human_key}'.")
         project = await _ensure_project(human_key)
-        await ensure_archive(settings, project.slug, project_key=project.human_key)
+        # Archive is optional - only initialize if enabled
+        if is_archive_enabled(settings):
+            await ensure_archive(settings, project.slug, project_key=project.human_key)
         return _project_to_dict(project)
 
     @mcp.tool(name="register_agent")
@@ -3569,7 +3572,9 @@ def build_mcp_server() -> FastMCP:
         """
         # Auto-create project if it doesn't exist (allows any string as project_key)
         project = await _ensure_project(project_key)
-        await ensure_archive(settings, project.slug, project_key=project.human_key)
+        # Archive is optional - only initialize if enabled
+        if is_archive_enabled(settings):
+            await ensure_archive(settings, project.slug, project_key=project.human_key)
 
         if settings.tools_log_enabled:
             try:

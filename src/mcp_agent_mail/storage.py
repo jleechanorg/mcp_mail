@@ -26,6 +26,15 @@ from .config import Settings
 _IMAGE_PATTERN = re.compile(r"!\[(?P<alt>[^\]]*)\]\((?P<path>[^)]+)\)")
 
 
+def is_archive_enabled(settings: Settings) -> bool:
+    """Check if archive storage is enabled (either local or project-key based).
+
+    Archive storage is optional - SQLite database always works regardless of this setting.
+    Archive is used for git-based file storage of messages as .md files.
+    """
+    return settings.storage.local_archive_enabled or settings.storage.project_key_storage_enabled
+
+
 @dataclass(slots=True)
 class ProjectArchive:
     settings: Settings
