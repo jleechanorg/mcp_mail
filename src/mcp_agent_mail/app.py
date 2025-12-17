@@ -3609,10 +3609,10 @@ def build_mcp_server() -> FastMCP:
     )
     async def register_agent(
         ctx: Context,
+        project_key: Optional[str],
         program: str,
         model: str,
         name: Optional[str] = None,
-        project_key: Optional[str] = None,
         task_description: str = "",
         attachments_policy: str = "auto",
         force_reclaim: bool = False,
@@ -4035,11 +4035,11 @@ def build_mcp_server() -> FastMCP:
     )
     async def send_message(
         ctx: Context,
+        project_key: Optional[str],
         sender_name: str,
         to: list[str],
         subject: str,
         body_md: str,
-        project_key: Optional[str] = None,
         cc: Optional[list[str]] = None,
         bcc: Optional[list[str]] = None,
         attachment_paths: Optional[list[str]] = None,

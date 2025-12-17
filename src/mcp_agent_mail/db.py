@@ -455,21 +455,41 @@ def _recreate_agents_table_nullable_project_id(connection) -> None:
         """
     )
 
-    # Copy data from old table
-    connection.exec_driver_sql(
+    # Validate data before copying from old table
+    invalid_count_result = connection.exec_driver_sql(
         """
-        INSERT INTO agents_new (
-            id, project_id, name, program, model, task_description,
-            inception_ts, last_active_ts, attachments_policy, contact_policy,
-            is_active, deleted_ts, is_placeholder
-        )
-        SELECT
-            id, project_id, name, program, model, task_description,
-            inception_ts, last_active_ts, attachments_policy, contact_policy,
-            is_active, deleted_ts, is_placeholder
+        SELECT COUNT(*)
         FROM agents
+        WHERE name IS NULL
+           OR program IS NULL
+           OR model IS NULL
         """
     )
+    invalid_count = invalid_count_result.scalar_one()
+    if invalid_count > 0:
+        raise RuntimeError(
+            f"Cannot migrate agents table: {invalid_count} row(s) have NULL values "
+            "in required columns (name, program, or model)."
+        )
+
+    # Copy data from old table with explicit error handling
+    try:
+        connection.exec_driver_sql(
+            """
+            INSERT INTO agents_new (
+                id, project_id, name, program, model, task_description,
+                inception_ts, last_active_ts, attachments_policy, contact_policy,
+                is_active, deleted_ts, is_placeholder
+            )
+            SELECT
+                id, project_id, name, program, model, task_description,
+                inception_ts, last_active_ts, attachments_policy, contact_policy,
+                is_active, deleted_ts, is_placeholder
+            FROM agents
+            """
+        )
+    except Exception as exc:  # pragma: no cover - defensive migration logging
+        raise RuntimeError("Failed to migrate data from agents to agents_new") from exc
 
     # Drop old table and rename new one
     connection.exec_driver_sql("DROP TABLE agents")
@@ -478,10 +498,21 @@ def _recreate_agents_table_nullable_project_id(connection) -> None:
     # Recreate indexes
     connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_agents_project_id ON agents(project_id)")
     connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_agents_name ON agents(name)")
+    # Create unique index for case-insensitive agent name uniqueness (global across all projects)
+    connection.exec_driver_sql(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_agents_name_ci "
+        "ON agents(lower(name)) WHERE is_active = 1"
+    )
 
 
 def _recreate_messages_table_nullable_project_id(connection) -> None:
-    """Recreate messages table with nullable project_id."""
+    """Recreate messages table with nullable project_id.
+    
+    Note: SQLite does not enforce foreign key constraints by default unless
+    PRAGMA foreign_keys=ON is set. The REFERENCES clauses are included in the
+    schema for documentation and compatibility, but constraint enforcement is
+    not active in this database configuration.
+    """
     # Create new table with nullable project_id
     connection.exec_driver_sql(
         """
@@ -500,19 +531,39 @@ def _recreate_messages_table_nullable_project_id(connection) -> None:
         """
     )
 
-    # Copy data from old table
-    connection.exec_driver_sql(
+    # Validate data before copying from old table
+    invalid_count_result = connection.exec_driver_sql(
         """
-        INSERT INTO messages_new (
-            id, project_id, sender_id, thread_id, subject, body_md,
-            importance, ack_required, created_ts, attachments
-        )
-        SELECT
-            id, project_id, sender_id, thread_id, subject, body_md,
-            importance, ack_required, created_ts, attachments
+        SELECT COUNT(*)
         FROM messages
+        WHERE sender_id IS NULL
+           OR subject IS NULL
+           OR body_md IS NULL
         """
     )
+    invalid_count = invalid_count_result.scalar_one()
+    if invalid_count > 0:
+        raise RuntimeError(
+            f"Cannot migrate messages table: {invalid_count} row(s) have NULL values "
+            "in required columns (sender_id, subject, or body_md)."
+        )
+
+    # Copy data from old table with explicit error handling
+    try:
+        connection.exec_driver_sql(
+            """
+            INSERT INTO messages_new (
+                id, project_id, sender_id, thread_id, subject, body_md,
+                importance, ack_required, created_ts, attachments
+            )
+            SELECT
+                id, project_id, sender_id, thread_id, subject, body_md,
+                importance, ack_required, created_ts, attachments
+            FROM messages
+            """
+        )
+    except Exception as exc:  # pragma: no cover - defensive migration logging
+        raise RuntimeError("Failed to migrate data from messages to messages_new") from exc
 
     # Drop old table and rename new one
     connection.exec_driver_sql("DROP TABLE messages")
