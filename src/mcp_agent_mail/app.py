@@ -955,6 +955,20 @@ async def _archive_write_lock(archive: ProjectArchive, *, timeout_seconds: float
         ) from exc
 
 
+async def _ensure_archive_if_enabled(
+    settings: Settings, slug: str, project_key: str
+) -> Optional[ProjectArchive]:
+    """
+    Initialize archive only if archive storage is enabled.
+    
+    Returns the ProjectArchive if enabled, None otherwise.
+    This helper reduces duplication of the conditional archive initialization pattern.
+    """
+    if is_archive_enabled(settings):
+        return await ensure_archive(settings, slug, project_key=project_key)
+    return None
+
+
 async def _read_file_preview(path: Path, *, max_chars: int) -> str:
     def _read() -> str:
         try:
@@ -3579,8 +3593,7 @@ def build_mcp_server() -> FastMCP:
         await ctx.info(f"Ensuring project for key '{human_key}'.")
         project = await _ensure_project(human_key)
         # Archive is optional - only initialize if enabled
-        if is_archive_enabled(settings):
-            await ensure_archive(settings, project.slug, project_key=project.human_key)
+        await _ensure_archive_if_enabled(settings, project.slug, project.human_key)
         return _project_to_dict(project)
 
     @mcp.tool(name="register_agent")
@@ -3690,8 +3703,7 @@ def build_mcp_server() -> FastMCP:
         # Auto-create project if it doesn't exist (allows any string as project_key)
         project = await _ensure_project(project_key)
         # Archive is optional - only initialize if enabled
-        if is_archive_enabled(settings):
-            await ensure_archive(settings, project.slug, project_key=project.human_key)
+        await _ensure_archive_if_enabled(settings, project.slug, project.human_key)
 
         if settings.tools_log_enabled:
             try:
