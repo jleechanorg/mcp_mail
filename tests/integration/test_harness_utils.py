@@ -4,8 +4,30 @@
 This module provides the orchestration framework pattern for running real
 CLI tools (Claude, Codex, Cursor, Gemini) in integration tests.
 
-Requires jleechanorg-orchestration framework for CLI profile management.
-Install with: pip install jleechanorg-orchestration
+Orchestration Framework
+-----------------------
+The jleechanorg-orchestration framework provides standardized CLI profiles
+(CLI_PROFILES) that define how to invoke different AI CLI tools. Each profile
+contains:
+    - binary: The CLI executable name (e.g., "claude", "codex")
+    - display_name: Human-readable name for output
+    - command_template: Template string for building commands
+      Format: "{binary} -p {prompt_file} {continue_flag}"
+    - stdin_template: Optional stdin redirection pattern
+
+This eliminates the need for subprocess calls directly in test code and provides
+a consistent interface across different CLI tools.
+
+Installation:
+    pip install jleechanorg-orchestration
+
+If not installed, tests will gracefully skip with appropriate messages.
+
+Example Usage:
+    from tests.integration.test_harness_utils import ClaudeCLITest
+    
+    test = ClaudeCLITest()
+    exit_code = test.run_all_tests()
 """
 
 from __future__ import annotations
