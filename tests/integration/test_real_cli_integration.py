@@ -15,7 +15,7 @@ Usage:
     python tests/integration/test_real_cli_integration.py
 
 Requirements:
-    - pip install jleechanorg-orchestration
+    - uv tool install jleechanorg-orchestration
     - Claude/Cursor/Codex/Gemini CLIs installed (tests skip if not available)
 
 Note:
@@ -34,9 +34,8 @@ import pytest
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from tests.integration.test_harness_utils import (
+from tests.integration.test_harness_utils import (  # noqa: E402
     ORCHESTRATION_AVAILABLE,
-    BaseCLITest,
     ClaudeCLITest,
     CodexCLITest,
     CursorCLITest,
@@ -44,11 +43,10 @@ from tests.integration.test_harness_utils import (
     is_cli_available,
 )
 
-
 # Skip all tests if orchestration framework is not installed
 pytestmark = pytest.mark.skipif(
     not ORCHESTRATION_AVAILABLE,
-    reason="jleechanorg-orchestration not installed - run: pip install jleechanorg-orchestration",
+    reason="jleechanorg-orchestration not installed - run: uv tool install jleechanorg-orchestration",
 )
 
 
@@ -72,7 +70,7 @@ class MCPMailClaudeCLITest(ClaudeCLITest):
             self.record(
                 "orchestration",
                 False,
-                "Not installed - run: pip install jleechanorg-orchestration",
+                "Not installed - run: uv tool install jleechanorg-orchestration",
                 skip=True,
             )
             return self._finish()
@@ -87,7 +85,11 @@ class MCPMailClaudeCLITest(ClaudeCLITest):
                 skip=True,
             )
             return self._finish()
-        self.record("cli", True, "Installed and responding")
+            self.record("cli", True, "Installed and responding")
+
+        print("\n[TEST] MCP Agent Mail tools via CLI...")
+        if not self.validate_mcp_mail_access(timeout=120):
+            return self._finish()
 
         # Basic CLI invocation test
         print("\n[TEST] Basic CLI invocation...")
@@ -131,6 +133,10 @@ class MCPMailCursorCLITest(CursorCLITest):
             return self._finish()
         self.record("cli", True, "Installed and responding")
 
+        print("\n[TEST] MCP Agent Mail tools via CLI...")
+        if not self.validate_mcp_mail_access(timeout=120):
+            return self._finish()
+
         # Basic CLI invocation test
         print("\n[TEST] Basic CLI invocation...")
         success, output = self.run_cli("echo 'Cursor MCP Mail test'")
@@ -163,6 +169,10 @@ class MCPMailCodexCLITest(CodexCLITest):
             return self._finish()
         self.record("cli", True, "Installed and responding")
 
+        print("\n[TEST] MCP Agent Mail tools via CLI...")
+        if not self.validate_mcp_mail_access(timeout=120):
+            return self._finish()
+
         # Basic CLI invocation test
         print("\n[TEST] Basic CLI invocation...")
         success, output = self.run_cli("echo 'Codex MCP Mail test'")
@@ -194,6 +204,10 @@ class MCPMailGeminiCLITest(GeminiCLITest):
             )
             return self._finish()
         self.record("cli", True, "Installed and responding")
+
+        print("\n[TEST] MCP Agent Mail tools via CLI...")
+        if not self.validate_mcp_mail_access(timeout=120):
+            return self._finish()
 
         # Basic CLI invocation test
         print("\n[TEST] Basic CLI invocation...")
