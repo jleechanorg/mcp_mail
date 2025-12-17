@@ -67,38 +67,55 @@ print_success ".env file exists at $ENV_FILE"
 # =============================================================================
 # Step 2: Manual Slack App Setup Instructions
 # =============================================================================
-print_header "Step 2: Create Slack App (Manual Steps Required)"
+print_header "Step 2: Create Slack App (One-Click Setup)"
 
-echo -e "${YELLOW}You need to create a Slack App manually. Follow these steps:${NC}"
+echo -e "${GREEN}We can auto-generate a URL that creates the app with all settings pre-configured!${NC}"
+echo ""
+
+# Ask for server URL
+read -p "Enter your server's public URL (e.g., https://mcp.example.com): " SERVER_URL
+
+if [[ -n "$SERVER_URL" ]]; then
+    # Generate the manifest URL
+    MANIFEST_URL=$(python3 "$SCRIPT_DIR/generate_slack_app_url.py" --server-url "$SERVER_URL" 2>/dev/null | grep "^https://api.slack.com" || true)
+
+    if [[ -n "$MANIFEST_URL" ]]; then
+        echo ""
+        echo -e "${GREEN}═══════════════════════════════════════════════════════════════${NC}"
+        echo -e "${GREEN}  CLICK THIS URL TO CREATE YOUR SLACK APP:${NC}"
+        echo -e "${GREEN}═══════════════════════════════════════════════════════════════${NC}"
+        echo ""
+        echo "$MANIFEST_URL"
+        echo ""
+        echo -e "${GREEN}═══════════════════════════════════════════════════════════════${NC}"
+        echo ""
+        echo "This URL pre-configures:"
+        echo "  ✓ All required bot scopes"
+        echo "  ✓ Event subscriptions for message.channels"
+        echo "  ✓ Request URL pointing to $SERVER_URL/slack/events"
+        echo ""
+        echo "After clicking:"
+        echo "  1. Select your workspace → Click 'Create'"
+        echo "  2. Go to 'Install App' → 'Install to Workspace'"
+        echo "  3. Copy 'Bot User OAuth Token' (xoxb-...)"
+        echo "  4. Go to 'Basic Information' → Copy 'Signing Secret'"
+        echo ""
+    else
+        echo -e "${YELLOW}Could not generate manifest URL. Using manual setup...${NC}"
+    fi
+else
+    echo -e "${YELLOW}No server URL provided. Using manual setup...${NC}"
+fi
+
+echo ""
+echo -e "${YELLOW}Manual setup instructions (if needed):${NC}"
 echo ""
 echo "  1. Go to: https://api.slack.com/apps"
-echo ""
-echo "  2. Click 'Create New App' → 'From scratch'"
-echo "     - App Name: MCP Agent Mail"
-echo "     - Workspace: Select your workspace"
-echo ""
-echo "  3. Go to 'OAuth & Permissions' → 'Scopes' → 'Bot Token Scopes'"
-echo "     Add these scopes:"
-echo "     ${GREEN}• chat:write${NC}          - Post messages"
-echo "     ${GREEN}• chat:write.public${NC}   - Post to public channels"
-echo "     ${GREEN}• channels:history${NC}    - Read message history"
-echo "     ${GREEN}• channels:read${NC}       - List channels"
-echo "     ${GREEN}• groups:history${NC}      - Read private channel history (optional)"
-echo ""
-echo "  4. Go to 'Event Subscriptions'"
-echo "     - Enable Events: ON"
-echo "     - Request URL: ${BLUE}https://YOUR_SERVER/slack/events${NC}"
-echo "       (Server must be running and publicly accessible)"
-echo "     - Subscribe to bot events:"
-echo "       ${GREEN}• message.channels${NC}  - Messages in public channels"
-echo "       ${GREEN}• message.groups${NC}    - Messages in private channels (optional)"
-echo ""
-echo "  5. Install the app to your workspace:"
-echo "     Go to 'Install App' → 'Install to Workspace'"
-echo ""
-echo "  6. Copy these values:"
-echo "     - Bot Token (xoxb-...): OAuth & Permissions → Bot User OAuth Token"
-echo "     - Signing Secret: Basic Information → Signing Secret"
+echo "  2. Click 'Create New App' → 'From manifest'"
+echo "  3. Select workspace, paste manifest from: $PROJECT_ROOT/slack_app_manifest.json"
+echo "  4. Update the request_url to your server's /slack/events endpoint"
+echo "  5. Create and install the app"
+echo "  6. Copy Bot Token and Signing Secret"
 echo ""
 
 read -p "Press Enter when you've completed the Slack App setup..."
