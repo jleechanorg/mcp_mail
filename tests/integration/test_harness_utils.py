@@ -45,6 +45,7 @@ def _get_branch_name() -> str:
         if result.returncode == 0:
             return result.stdout.strip().replace("/", "-")
     except Exception:
+        # Fallback to "unknown-branch" if git command fails
         pass
     return "unknown-branch"
 
@@ -158,6 +159,7 @@ class BaseCLITest:
                 print(f"  {display_name} version: {result.stdout.strip()}")
                 return True
         except Exception:
+            # CLI not responding to --version, treat as unavailable
             pass
         return False
 
@@ -195,7 +197,6 @@ class BaseCLITest:
             f.write(prompt)
             prompt_file = f.name
 
-        stdin_file = None
         try:
             # Build command using CLI profile template
             command_template = self.cli_profile.get(
@@ -219,17 +220,27 @@ class BaseCLITest:
             # Handle stdin redirection from profile
             stdin_template = self.cli_profile.get("stdin_template", "/dev/null")
             if stdin_template != "/dev/null":
-                stdin_file = open(prompt_file)
-
-            result = subprocess.run(
-                cli_command,
-                shell=False,  # Security: avoid shell injection
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                stdin=stdin_file,
-                env={**os.environ, "NO_COLOR": "1"},
-            )
+                # Use context manager to ensure file is properly closed
+                with open(prompt_file) as stdin_file:
+                    result = subprocess.run(
+                        cli_command,
+                        shell=False,  # Security: avoid shell injection
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                        stdin=stdin_file,
+                        env={**os.environ, "NO_COLOR": "1"},
+                    )
+            else:
+                result = subprocess.run(
+                    cli_command,
+                    shell=False,  # Security: avoid shell injection
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    stdin=None,
+                    env={**os.environ, "NO_COLOR": "1"},
+                )
 
             return result.returncode == 0, result.stdout + result.stderr
 
@@ -240,9 +251,6 @@ class BaseCLITest:
         except Exception as e:
             return False, str(e)
         finally:
-            # Close stdin file handle to prevent resource leaks
-            if stdin_file:
-                stdin_file.close()
             # Clean up temp file
             try:
                 os.unlink(prompt_file)

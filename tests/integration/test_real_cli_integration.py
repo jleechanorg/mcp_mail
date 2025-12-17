@@ -36,7 +36,6 @@ sys.path.insert(0, str(project_root))
 
 from tests.integration.test_harness_utils import (
     ORCHESTRATION_AVAILABLE,
-    BaseCLITest,
     ClaudeCLITest,
     CodexCLITest,
     CursorCLITest,

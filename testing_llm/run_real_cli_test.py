@@ -206,20 +206,28 @@ def run_cli_agent(
         return True, "Dry run - command not executed", None
 
     try:
-        # Open output file for writing
-        with open(output_file, "w") as out_f:
-            # Start process (non-blocking)
-            process = subprocess.Popen(
-                command,
-                stdout=out_f,
-                stderr=subprocess.STDOUT,
-                env=env,
-                shell=False,  # Security: avoid shell injection
-            )
+        # Open output file for writing - keep it open so subprocess can write to it
+        # File will be closed when process completes (caller's responsibility)
+        out_f = open(output_file, "w")
+        
+        # Start process (non-blocking)
+        process = subprocess.Popen(
+            command,
+            stdout=out_f,
+            stderr=subprocess.STDOUT,
+            env=env,
+            shell=False,  # Security: avoid shell injection
+        )
 
         return True, f"Started with PID {process.pid}", process
 
     except Exception as e:
+        # Close file if we opened it but failed to start process
+        try:
+            if 'out_f' in locals():
+                out_f.close()
+        except Exception:
+            pass
         return False, f"Failed to start: {e}", None
 
 
@@ -398,7 +406,7 @@ def run_multi_agent_test(
             "name": agent_name,
             "started": success,
             "message": msg,
-            "pid": process.pid if process else None,
+            "pid": process.pid if process is not None else None,
         })
 
         if process:
