@@ -205,6 +205,7 @@ def run_cli_agent(
     if dry_run:
         return True, "Dry run - command not executed", None
 
+    out_f = None
     try:
         # Open output file for writing - keep it open so subprocess can write to it
         # Note: File handle intentionally not closed here - it must remain open for
@@ -225,12 +226,12 @@ def run_cli_agent(
 
     except Exception as e:
         # Close file if we opened it but failed to start process
-        try:
-            if 'out_f' in locals():
+        if out_f is not None:
+            try:
                 out_f.close()
-        except Exception:
-            # Ignore errors when closing file - primary exception is more important
-            pass
+            except Exception:
+                # Ignore errors when closing file - primary exception is more important
+                pass
         return False, f"Failed to start: {e}", None
 
 
