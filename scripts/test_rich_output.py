@@ -22,9 +22,7 @@ from rich import box
 from rich.panel import Panel
 from rich.syntax import Syntax
 
-from mcp_agent_mail.rich_logger import (ToolCallContext,
-                                        _create_params_display,
-                                        _create_result_display, console)
+from mcp_agent_mail.rich_logger import ToolCallContext, _create_params_display, _create_result_display, console
 
 
 def test_basic_panel():

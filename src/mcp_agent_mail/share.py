@@ -1817,10 +1817,8 @@ def verify_bundle(bundle_path: Path, *, public_key: Optional[str] = None) -> dic
         if not key_b64 or not signature_b64:
             raise ShareExportError("manifest.sig.json missing public_key or signature fields.")
         try:
-            from nacl.exceptions import \
-                BadSignatureError  # type: ignore[import-not-found]
-            from nacl.signing import \
-                VerifyKey  # type: ignore[import-not-found]
+            from nacl.exceptions import BadSignatureError  # type: ignore[import-not-found]
+            from nacl.signing import VerifyKey  # type: ignore[import-not-found]
         except ImportError as exc:  # pragma: no cover - optional dependency
             raise ShareExportError("PyNaCl is required to verify manifest signatures.") from exc
 

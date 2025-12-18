@@ -11,11 +11,8 @@ import pytest
 from mcp_agent_mail import build_mcp_server
 from mcp_agent_mail.config import get_settings
 from mcp_agent_mail.guard import render_prepush_script
-from mcp_agent_mail.share import (build_materialized_views,
-                                  create_performance_indexes,
-                                  finalize_snapshot_for_export)
-from mcp_agent_mail.storage import (ensure_archive,
-                                    write_file_reservation_record)
+from mcp_agent_mail.share import build_materialized_views, create_performance_indexes, finalize_snapshot_for_export
+from mcp_agent_mail.storage import ensure_archive, write_file_reservation_record
 
 
 def _init_git_repo(path: Path) -> None:
@@ -439,8 +436,7 @@ async def test_e2e_database_optimizations_query_performance(isolated_env, tmp_pa
     import sqlite3
     import time
 
-    from mcp_agent_mail.share import (build_materialized_views,
-                                      create_performance_indexes)
+    from mcp_agent_mail.share import build_materialized_views, create_performance_indexes
 
     # Create a snapshot with many messages
     snapshot = tmp_path / "perf_test.sqlite3"

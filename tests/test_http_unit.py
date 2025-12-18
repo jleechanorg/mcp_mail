@@ -3,8 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from mcp_agent_mail import config as _config
-from mcp_agent_mail.http import (SecurityAndRateLimitMiddleware,
-                                 _decode_jwt_header_segment)
+from mcp_agent_mail.http import SecurityAndRateLimitMiddleware, _decode_jwt_header_segment
 
 
 def test_decode_jwt_header_segment_variants():

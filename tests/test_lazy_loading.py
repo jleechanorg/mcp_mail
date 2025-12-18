@@ -5,8 +5,7 @@ from __future__ import annotations
 import pytest
 from fastmcp import Client
 
-from mcp_agent_mail.app import (_EXTENDED_TOOL_REGISTRY, CORE_TOOLS,
-                                EXTENDED_TOOLS, build_mcp_server)
+from mcp_agent_mail.app import _EXTENDED_TOOL_REGISTRY, CORE_TOOLS, EXTENDED_TOOLS, build_mcp_server
 
 
 @pytest.mark.asyncio

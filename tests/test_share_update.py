@@ -6,9 +6,12 @@ import json
 import sqlite3
 from pathlib import Path
 
-from mcp_agent_mail.share import (build_materialized_views, bundle_attachments,
-                                  create_performance_indexes,
-                                  finalize_snapshot_for_export)
+from mcp_agent_mail.share import (
+    build_materialized_views,
+    bundle_attachments,
+    create_performance_indexes,
+    finalize_snapshot_for_export,
+)
 
 
 def _create_snapshot_with_data(snapshot_path: Path, num_messages: int = 5) -> None:

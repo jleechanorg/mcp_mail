@@ -10,8 +10,7 @@ from fastmcp import Client
 from mcp_agent_mail import config as _config
 from mcp_agent_mail.app import build_mcp_server
 from mcp_agent_mail.db import ensure_schema
-from mcp_agent_mail.storage import (ProjectStorageResolutionError,
-                                    ensure_archive)
+from mcp_agent_mail.storage import ProjectStorageResolutionError, ensure_archive
 from mcp_agent_mail.utils import slugify
 
 

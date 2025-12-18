@@ -23,9 +23,7 @@ import pytest
 # Try importing the actual modules - skip tests if not available
 try:
     from mcp_agent_mail.config import SlackSettings
-    from mcp_agent_mail.slack_integration import (SlackClient,
-                                                  SlackThreadMapping,
-                                                  mirror_message_to_slack)
+    from mcp_agent_mail.slack_integration import SlackClient, SlackThreadMapping, mirror_message_to_slack
 
     SLACK_INTEGRATION_AVAILABLE = True
 except ImportError as e:

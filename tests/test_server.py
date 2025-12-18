@@ -14,9 +14,12 @@ from rich.syntax import Syntax
 from rich.text import Text
 from sqlalchemy import text
 
-from mcp_agent_mail.app import (build_mcp_server, get_project_sibling_data,
-                                refresh_project_sibling_suggestions,
-                                update_project_sibling_status)
+from mcp_agent_mail.app import (
+    build_mcp_server,
+    get_project_sibling_data,
+    refresh_project_sibling_suggestions,
+    update_project_sibling_status,
+)
 from mcp_agent_mail.config import clear_settings_cache, get_settings
 from mcp_agent_mail.db import get_session
 

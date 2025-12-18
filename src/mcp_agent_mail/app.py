@@ -25,8 +25,7 @@ from fastmcp import Context, FastMCP
 from fastmcp.tools.tool import ToolResult  # type: ignore
 from git import Repo
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
-from sqlalchemy import (Column, Integer, MetaData, Table, asc, bindparam,
-                        delete, desc, func, or_, select, text, update)
+from sqlalchemy import Column, Integer, MetaData, Table, asc, bindparam, delete, desc, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, NoResultFound, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -34,25 +33,40 @@ from sqlalchemy.orm import aliased
 from . import rich_logger
 from .config import Settings, get_settings
 from .db import ensure_schema, get_session, init_engine
-from .guard import install_guard as install_guard_script
-from .guard import uninstall_guard as uninstall_guard_script
+from .guard import install_guard as install_guard_script, uninstall_guard as uninstall_guard_script
 from .llm import complete_system_user
-from .models import (Agent, FileReservation, Message, MessageRecipient,
-                     Product, ProductProjectLink, Project,
-                     ProjectSiblingSuggestion)
-from .slack_integration import (SlackClient, notify_slack_ack,
-                                notify_slack_message)
-from .slots import acquire_build_slot as acquire_slot_impl
-from .slots import release_build_slot as release_slot_impl
-from .slots import renew_build_slot as renew_slot_impl
-from .storage import (ProjectArchive, ProjectStorageResolutionError,
-                      archive_write_lock, collect_lock_status, ensure_archive,
-                      heal_archive_locks, is_archive_enabled,
-                      process_attachments, runtime_write_lock,
-                      write_agent_deletion_marker, write_agent_profile,
-                      write_file_reservation_record,
-                      write_file_reservation_record_runtime,
-                      write_message_bundle)
+from .models import (
+    Agent,
+    FileReservation,
+    Message,
+    MessageRecipient,
+    Product,
+    ProductProjectLink,
+    Project,
+    ProjectSiblingSuggestion,
+)
+from .slack_integration import SlackClient, notify_slack_ack, notify_slack_message
+from .slots import (
+    acquire_build_slot as acquire_slot_impl,
+    release_build_slot as release_slot_impl,
+    renew_build_slot as renew_slot_impl,
+)
+from .storage import (
+    ProjectArchive,
+    ProjectStorageResolutionError,
+    archive_write_lock,
+    collect_lock_status,
+    ensure_archive,
+    heal_archive_locks,
+    is_archive_enabled,
+    process_attachments,
+    runtime_write_lock,
+    write_agent_deletion_marker,
+    write_agent_profile,
+    write_file_reservation_record,
+    write_file_reservation_record_runtime,
+    write_message_bundle,
+)
 from .utils import generate_agent_name, sanitize_agent_name, slugify
 
 logger = logging.getLogger(__name__)
@@ -3401,8 +3415,7 @@ def build_mcp_server() -> FastMCP:
                 task.add_done_callback(_slack_done_cb)
             elif settings.slack.webhook_url:
                 # Fallback to webhook URL if no client available
-                from .slack_integration import (format_mcp_message_for_slack,
-                                                post_via_webhook)
+                from .slack_integration import format_mcp_message_for_slack, post_via_webhook
 
                 async def _post_webhook():
                     text, blocks = format_mcp_message_for_slack(
@@ -8372,8 +8385,7 @@ def build_mcp_server() -> FastMCP:
         # Filter unread (no read_ts recorded)
         unread: list[dict[str, Any]] = []
         async with get_session() as session:
-            from .models import \
-                MessageRecipient  # local import to avoid cycle at top
+            from .models import MessageRecipient  # local import to avoid cycle at top
 
             for item in items:
                 result = await session.execute(

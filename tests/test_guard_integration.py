@@ -8,8 +8,7 @@ import pytest
 
 from mcp_agent_mail.config import get_settings
 from mcp_agent_mail.guard import render_precommit_script
-from mcp_agent_mail.storage import (ensure_archive,
-                                    write_file_reservation_record)
+from mcp_agent_mail.storage import ensure_archive, write_file_reservation_record
 
 
 def _init_git_repo(repo_path: Path) -> None:

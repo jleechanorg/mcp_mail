@@ -15,8 +15,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Final, Literal, cast
 
-from decouple import Config as DecoupleConfig
-from decouple import RepositoryEnv
+from decouple import Config as DecoupleConfig, RepositoryEnv
 
 # User-level credentials file (preferred for PyPI installs)
 _USER_CREDENTIALS_PATH: Final[Path] = Path.home() / ".mcp_mail" / "credentials.json"

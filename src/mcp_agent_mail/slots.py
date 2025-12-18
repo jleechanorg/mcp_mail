@@ -9,9 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from mcp_agent_mail.config import Settings, get_settings
-from mcp_agent_mail.storage import (AsyncFileLock, ensure_archive,
-                                    ensure_runtime_project_root,
-                                    is_archive_enabled)
+from mcp_agent_mail.storage import AsyncFileLock, ensure_archive, ensure_runtime_project_root, is_archive_enabled
 from mcp_agent_mail.utils import safe_filesystem_component, slugify
 
 

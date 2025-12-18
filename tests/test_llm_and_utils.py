@@ -5,10 +5,8 @@ import contextlib
 import pytest
 
 from mcp_agent_mail import config as _config
-from mcp_agent_mail.llm import (_bridge_provider_env, _existing_callbacks,
-                                complete_system_user)
-from mcp_agent_mail.utils import (generate_agent_name, sanitize_agent_name,
-                                  slugify)
+from mcp_agent_mail.llm import _bridge_provider_env, _existing_callbacks, complete_system_user
+from mcp_agent_mail.utils import generate_agent_name, sanitize_agent_name, slugify
 
 
 def test_llm_callbacks_and_env_bridge():

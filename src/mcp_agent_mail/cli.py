@@ -33,20 +33,27 @@ from sqlalchemy.engine import make_url
 from .app import build_mcp_server
 from .config import get_settings
 from .db import ensure_schema, get_session
-from .guard import install_guard as install_guard_script
-from .guard import uninstall_guard as uninstall_guard_script
+from .guard import install_guard as install_guard_script, uninstall_guard as uninstall_guard_script
 from .http import build_http_app
-from .models import (Agent, FileReservation, Message, MessageRecipient,
-                     Product, ProductProjectLink, Project)
-from .share import (DEFAULT_CHUNK_SIZE, DEFAULT_CHUNK_THRESHOLD,
-                    DETACH_ATTACHMENT_THRESHOLD, INLINE_ATTACHMENT_THRESHOLD,
-                    SCRUB_PRESETS, ShareExportError, build_bundle_assets,
-                    create_snapshot_context, detect_hosting_hints,
-                    encrypt_bundle, package_directory_as_zip,
-                    prepare_output_directory, resolve_sqlite_database_path,
-                    sign_manifest, summarize_snapshot)
-from .storage import (ensure_archive, ensure_runtime_project_root,
-                      is_archive_enabled)
+from .models import Agent, FileReservation, Message, MessageRecipient, Product, ProductProjectLink, Project
+from .share import (
+    DEFAULT_CHUNK_SIZE,
+    DEFAULT_CHUNK_THRESHOLD,
+    DETACH_ATTACHMENT_THRESHOLD,
+    INLINE_ATTACHMENT_THRESHOLD,
+    SCRUB_PRESETS,
+    ShareExportError,
+    build_bundle_assets,
+    create_snapshot_context,
+    detect_hosting_hints,
+    encrypt_bundle,
+    package_directory_as_zip,
+    prepare_output_directory,
+    resolve_sqlite_database_path,
+    sign_manifest,
+    summarize_snapshot,
+)
+from .storage import ensure_archive, ensure_runtime_project_root, is_archive_enabled
 from .utils import safe_filesystem_component, slugify
 
 # Suppress annoying bleach CSS sanitizer warning from dependencies
@@ -424,8 +431,7 @@ def products_inbox(
                     )
                     if not agent_row:
                         continue
-                    from sqlalchemy.orm import \
-                        aliased as _aliased  # local to avoid top-level churn
+                    from sqlalchemy.orm import aliased as _aliased  # local to avoid top-level churn
 
                     sender_alias = _aliased(Agent)
                     stmt = (
@@ -2416,8 +2422,10 @@ def projects_adopt(
         # Move Git artifacts
         settings = get_settings()
         # local import to minimize top-level churn and keep ordering stable
-        from .storage import AsyncFileLock as _AsyncFileLock  # type: ignore
-        from .storage import ensure_archive as _ensure_archive
+        from .storage import (
+            AsyncFileLock as _AsyncFileLock,  # type: ignore
+            ensure_archive as _ensure_archive,
+        )
 
         src_archive = asyncio.run(_ensure_archive(settings, src.slug, project_key=src.human_key))
         dst_archive = asyncio.run(_ensure_archive(settings, dst.slug, project_key=dst.human_key))
@@ -2440,8 +2448,7 @@ def projects_adopt(
             await _archive_commit(dst_archive.repo, settings, f"adopt: move {src.slug} into {dst.slug}", moved_relpaths)
         # Re-key database rows (agents, messages, file_reservations)
         async with get_session() as session:
-            from sqlalchemy import \
-                update as _update  # local import to avoid top-of-file churn
+            from sqlalchemy import update as _update  # local import to avoid top-of-file churn
 
             await session.execute(_update(Agent).where(Agent.project_id == src.id).values(project_id=dst.id))
             await session.execute(_update(Message).where(Message.project_id == src.id).values(project_id=dst.id))

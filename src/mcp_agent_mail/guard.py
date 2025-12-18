@@ -8,8 +8,7 @@ import subprocess
 from pathlib import Path
 
 from .config import Settings
-from .storage import (ensure_archive, ensure_runtime_project_root,
-                      is_archive_enabled)
+from .storage import ensure_archive, ensure_runtime_project_root, is_archive_enabled
 
 __all__ = [
     "install_guard",

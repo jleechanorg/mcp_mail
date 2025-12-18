@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from mcp_agent_mail.slack_integration import (format_mcp_message_for_slack,
-                                              mirror_message_to_slack)
+from mcp_agent_mail.slack_integration import format_mcp_message_for_slack, mirror_message_to_slack
 
 
 def test_mirror_message_to_slack_posts_when_enabled(monkeypatch):
