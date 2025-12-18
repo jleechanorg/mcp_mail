@@ -32,6 +32,7 @@ from .app import (
     _create_message,
     _ensure_project,
     _expire_stale_file_reservations,
+    _get_agent_by_name_optional,
     _message_frontmatter,
     _retire_conflicting_agents,
     _tool_metrics_snapshot,
@@ -63,8 +64,12 @@ from .storage import (
 )
 
 # Slack webhook dedupe cache (in-memory best-effort)
+# NOTE: We use a plain deque (no maxlen) and manage eviction manually to keep
+# the set and deque in sync. Using deque(maxlen=N) causes auto-eviction that
+# would desynchronize the set, leading to unbounded memory growth.
 _slack_event_cache: set[tuple[str, str]] = set()
-_slack_event_cache_order: deque[tuple[str, str]] = deque(maxlen=5000)
+_slack_event_cache_order: deque[tuple[str, str]] = deque()
+_SLACK_EVENT_CACHE_MAX_SIZE = 5000
 _slack_event_cache_lock = asyncio.Lock()
 
 
@@ -1017,8 +1022,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     )
                     return JSONResponse({"ok": True, "message": "Duplicate Slack event skipped"})
 
-                maxlen = _slack_event_cache_order.maxlen
-                if maxlen is not None and len(_slack_event_cache_order) >= maxlen:
+                # Evict oldest entries if at capacity (before adding new one)
+                while len(_slack_event_cache_order) >= _SLACK_EVENT_CACHE_MAX_SIZE:
                     old = _slack_event_cache_order.popleft()
                     _slack_event_cache.discard(old)
 
@@ -1074,16 +1079,34 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 project = await _ensure_project(settings.slack.sync_project_name)
 
             sender_name = message_info["sender_name"]
-            # Look up existing agent within the resolved project (not globally)
-            # This ensures Slack replies use an agent scoped to the correct project
-            async with get_session() as session:
-                result = await session.execute(
-                    select(Agent).where(
-                        cast(Any, Agent.project_id) == project.id,
-                        cast(Any, Agent.name) == sender_name,
+            # Agent names are globally unique. First check if an agent with this
+            # name already exists anywhere (could be in a different project).
+            existing_global_agent = await _get_agent_by_name_optional(sender_name)
+
+            sender_agent: Agent | None = None
+            if existing_global_agent:
+                if existing_global_agent.project_id == project.id:
+                    # Agent already exists in the target project - reuse it
+                    sender_agent = existing_global_agent
+                    logger.debug(
+                        "slack_bridge_agent_reused",
+                        agent_name=sender_name,
+                        project_id=project.id,
                     )
-                )
-                sender_agent = result.scalars().first()
+                else:
+                    # Agent exists in a different project. For Slack bridge agents,
+                    # retire the old one and create in the target project so each
+                    # Slack sync project can have its own bridge identity.
+                    logger.info(
+                        "slack_bridge_agent_project_migration",
+                        agent_name=sender_name,
+                        old_project_id=existing_global_agent.project_id,
+                        new_project_id=project.id,
+                    )
+                    await _retire_conflicting_agents(
+                        sender_name, project_to_keep=project, settings=settings
+                    )
+                    # sender_agent remains None so we create a new one below
 
             if not sender_agent:
                 if source in {"slack", "slack_events"}:
@@ -1182,6 +1205,11 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
             async def _persist_archive() -> None:
                 if not is_archive_enabled(settings):
+                    logger.debug(
+                        "slack_archive_write_skipped",
+                        reason="archive_disabled",
+                        source=source,
+                    )
                     return
                 try:
                     archive = await ensure_archive(settings, project.slug)
