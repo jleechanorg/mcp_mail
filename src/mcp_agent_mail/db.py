@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -16,6 +17,8 @@ from sqlmodel import SQLModel
 from .config import DatabaseSettings, Settings, get_settings
 
 T = TypeVar("T")
+
+logger = logging.getLogger(__name__)
 
 _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
@@ -436,6 +439,31 @@ def _migrate_project_id_nullable(connection) -> None:
 
 def _recreate_agents_table_nullable_project_id(connection) -> None:
     """Recreate agents table with nullable project_id."""
+    # Clean up orphaned project references so FK enforcement does not break migration
+    orphaned_projects_result = connection.exec_driver_sql(
+        """
+        SELECT COUNT(*)
+        FROM agents a
+        LEFT JOIN projects p ON p.id = a.project_id
+        WHERE a.project_id IS NOT NULL
+          AND p.id IS NULL
+        """
+    )
+    orphaned_projects = orphaned_projects_result.scalar_one()
+    if orphaned_projects:
+        logger.warning(
+            "Found %s agent(s) with orphaned project_id; setting project_id to NULL before migration",
+            orphaned_projects,
+        )
+        connection.exec_driver_sql(
+            """
+            UPDATE agents
+            SET project_id = NULL
+            WHERE project_id IS NOT NULL
+              AND project_id NOT IN (SELECT id FROM projects)
+            """
+        )
+
     invalid_count_result = connection.exec_driver_sql(
         """
         SELECT COUNT(*)
@@ -500,6 +528,48 @@ def _recreate_agents_table_nullable_project_id(connection) -> None:
 
 def _recreate_messages_table_nullable_project_id(connection) -> None:
     """Recreate messages table with nullable project_id."""
+    # Clean up orphaned project references so FK enforcement does not break migration
+    orphaned_projects_result = connection.exec_driver_sql(
+        """
+        SELECT COUNT(*)
+        FROM messages m
+        LEFT JOIN projects p ON p.id = m.project_id
+        WHERE m.project_id IS NOT NULL
+          AND p.id IS NULL
+        """
+    )
+    orphaned_projects = orphaned_projects_result.scalar_one()
+    if orphaned_projects:
+        logger.warning(
+            "Found %s message(s) with orphaned project_id; setting project_id to NULL before migration",
+            orphaned_projects,
+        )
+        connection.exec_driver_sql(
+            """
+            UPDATE messages
+            SET project_id = NULL
+            WHERE project_id IS NOT NULL
+              AND project_id NOT IN (SELECT id FROM projects)
+            """
+        )
+
+    # Validate sender references remain resolvable once FK enforcement is applied
+    orphaned_senders_result = connection.exec_driver_sql(
+        """
+        SELECT COUNT(*)
+        FROM messages m
+        LEFT JOIN agents a ON a.id = m.sender_id
+        WHERE a.id IS NULL
+        """
+    )
+    orphaned_senders = orphaned_senders_result.scalar_one()
+    if orphaned_senders:
+        raise RuntimeError(
+            "Cannot migrate messages table: sender_id references missing agents "
+            f"({orphaned_senders} orphaned row(s)). Please recreate the referenced agents "
+            "or remove the invalid rows before retrying."
+        )
+
     invalid_count_result = connection.exec_driver_sql(
         """
         SELECT COUNT(*)
