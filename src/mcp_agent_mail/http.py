@@ -999,6 +999,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         """Shared ingestion path for Slack-derived payloads."""
         from .models import Agent
 
+        global _slack_event_cache
+
         slack_ts = message_info.get("slack_ts")
         slack_channel = message_info.get("slack_channel")
         cache_key = dedupe_key or ((slack_channel, slack_ts) if slack_ts and slack_channel else None)
@@ -1015,13 +1017,13 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     )
                     return JSONResponse({"ok": True, "message": "Duplicate Slack event skipped"})
 
-                maxlen = _slack_event_cache_order.maxlen
-                if maxlen is not None and len(_slack_event_cache_order) >= maxlen:
-                    old = _slack_event_cache_order.popleft()
-                    _slack_event_cache.discard(old)
+                # Handle eviction before append if deque is at capacity
+                if len(_slack_event_cache_order) >= _slack_event_cache_order.maxlen:
+                    evicted = _slack_event_cache_order[0]
+                    _slack_event_cache.discard(evicted)
 
-                _slack_event_cache.add(cache_key)
                 _slack_event_cache_order.append(cache_key)
+                _slack_event_cache.add(cache_key)
                 cache_key_added = True
 
         try:
