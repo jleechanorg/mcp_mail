@@ -445,9 +445,7 @@ def _recreate_agents_table_nullable_project_id(connection) -> None:
     )
     invalid_count = invalid_count_result.scalar_one()
     if invalid_count > 0:
-        raise RuntimeError(
-            "Cannot migrate agents table: rows contain NULL in required columns (name/program/model)."
-        )
+        raise RuntimeError("Cannot migrate agents table: rows contain NULL in required columns (name/program/model).")
     # Create new table with nullable project_id
     connection.exec_driver_sql(
         """

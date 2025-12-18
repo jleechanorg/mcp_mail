@@ -1040,13 +1040,14 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                             async with get_session() as session:
                                 result = await session.execute(
                                     text("SELECT project_id FROM messages WHERE thread_id = :tid LIMIT 1"),
-                                    {"tid": thread_id}
+                                    {"tid": thread_id},
                                 )
                                 row = result.fetchone()
                                 if row is not None:
                                     thread_context_checked = True
                                 if row and row[0] is not None:
                                     from .models import Project
+
                                     project = await session.get(Project, row[0])
 
                         # If no project from thread context, use default or sync project for backwards compat
@@ -1100,7 +1101,9 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                             recipient_agents = list(result.scalars().all())
 
                         if not recipient_agents:
-                            logger.warning("slack_no_recipients", project=(project.slug if project else DEFAULT_PROJECT_KEY))
+                            logger.warning(
+                                "slack_no_recipients", project=(project.slug if project else DEFAULT_PROJECT_KEY)
+                            )
                             return JSONResponse({"ok": True, "message": "No active recipients"})
 
                         # Create message

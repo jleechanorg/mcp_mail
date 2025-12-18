@@ -6,10 +6,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from mcp_agent_mail.share import (
-    build_materialized_views,
-    create_performance_indexes,
-)
+from mcp_agent_mail.share import build_materialized_views, create_performance_indexes
 
 
 def _create_test_snapshot(snapshot_path: Path) -> None:
