@@ -941,7 +941,12 @@ def _canonical_project_pair(a_id: int, b_id: int) -> tuple[int, int]:
 
 
 @asynccontextmanager
-async def _archive_write_lock(archive: ProjectArchive, *, timeout_seconds: float = 120.0):
+async def _archive_write_lock(archive: ProjectArchive | None, *, timeout_seconds: float = 120.0):
+    """Acquire archive write lock, or no-op if archive is None (disabled mode)."""
+    if archive is None:
+        # Archive disabled - no lock needed, just yield
+        yield
+        return
     try:
         async with archive_write_lock(archive, timeout_seconds=timeout_seconds):
             yield
@@ -3145,8 +3150,11 @@ def build_mcp_server() -> FastMCP:
         recipient_records.extend((agent, "bcc") for agent in bcc_agents)
         recipient_lookup_elapsed = time.perf_counter() - recipient_lookup_start
 
+        # Archive is optional - only initialize if enabled
         archive_start = time.perf_counter()
-        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+        archive: ProjectArchive | None = None
+        if is_archive_enabled(settings):
+            archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
         archive_elapsed = time.perf_counter() - archive_start
         convert_markdown = (
             convert_images_override if convert_images_override is not None else settings.storage.convert_images
@@ -3209,13 +3217,20 @@ def build_mcp_server() -> FastMCP:
                     }
 
             attachments_start = time.perf_counter()
-            processed_body, attachments_meta, attachment_files = await process_attachments(
-                archive,
-                body_md,
-                attachment_paths or [],
-                convert_markdown,
-                embed_policy=embed_policy,
-            )
+            # Process attachments only if archive is enabled
+            if archive:
+                processed_body, attachments_meta, attachment_files = await process_attachments(
+                    archive,
+                    body_md,
+                    attachment_paths or [],
+                    convert_markdown,
+                    embed_policy=embed_policy,
+                )
+            else:
+                # Archive disabled - skip attachment processing, use raw body
+                processed_body = body_md
+                attachments_meta = []
+                attachment_files = []
             attachments_elapsed = time.perf_counter() - attachments_start
             # Fallback: if body contains inline data URI, reflect that in attachments meta for API parity
             if not attachments_meta and ("data:image" in body_md):
@@ -3273,15 +3288,17 @@ def build_mcp_server() -> FastMCP:
                 frontmatter.get("created"),
             )
             git_write_start = time.perf_counter()
-            await write_message_bundle(
-                archive,
-                frontmatter,
-                processed_body,
-                sender.name,
-                recipients_for_archive,
-                attachment_files,
-                commit_panel_text,
-            )
+            # Write to Git archive only if enabled
+            if archive:
+                await write_message_bundle(
+                    archive,
+                    frontmatter,
+                    processed_body,
+                    sender.name,
+                    recipients_for_archive,
+                    attachment_files,
+                    commit_panel_text,
+                )
             git_write_elapsed = time.perf_counter() - git_write_start
 
             # Optional Slack mirror via incoming webhook (env-driven)
