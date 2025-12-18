@@ -86,6 +86,32 @@ async def _project_identifiers_from_id(pid: int | None) -> tuple[str | None, str
         return (res[0], res[1])
 
 
+async def _project_from_thread_id(thread_id: str | None) -> tuple[int, str, str] | None:
+    """Look up the project of the first message in a thread.
+
+    Returns (project_id, slug, human_key) if a message with thread_id exists,
+    otherwise None. Used to route Slack replies to the original message's project.
+    """
+    if not thread_id:
+        return None
+    async with get_session() as session:
+        row = await session.execute(
+            text("""
+                SELECT p.id, p.slug, p.human_key
+                FROM messages m
+                JOIN projects p ON m.project_id = p.id
+                WHERE m.thread_id = :thread_id
+                ORDER BY m.id ASC
+                LIMIT 1
+            """),
+            {"thread_id": thread_id},
+        )
+        res = row.fetchone()
+        if res:
+            return (res[0], res[1], res[2])
+        return None
+
+
 __all__ = ["build_http_app", "main"]
 
 
