@@ -49,17 +49,17 @@ except ImportError:
 MCP_CLI_CONFIG = {
     "claude": {
         "mcp_config_env": "MCP_CONFIG",
-        "mcp_config_file": ".mcp.json",
+        "mcp_config_file": ".mcp.json",  # relative to the working directory where the CLI runs
         "extra_args": ["--dangerously-skip-permissions"],
     },
     "codex": {
         "mcp_config_env": "MCP_CONFIG",
-        "mcp_config_file": ".codex/config.toml",
+        "mcp_config_file": ".codex/config.toml",  # relative to current working directory
         "extra_args": ["--yolo"],
     },
     "gemini": {
         "mcp_config_env": "GEMINI_CONFIG",
-        "mcp_config_file": "./gemini.mcp.json",
+        "mcp_config_file": "./gemini.mcp.json",  # relative to current working directory
         "extra_args": ["--approval-mode", "yolo", "--allowed-mcp-server-names", "mcp-agent-mail"],
     },
 }
@@ -137,15 +137,18 @@ def build_cli_command(
         raise FileNotFoundError(f"CLI binary not found: {binary}")
 
     # Write prompt to file
-    prompt_file.write_text(prompt)
+    try:
+        prompt_file.write_text(prompt)
+    except OSError as exc:
+        raise OSError(f"Failed to write prompt file: {exc}") from exc
 
     # Build command using template from profile
     command_template = profile.get("command_template", "{binary} -p {prompt_file}")
 
     # Format the command template
     command_str = command_template.format(
-        binary=binary_path,
-        prompt_file=str(prompt_file),
+        binary=shlex.quote(binary_path),
+        prompt_file=shlex.quote(str(prompt_file)),
         continue_flag="",
     )
 
@@ -192,7 +195,7 @@ def run_cli_agent(
 
     try:
         command = build_cli_command(cli_name, prompt, prompt_file)
-    except (ValueError, FileNotFoundError) as e:
+    except (ValueError, FileNotFoundError, OSError) as e:
         return False, str(e), None, None
 
     # Set up environment with MCP config
@@ -385,7 +388,7 @@ def run_multi_agent_test(
 
     # Start agents
     print("\n[RUN] Starting agents...")
-    processes = []
+    processes: list[tuple[dict[str, Any], subprocess.Popen[str], Optional[contextlib.ExitStack]]] = []
 
     for i, (agent_name, prompt) in enumerate(prompts.items()):
         print(f"\n  Starting {agent_name}...")
@@ -406,17 +409,19 @@ def run_multi_agent_test(
         )
 
         agent_pid = process.pid if process else None
-        agents.append(
-            {
-                "name": agent_name,
-                "started": success,
-                "message": msg,
-                "pid": agent_pid,
-            }
-        )
+        agent_record: dict[str, Any] = {
+            "name": agent_name,
+            "started": success,
+            "message": msg,
+            "pid": agent_pid,
+            "exit_code": None,
+            "timed_out": False,
+            "completed": False,
+        }
+        agents.append(agent_record)
 
         if process:
-            processes.append((agent_name, process, output_stack))
+            processes.append((agent_record, process, output_stack))
         elif output_stack:
             output_stack.close()
 
@@ -428,13 +433,25 @@ def run_multi_agent_test(
     # Wait for completion
     if not dry_run and processes:
         print("\n[WAIT] Waiting for agents to complete...")
-        for agent_name, process, output_stack in processes:
+        for agent_record, process, output_stack in processes:
             try:
                 process.wait(timeout=timeout)
-                print(f"  DONE: {agent_name} (exit code: {process.returncode})")
+                agent_record["exit_code"] = process.returncode
+                agent_record["completed"] = True
+                status_label = "DONE" if process.returncode == 0 else "FAIL"
+                if process.returncode != 0:
+                    agent_record["message"] = f"Exited with code {process.returncode}"
+                print(f"  {status_label}: {agent_record['name']} (exit code: {process.returncode})")
             except subprocess.TimeoutExpired:
-                print(f"  TIMEOUT: {agent_name} - killing process")
+                agent_record["timed_out"] = True
+                agent_record["message"] = f"Timed out after {timeout}s"
+                print(f"  TIMEOUT: {agent_record['name']} - killing process")
                 process.kill()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.wait()
+                agent_record["exit_code"] = process.returncode
             finally:
                 if output_stack:
                     output_stack.close()
@@ -455,7 +472,14 @@ Run ID: {run_id}
 Agents:
 """
     for agent in agents:
-        status = "PASS" if agent["started"] else "FAIL"
+        status = "PASS"
+        if not agent["started"]:
+            status = "FAIL"
+        elif agent.get("timed_out"):
+            status = "TIMEOUT"
+        elif agent.get("exit_code") not in (None, 0):
+            status = f"FAIL (exit {agent['exit_code']})"
+
         summary_text += f"  - {agent['name']}: {status} ({agent['message']})\n"
 
     summary_text += f"""
@@ -475,7 +499,13 @@ Evidence Files:
 
     # Determine overall status
     all_started = all(a["started"] for a in agents)
-    results["status"] = "success" if all_started else "failed"
+    no_timeouts = all(not a.get("timed_out") for a in agents if a["started"])
+    exit_codes_ok = all(
+        a.get("exit_code") in (None, 0) for a in agents if a["started"] and not a.get("timed_out")
+    )
+
+    all_success = all_started and no_timeouts and exit_codes_ok
+    results["status"] = "success" if all_success else "failed"
 
     print("\n" + "=" * 70)
     print(f"Test {'PASSED' if results['status'] == 'success' else 'FAILED'}")

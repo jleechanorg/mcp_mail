@@ -308,6 +308,7 @@ class BaseCLITest:
             Tuple of (success: bool, output: str)
         """
         import subprocess
+        from contextlib import suppress
 
         if not self.cli_profile:
             raise ValueError(f"CLI_NAME '{self.CLI_NAME}' not found in CLI_PROFILES")
@@ -317,17 +318,21 @@ class BaseCLITest:
         if not cli_path:
             return False, f"{cli_binary} not found"
 
-        # Write prompt to temp file (orchestration framework uses file-based prompts)
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-            f.write(prompt)
-            prompt_file = f.name
+        prompt_file: Optional[Path] = None
+        try:
+            # Write prompt to temp file (orchestration framework uses file-based prompts)
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+                f.write(prompt)
+                prompt_file = Path(f.name)
+        except OSError as exc:
+            return False, f"Failed to write prompt file: {exc}"
 
         try:
             # Build command using CLI profile template
             command_template = self.cli_profile.get("command_template", "{binary} -p {prompt_file}")
             cli_command_str = command_template.format(
-                binary=cli_path,
-                prompt_file=prompt_file,
+                binary=shlex.quote(cli_path),
+                prompt_file=shlex.quote(str(prompt_file)),
                 continue_flag="",
             )
 
@@ -343,8 +348,9 @@ class BaseCLITest:
             # Handle stdin redirection from profile
             stdin_template = self.cli_profile.get("stdin_template", "/dev/null")
             with contextlib.ExitStack() as stack:
-                stdin_file = None
-                if stdin_template != "/dev/null":
+                if stdin_template == "/dev/null":
+                    stdin_file = subprocess.DEVNULL
+                else:
                     stdin_file = stack.enter_context(Path(prompt_file).open())
 
                 result = subprocess.run(
@@ -367,8 +373,9 @@ class BaseCLITest:
             return False, str(e)
         finally:
             # Clean up temp file
-            with contextlib.suppress(OSError):
-                Path(prompt_file).unlink()
+            with suppress(OSError):
+                if prompt_file:
+                    prompt_file.unlink()
 
     def print_summary(self) -> None:
         """Print test results summary."""
