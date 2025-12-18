@@ -3592,7 +3592,7 @@ def build_mcp_server() -> FastMCP:
         """
         await ctx.info(f"Ensuring project for key '{human_key}'.")
         project = await _ensure_project(human_key)
-        await _ensure_archive_if_enabled(settings, project)
+        _ = await _ensure_archive_if_enabled(settings, project)
         return _project_to_dict(project)
 
     @mcp.tool(name="register_agent")
@@ -3702,7 +3702,7 @@ def build_mcp_server() -> FastMCP:
         """
         # Auto-create project if it doesn't exist (allows any string as project_key)
         project = await _ensure_project(project_key)
-        await _ensure_archive_if_enabled(settings, project)
+        _ = await _ensure_archive_if_enabled(settings, project)
 
         if settings.tools_log_enabled:
             try:
