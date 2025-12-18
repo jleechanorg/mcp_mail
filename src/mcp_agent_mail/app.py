@@ -955,6 +955,19 @@ async def _archive_write_lock(archive: ProjectArchive, *, timeout_seconds: float
         ) from exc
 
 
+async def _ensure_archive_if_enabled(settings: Settings, project: Project) -> ProjectArchive | None:
+    """Return a project archive when enabled, otherwise skip Git interactions.
+
+    This helper centralizes the "archive optional" behavior so callers can
+    perform SQLite-only workflows when archive storage is disabled without
+    tripping the underlying :func:`ensure_archive` guard.
+    """
+
+    if not is_archive_enabled(settings):
+        return None
+    return await ensure_archive(settings, project.slug, project_key=project.human_key)
+
+
 async def _read_file_preview(path: Path, *, max_chars: int) -> str:
     def _read() -> str:
         try:
@@ -1494,8 +1507,8 @@ async def _get_or_create_agent(
                             await session.commit()
                             await session.refresh(agent)
                             # Write updated profile to archive (only if archive is enabled)
-                            if is_archive_enabled(settings):
-                                archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+                            archive = await _ensure_archive_if_enabled(settings, project)
+                            if archive:
                                 async with _archive_write_lock(archive):
                                     await write_agent_profile(archive, _agent_to_dict(agent))
                             return agent
@@ -1622,8 +1635,8 @@ async def _get_or_create_agent(
                     },
                 ) from exc
     # Write agent profile to archive (only if archive is enabled)
-    if is_archive_enabled(settings):
-        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+    archive = await _ensure_archive_if_enabled(settings, project)
+    if archive:
         async with _archive_write_lock(archive):
             await write_agent_profile(archive, _agent_to_dict(agent))
     return agent
@@ -1701,10 +1714,11 @@ async def _create_placeholder_agent(
                 return existing
             raise ValueError(f"Failed to create placeholder agent: {sanitized}") from exc
 
-    # Write placeholder profile to archive
-    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-    async with _archive_write_lock(archive):
-        await write_agent_profile(archive, _agent_to_dict(agent))
+    # Write placeholder profile to archive when enabled
+    archive = await _ensure_archive_if_enabled(settings, project)
+    if archive:
+        async with _archive_write_lock(archive):
+            await write_agent_profile(archive, _agent_to_dict(agent))
     return agent
 
 
@@ -1771,10 +1785,11 @@ async def _delete_agent(project: Project, name: str, settings: Settings) -> dict
         # 5) Finally, delete the agent itself
         await session.execute(delete(Agent).where(Agent.id == agent_id))
 
-    # Write deletion marker to Git archive
-    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-    async with _archive_write_lock(archive):
-        await write_agent_deletion_marker(archive, agent_name, stats)
+    # Write deletion marker to Git archive when enabled
+    archive = await _ensure_archive_if_enabled(settings, project)
+    if archive:
+        async with _archive_write_lock(archive):
+            await write_agent_deletion_marker(archive, agent_name, stats)
 
     return stats
 
@@ -1824,9 +1839,10 @@ async def _retire_agent(agent: Agent, project: Project, settings: Settings) -> A
         await session.refresh(db_agent)
         agent = db_agent
 
-    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-    async with _archive_write_lock(archive):
-        await write_agent_profile(archive, _agent_to_dict(agent))
+    archive = await _ensure_archive_if_enabled(settings, project)
+    if archive:
+        async with _archive_write_lock(archive):
+            await write_agent_profile(archive, _agent_to_dict(agent))
     return agent
 
 
@@ -3513,8 +3529,9 @@ def build_mcp_server() -> FastMCP:
         - Accepts any string as the project identifier (human_key).
         - Computes a stable slug from `human_key` (lowercased, safe characters) so
           multiple agents can refer to the same project consistently.
-        - Ensures DB row exists and that the on-disk archive is initialized
-          (e.g., `messages/`, `agents/`, `file_reservations/` directories).
+        - Ensures DB row exists. Archive initialization happens only when
+          archive storage is enabled (e.g., to create `messages/`, `agents/`,
+          `file_reservations/` directories).
 
         CRITICAL: Project Identity Rules
         ---------------------------------
@@ -3570,13 +3587,12 @@ def build_mcp_server() -> FastMCP:
         Idempotency
         -----------
         - Safe to call multiple times. If the project already exists, the existing
-          record is returned and the archive is ensured on disk (no destructive changes).
+          record is returned and, when archive storage is enabled, the archive is
+          ensured on disk (no destructive changes).
         """
         await ctx.info(f"Ensuring project for key '{human_key}'.")
         project = await _ensure_project(human_key)
-        # Archive is optional - only initialize if enabled
-        if is_archive_enabled(settings):
-            await ensure_archive(settings, project.slug, project_key=project.human_key)
+        await _ensure_archive_if_enabled(settings, project)
         return _project_to_dict(project)
 
     @mcp.tool(name="register_agent")
@@ -3623,7 +3639,8 @@ def build_mcp_server() -> FastMCP:
         - If `name` is omitted, a random adjective+noun name is auto-generated (e.g., "BlueLake").
         - Reusing the same `name` updates the profile (program/model/task) and
           refreshes `last_active_ts`.
-        - A `profile.json` file is written under `agents/<Name>/` in the project archive.
+        - When archive storage is enabled, a `profile.json` file is written under
+          `agents/<Name>/` in the project archive.
         - Providing a name that is active in another project automatically retires that identity so you can claim the handle.
 
         CRITICAL: Agent Naming Rules
@@ -3685,9 +3702,7 @@ def build_mcp_server() -> FastMCP:
         """
         # Auto-create project if it doesn't exist (allows any string as project_key)
         project = await _ensure_project(project_key)
-        # Archive is optional - only initialize if enabled
-        if is_archive_enabled(settings):
-            await ensure_archive(settings, project.slug, project_key=project.human_key)
+        await _ensure_archive_if_enabled(settings, project)
 
         if settings.tools_log_enabled:
             try:
