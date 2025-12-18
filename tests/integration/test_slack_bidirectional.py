@@ -28,6 +28,7 @@ try:
         SlackThreadMapping,
         mirror_message_to_slack,
     )
+
     SLACK_INTEGRATION_AVAILABLE = True
 except ImportError as e:
     SLACK_INTEGRATION_AVAILABLE = False
@@ -36,7 +37,7 @@ except ImportError as e:
 
 pytestmark = pytest.mark.skipif(
     not SLACK_INTEGRATION_AVAILABLE,
-    reason=f"slack_integration module not available: {IMPORT_ERROR if not SLACK_INTEGRATION_AVAILABLE else ''}"
+    reason=f"slack_integration module not available: {IMPORT_ERROR if not SLACK_INTEGRATION_AVAILABLE else ''}",
 )
 
 
@@ -72,11 +73,7 @@ def create_test_slack_settings(**overrides) -> "SlackSettings":
 def generate_slack_signature(payload: str, signing_secret: str, timestamp: str) -> str:
     """Generate a valid Slack signature for testing."""
     sig_basestring = f"v0:{timestamp}:{payload}"
-    signature = hmac.new(
-        signing_secret.encode("utf-8"),
-        sig_basestring.encode("utf-8"),
-        hashlib.sha256
-    ).hexdigest()
+    signature = hmac.new(signing_secret.encode("utf-8"), sig_basestring.encode("utf-8"), hashlib.sha256).hexdigest()
     return f"v0={signature}"
 
 
@@ -89,7 +86,7 @@ class TestSlackThreadMapping:
             mcp_thread_id="42",
             slack_channel_id="C0123456789",
             slack_thread_ts="1234567890.123456",
-            created_at=datetime.now(timezone.utc)
+            created_at=datetime.now(timezone.utc),
         )
         assert mapping.mcp_thread_id == "42"
         assert mapping.slack_channel_id == "C0123456789"
@@ -99,10 +96,7 @@ class TestSlackThreadMapping:
         """Test that thread mapping has all expected fields."""
         now = datetime.now(timezone.utc)
         mapping = SlackThreadMapping(
-            mcp_thread_id="123",
-            slack_channel_id="C0123456789",
-            slack_thread_ts="1234567890.234567",
-            created_at=now
+            mcp_thread_id="123", slack_channel_id="C0123456789", slack_thread_ts="1234567890.234567", created_at=now
         )
         assert mapping.created_at == now
 
@@ -128,7 +122,7 @@ class TestSlackClientSingleton:
             mcp_thread_id="100",
             slack_channel_id="C0123456789",
             slack_thread_ts="1111111111.111111",
-            created_at=datetime.now(timezone.utc)
+            created_at=datetime.now(timezone.utc),
         )
         client._thread_mappings["100"] = mapping
 
@@ -146,15 +140,13 @@ class TestSlackClientSingleton:
             mcp_thread_id="42",
             slack_channel_id="C0123456789",
             slack_thread_ts="1234567890.111111",
-            created_at=datetime.now(timezone.utc)
+            created_at=datetime.now(timezone.utc),
         )
         client._thread_mappings["42"] = mapping
         client._reverse_thread_mappings[("C0123456789", "1234567890.111111")] = "42"
 
         # Look up MCP thread from Slack coordinates
-        mcp_thread_id = client._reverse_thread_mappings.get(
-            ("C0123456789", "1234567890.111111")
-        )
+        mcp_thread_id = client._reverse_thread_mappings.get(("C0123456789", "1234567890.111111"))
         assert mcp_thread_id == "42"
 
 
@@ -171,7 +163,7 @@ class TestBidirectionalThreadFlow:
             mcp_thread_id="181",
             slack_channel_id="C0123456789",
             slack_thread_ts="1234567890.181000",
-            created_at=datetime.now(timezone.utc)
+            created_at=datetime.now(timezone.utc),
         )
         client._thread_mappings["181"] = mapping
         client._reverse_thread_mappings[("C0123456789", "1234567890.181000")] = "181"
@@ -181,9 +173,7 @@ class TestBidirectionalThreadFlow:
         assert client._thread_mappings["181"].slack_thread_ts == "1234567890.181000"
 
         # Step 3: Verify reverse mapping (Slack → MCP)
-        mcp_thread_id = client._reverse_thread_mappings.get(
-            ("C0123456789", "1234567890.181000")
-        )
+        mcp_thread_id = client._reverse_thread_mappings.get(("C0123456789", "1234567890.181000"))
         assert mcp_thread_id == "181"
 
     def test_thread_flow_slack_reply_lookup(self):
@@ -199,9 +189,7 @@ class TestBidirectionalThreadFlow:
         slack_channel = "C0123456789"
 
         # Look up: Should find MCP thread_id=181
-        mcp_thread_id = client._reverse_thread_mappings.get(
-            (slack_channel, slack_reply_thread_ts)
-        )
+        mcp_thread_id = client._reverse_thread_mappings.get((slack_channel, slack_reply_thread_ts))
         assert mcp_thread_id == "181", "Slack reply should resolve to MCP message 181"
 
 
@@ -235,7 +223,7 @@ class TestThreadIdFormat:
             mcp_thread_id=mcp_thread_id,
             slack_channel_id="C0123456789",
             slack_thread_ts="1234567890.123456",
-            created_at=datetime.now(timezone.utc)
+            created_at=datetime.now(timezone.utc),
         )
 
         assert mcp_thread_id in client._thread_mappings
