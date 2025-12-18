@@ -1044,11 +1044,13 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                 )
                                 row = result.fetchone()
                                 if row is not None:
-                                    thread_context_checked = True
-                                if row and row[0] is not None:
-                                    from .models import Project
+                                    if row[0] is None:
+                                        thread_context_checked = True
+                                    else:
+                                        from .models import Project
 
-                                    project = await session.get(Project, row[0])
+                                        project = await session.get(Project, row[0])
+                                        thread_context_checked = project is not None
 
                         # If no project from thread context, use default or sync project for backwards compat
                         if project is None and not thread_context_checked:
@@ -1083,6 +1085,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                     result = await session.execute(
                                         select(Agent).where(
                                             func.lower(Agent.name) == func.lower(sender_name),
+                                            cast(Any, Agent.is_active).is_(True),
                                         )
                                     )
                                     existing_agent = result.scalars().first()
@@ -1090,14 +1093,16 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                         raise
                                     sender_agent = existing_agent
 
-                        # Get all active agents as recipients (broadcast)
+                        # Broadcast to all active agents globally (agent names are globally unique)
+                        # We intentionally avoid project scoping so Slack messages always reach active agents,
+                        # even when thread context has no project or the project was deleted.
                         async with get_session() as session:
-                            filters = [cast(Any, Agent.is_active).is_(True), cast(Any, Agent.id) != sender_agent.id]
-                            if project is None:
-                                filters.append(cast(Any, Agent.project_id).is_(None))
-                            else:
-                                filters.append(cast(Any, Agent.project_id) == project.id)
-                            result = await session.execute(select(Agent).where(*filters))
+                            result = await session.execute(
+                                select(Agent).where(
+                                    cast(Any, Agent.is_active).is_(True),
+                                    cast(Any, Agent.id) != sender_agent.id,
+                                )
+                            )
                             recipient_agents = list(result.scalars().all())
 
                         if not recipient_agents:

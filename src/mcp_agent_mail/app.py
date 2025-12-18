@@ -3929,8 +3929,10 @@ def build_mcp_server() -> FastMCP:
             )
 
         # Get the agent's actual project for commit history and logging
-        # This matters when agent was found via global fallback (different from requested project)
-        agent_project = await _get_project_by_id(agent.project_id)
+        # With nullable project_id, fall back to the default global project when unset.
+        agent_project = await _get_project_for_agent(agent)
+        if agent_project is None:
+            agent_project = await _get_default_project()
 
         profile = _agent_to_dict(agent)
         recent: list[dict[str, Any]] = []
@@ -4099,14 +4101,14 @@ def build_mcp_server() -> FastMCP:
             the sender's project (or the default global project) is used for routing metadata.
         sender_name : str
             Must match an existing agent name (agents are global).
-        to : list[str]
+        to : Optional[list[str]]
             Primary recipients (agent names). At least one of to/cc/bcc must be non-empty.
         subject : str
             Short subject line that will be visible in inbox/outbox and search results.
         body_md : str
             GitHub-Flavored Markdown body. Image references can be file paths or data URIs.
         cc, bcc : Optional[list[str]]
-            Additional recipients by name.
+            Additional recipients by name. At least one of to/cc/bcc must be provided.
         attachment_paths : Optional[list[str]]
             Extra file paths to include as attachments; will be converted to WebP and stored.
         convert_images : Optional[bool]
@@ -4235,6 +4237,7 @@ def build_mcp_server() -> FastMCP:
                 recoverable=True,
                 data={"argument": "bcc"},
             )
+        cc = cc or []
         if cc is not None and any(not isinstance(x, str) for x in cc):
             await ctx.error("INVALID_ARGUMENT: cc items must be strings (agent names).")
             raise ToolExecutionError(
@@ -4243,6 +4246,7 @@ def build_mcp_server() -> FastMCP:
                 recoverable=True,
                 data={"argument": "cc"},
             )
+        bcc = bcc or []
         if bcc is not None and any(not isinstance(x, str) for x in bcc):
             await ctx.error("INVALID_ARGUMENT: bcc items must be strings (agent names).")
             raise ToolExecutionError(
@@ -4418,8 +4422,8 @@ def build_mcp_server() -> FastMCP:
                             unknown.setdefault(unknown_key, set()).add(kind)
 
             await _route(to, "to")
-            await _route(cc or [], "cc")
-            await _route(bcc or [], "bcc")
+            await _route(cc, "cc")
+            await _route(bcc, "bcc")
 
             if unknown:
                 # Auto-register missing recipients if enabled
@@ -4486,6 +4490,15 @@ def build_mcp_server() -> FastMCP:
                         data={"unknown_recipients": missing_names, "suggested_tool_calls": suggestions},
                     )
 
+        if not (all_to or all_cc or all_bcc):
+            await ctx.error("INVALID_ARGUMENT: At least one recipient must be specified (to/cc/bcc).")
+            raise ToolExecutionError(
+                "INVALID_ARGUMENT",
+                "At least one recipient must be specified (to/cc/bcc).",
+                recoverable=True,
+                data={"argument": "recipients"},
+            )
+
         # Deliver message to all recipients (no project boundaries)
         payload = await _deliver_message(
             ctx,
@@ -4502,7 +4515,7 @@ def build_mcp_server() -> FastMCP:
             importance,
             ack_required,
             thread_id,
-            allow_empty_recipients=not (all_to or all_cc or all_bcc),
+            allow_empty_recipients=False,
         )
 
         # If delivery returned a structured error payload, bubble it up
@@ -7331,9 +7344,10 @@ def build_mcp_server() -> FastMCP:
             "generated_at": _iso(datetime.now(timezone.utc)),
             "tools": {
                 "send_message": {
-                    "required": ["sender_name", "to", "subject", "body_md"],
+                    "required": ["sender_name", "subject", "body_md"],
                     "optional": [
                         "project_key",
+                        "to",
                         "cc",
                         "bcc",
                         "attachment_paths",
