@@ -53,7 +53,7 @@ from .share import (
     sign_manifest,
     summarize_snapshot,
 )
-from .storage import ensure_archive
+from .storage import ensure_archive, ensure_runtime_project_root, is_archive_enabled
 from .utils import safe_filesystem_component, slugify
 
 # Suppress annoying bleach CSS sanitizer warning from dependencies
@@ -2095,8 +2095,12 @@ def am_run(
     worktrees_enabled = bool(settings.worktrees_enabled)
 
     async def _ensure_slot_paths() -> Path:
-        archive = await ensure_archive(settings, slug, project_key=str(p))
-        slot_dir = archive.root / "build_slots" / safe_filesystem_component(slot)
+        if is_archive_enabled(settings):
+            archive = await ensure_archive(settings, slug, project_key=str(p))
+            slot_dir = archive.root / "build_slots" / safe_filesystem_component(slot)
+        else:
+            runtime_project_root = await ensure_runtime_project_root(settings, slug)
+            slot_dir = runtime_project_root / "build_slots" / safe_filesystem_component(slot)
         slot_dir.mkdir(parents=True, exist_ok=True)
         return slot_dir
 

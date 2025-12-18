@@ -15,7 +15,7 @@ from mcp_agent_mail.storage import ensure_archive
 async def test_guard_render_and_conflict_message(isolated_env, tmp_path: Path):
     settings = get_settings()
     archive = await ensure_archive(settings, "backend")
-    script = render_precommit_script(archive)
+    script = render_precommit_script(archive.root / "file_reservations")
     assert "FILE_RESERVATIONS_DIR" in script and "AGENT_NAME" in script
 
     # Initialize dummy repo and write a file_reservation artifact that conflicts with the staged file

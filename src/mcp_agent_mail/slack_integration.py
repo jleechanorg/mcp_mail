@@ -275,31 +275,124 @@ class SlackClient:
         return permalink
 
     async def map_thread(self, mcp_thread_id: str, slack_channel_id: str, slack_thread_ts: str) -> None:
-        """Map an MCP thread ID to a Slack thread."""
+        """Map an MCP thread ID to a Slack thread. Persists to database."""
+        from .db import get_session
+        from .models import SlackThreadMapping as SlackThreadMappingModel
+
         mapping = SlackThreadMapping(
             mcp_thread_id=mcp_thread_id,
             slack_channel_id=slack_channel_id,
             slack_thread_ts=slack_thread_ts,
             created_at=datetime.now(timezone.utc),
         )
+        # Update in-memory cache
         async with self._mappings_lock:
             self._thread_mappings[mcp_thread_id] = mapping
             self._reverse_thread_mappings[(slack_channel_id, slack_thread_ts)] = mcp_thread_id
+
+        # Persist to database
+        try:
+            async with get_session() as session:
+                db_mapping = SlackThreadMappingModel(
+                    mcp_thread_id=mcp_thread_id,
+                    slack_channel_id=slack_channel_id,
+                    slack_thread_ts=slack_thread_ts,
+                )
+                session.add(db_mapping)
+                await session.commit()
+                logger.debug(f"Persisted thread mapping to DB: MCP={mcp_thread_id} -> Slack={slack_channel_id}/{slack_thread_ts}")
+        except Exception as e:
+            # Log but don't fail - in-memory cache is still valid
+            logger.warning(f"Failed to persist thread mapping to DB: {e}")
+
         logger.debug(f"Mapped thread: MCP={mcp_thread_id} -> Slack={slack_channel_id}/{slack_thread_ts}")
 
     async def get_slack_thread(self, mcp_thread_id: str) -> Optional[SlackThreadMapping]:
-        """Get Slack thread mapping for an MCP thread ID."""
+        """Get Slack thread mapping for an MCP thread ID. Checks DB if not in memory."""
+        from sqlalchemy import select
+
+        from .db import get_session
+        from .models import SlackThreadMapping as SlackThreadMappingModel
+
+        # Check in-memory cache first
         async with self._mappings_lock:
-            return self._thread_mappings.get(mcp_thread_id)
+            if mcp_thread_id in self._thread_mappings:
+                return self._thread_mappings[mcp_thread_id]
+
+        # Query database
+        try:
+            async with get_session() as session:
+                result = await session.execute(
+                    select(SlackThreadMappingModel).where(
+                        SlackThreadMappingModel.mcp_thread_id == mcp_thread_id
+                    )
+                )
+                db_mapping = result.scalars().first()
+                if db_mapping:
+                    mapping = SlackThreadMapping(
+                        mcp_thread_id=db_mapping.mcp_thread_id,
+                        slack_channel_id=db_mapping.slack_channel_id,
+                        slack_thread_ts=db_mapping.slack_thread_ts,
+                        created_at=db_mapping.created_at,
+                    )
+                    # Update in-memory cache
+                    async with self._mappings_lock:
+                        self._thread_mappings[mcp_thread_id] = mapping
+                        self._reverse_thread_mappings[(db_mapping.slack_channel_id, db_mapping.slack_thread_ts)] = mcp_thread_id
+                    return mapping
+        except Exception as e:
+            logger.warning(f"Failed to query thread mapping from DB: {e}")
+
+        return None
 
     async def get_mcp_thread_id(self, slack_channel_id: str, slack_thread_ts: str) -> Optional[str]:
-        """Get MCP thread ID for a Slack thread."""
+        """Get MCP thread ID for a Slack thread. Checks DB if not in memory."""
+        from sqlalchemy import select
+
+        from .db import get_session
+        from .models import SlackThreadMapping as SlackThreadMappingModel
+
+        # Check in-memory cache first
         async with self._mappings_lock:
-            return self._reverse_thread_mappings.get((slack_channel_id, slack_thread_ts))
+            cached = self._reverse_thread_mappings.get((slack_channel_id, slack_thread_ts))
+            if cached:
+                return cached
+
+        # Query database
+        try:
+            async with get_session() as session:
+                result = await session.execute(
+                    select(SlackThreadMappingModel).where(
+                        SlackThreadMappingModel.slack_channel_id == slack_channel_id,
+                        SlackThreadMappingModel.slack_thread_ts == slack_thread_ts,
+                    )
+                )
+                db_mapping = result.scalars().first()
+                if db_mapping:
+                    # Update in-memory cache
+                    async with self._mappings_lock:
+                        self._reverse_thread_mappings[(slack_channel_id, slack_thread_ts)] = db_mapping.mcp_thread_id
+                        # Also cache the forward mapping
+                        mapping = SlackThreadMapping(
+                            mcp_thread_id=db_mapping.mcp_thread_id,
+                            slack_channel_id=db_mapping.slack_channel_id,
+                            slack_thread_ts=db_mapping.slack_thread_ts,
+                            created_at=db_mapping.created_at,
+                        )
+                        self._thread_mappings[db_mapping.mcp_thread_id] = mapping
+                    return db_mapping.mcp_thread_id
+        except Exception as e:
+            logger.warning(f"Failed to query reverse thread mapping from DB: {e}")
+
+        return None
 
     @staticmethod
     def verify_signature(*, signing_secret: Optional[str], timestamp: str, signature: str, body: bytes) -> bool:
         """Verify Slack request signature for webhook security."""
+        # Allow bypassing signature verification for debugging (DANGEROUS - only for initial setup)
+        if os.environ.get("SLACK_SKIP_SIGNATURE_VERIFICATION") == "1":
+            logger.warning("SLACK_SKIP_SIGNATURE_VERIFICATION=1: Skipping signature verification (INSECURE)")
+            return True
         if not signing_secret:
             logger.warning("SLACK_SIGNING_SECRET not set, rejecting request (signature verification required)")
             return False

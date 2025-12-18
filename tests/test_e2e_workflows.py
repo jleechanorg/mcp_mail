@@ -129,7 +129,7 @@ async def test_e2e_pre_push_guard_with_build_slots(isolated_env, tmp_path: Path)
     )
 
     # Render pre-push script
-    prepush_script = render_prepush_script(archive)
+    prepush_script = render_prepush_script(archive.root / "file_reservations")
     script_path = tmp_path / "prepush.py"
     script_path.write_text(prepush_script)
 

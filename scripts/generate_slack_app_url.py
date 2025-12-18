@@ -31,7 +31,12 @@ MANIFEST = {
         "bot_user": {
             "display_name": "MCP Agent Mail",
             "always_online": True,
-        }
+        },
+        "app_home": {
+            "home_tab_enabled": False,
+            "messages_tab_enabled": True,
+            "messages_tab_read_only_enabled": False,
+        },
     },
     "oauth_config": {
         "scopes": {

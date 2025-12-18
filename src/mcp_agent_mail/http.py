@@ -23,7 +23,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError, NoResultFound
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.types import Receive, Scope, Send
@@ -33,6 +33,7 @@ from .app import (
     _ensure_project,
     _expire_stale_file_reservations,
     _message_frontmatter,
+    _retire_conflicting_agents,
     _tool_metrics_snapshot,
     build_mcp_server,
     get_project_sibling_data,
@@ -53,8 +54,11 @@ from .storage import (
     get_message_commit_sha,
     get_recent_commits,
     get_timeline_commits,
+    is_archive_enabled,
+    runtime_write_lock,
     write_agent_profile,
     write_file_reservation_record,
+    write_file_reservation_record_runtime,
     write_message_bundle,
 )
 
@@ -676,25 +680,30 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                                             project_human_key,
                                                         ) = await _project_identifiers_from_id(project_id)
                                                         # Write profile.json to archive
-                                                        archive = await ensure_archive(
-                                                            settings,
-                                                            project_slug or "",
-                                                            project_key=project_human_key,
-                                                        )
-                                                        async with archive_write_lock(archive):
-                                                            await write_agent_profile(
-                                                                archive,
-                                                                {
-                                                                    "id": holder_agent_id,
-                                                                    "name": settings.ack_escalation_claim_holder_name,
-                                                                    "program": "ops",
-                                                                    "model": "system",
-                                                                    "project_slug": project_slug or "",
-                                                                    "inception_ts": now.astimezone().isoformat(),
-                                                                    "inception_iso": now.astimezone().isoformat(),
-                                                                    "task": "ops-escalation",
-                                                                },
+                                                        if (
+                                                            is_archive_enabled(settings)
+                                                            and project_slug
+                                                            and project_human_key is not None
+                                                        ):
+                                                            archive = await ensure_archive(
+                                                                settings,
+                                                                project_slug,
+                                                                project_key=project_human_key,
                                                             )
+                                                            async with archive_write_lock(archive):
+                                                                await write_agent_profile(
+                                                                    archive,
+                                                                    {
+                                                                        "id": holder_agent_id,
+                                                                        "name": settings.ack_escalation_claim_holder_name,
+                                                                        "program": "ops",
+                                                                        "model": "system",
+                                                                        "project_slug": project_slug,
+                                                                        "inception_ts": now.astimezone().isoformat(),
+                                                                        "inception_iso": now.astimezone().isoformat(),
+                                                                        "task": "ops-escalation",
+                                                                    },
+                                                                )
                                         async with get_session() as s2:
                                             await s2.execute(
                                                 text(
@@ -717,25 +726,32 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                             await s2.commit()
                                         # Also write JSON artifact to archive
                                         project_slug, project_human_key = await _project_identifiers_from_id(project_id)
-                                        archive = await ensure_archive(
-                                            settings, project_slug or "", project_key=project_human_key
-                                        )
                                         expires_at = now + _dt.timedelta(
                                             seconds=settings.ack_escalation_claim_ttl_seconds
                                         )
-                                        async with archive_write_lock(archive):
-                                            await write_file_reservation_record(
-                                                archive,
-                                                {
-                                                    "project": project_slug,
-                                                    "agent": settings.ack_escalation_claim_holder_name or "ops",
-                                                    "path_pattern": pattern,
-                                                    "exclusive": settings.ack_escalation_claim_exclusive,
-                                                    "reason": "ack-overdue",
-                                                    "created_ts": now.astimezone().isoformat(),
-                                                    "expires_ts": expires_at.astimezone().isoformat(),
-                                                },
+                                        payload = {
+                                            "project": project_slug,
+                                            "agent": settings.ack_escalation_claim_holder_name or "ops",
+                                            "path_pattern": pattern,
+                                            "exclusive": settings.ack_escalation_claim_exclusive,
+                                            "reason": "ack-overdue",
+                                            "created_ts": now.astimezone().isoformat(),
+                                            "expires_ts": expires_at.astimezone().isoformat(),
+                                            "released_ts": None,
+                                        }
+                                        if (
+                                            is_archive_enabled(settings)
+                                            and project_slug
+                                            and project_human_key is not None
+                                        ):
+                                            archive = await ensure_archive(
+                                                settings, project_slug, project_key=project_human_key
                                             )
+                                            async with archive_write_lock(archive):
+                                                await write_file_reservation_record(archive, payload)
+                                        elif project_slug:
+                                            async with runtime_write_lock(settings, project_slug):
+                                                await write_file_reservation_record_runtime(settings, project_slug, payload)
                                     except Exception:
                                         pass
                 except Exception:
@@ -1090,16 +1106,37 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         logger.info("slack_bridge_agent_created", agent_name=sender_name)
                     except IntegrityError:
                         await session.rollback()
-                        result = await session.execute(
-                            select(Agent).where(
-                                cast(Any, Agent.project_id) == project.id,
-                                cast(Any, Agent.name) == sender_name,
-                            )
+                        # Agent names are globally unique (case-insensitive). If the Slack bridge
+                        # name is already active in a different project, retire the conflicting
+                        # agent(s) so this project can claim the name.
+                        await _retire_conflicting_agents(sender_name, project_to_keep=project, settings=settings)
+
+                        # Retry after retirement.
+                        sender_agent = Agent(
+                            name=sender_name,
+                            project_id=project.id,
+                            program=program,
+                            model=model,
+                            task_description="Bridges Slack messages into MCP Agent Mail",
+                            is_active=True,
                         )
-                        existing_agent = result.scalars().first()
-                        if not existing_agent:
-                            raise
-                        sender_agent = existing_agent
+                        session.add(sender_agent)
+                        try:
+                            await session.commit()
+                            await session.refresh(sender_agent)
+                        except IntegrityError:
+                            await session.rollback()
+                            result = await session.execute(
+                                select(Agent).where(
+                                    cast(Any, Agent.project_id) == project.id,
+                                    func.lower(Agent.name) == sender_name.lower(),
+                                    cast(Any, Agent.is_active).is_(True),
+                                )
+                            )
+                            existing_agent = result.scalars().first()
+                            if not existing_agent:
+                                raise
+                            sender_agent = existing_agent
 
             async with get_session() as session:
                 result = await session.execute(
@@ -1142,6 +1179,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             )
 
             async def _persist_archive() -> None:
+                if not is_archive_enabled(settings):
+                    return
                 try:
                     archive = await ensure_archive(settings, project.slug)
                     await write_message_bundle(
@@ -2187,8 +2226,9 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             commit_sha = None
             try:
                 settings = get_settings()
-                archive = await ensure_archive(settings, prow[1], project_key=prow[2])
-                commit_sha = await get_message_commit_sha(archive, mid)
+                if is_archive_enabled(settings):
+                    archive = await ensure_archive(settings, prow[1], project_key=prow[2])
+                    commit_sha = await get_message_commit_sha(archive, mid)
             except Exception:
                 pass  # Commit SHA is optional
 
@@ -2840,13 +2880,11 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                             detail=f"None of the specified recipients exist in this project. Available agents can be seen at /mail/{project_slug}",
                         )
 
-                    # Write to Git archive BEFORE committing to database (for transaction consistency)
-                    from .storage import ensure_archive, write_message_bundle
-
                     settings = get_settings()
-                    archive = await ensure_archive(settings, project_slug, project_key=project_human_key)
+                    if is_archive_enabled(settings):
+                        archive = await ensure_archive(settings, project_slug, project_key=project_human_key)
 
-                    # Build message dict for Git
+                    # Build message dict for Git (when enabled)
                     message_dict = {
                         "id": message_id,
                         "thread_id": thread_id,
@@ -2863,23 +2901,24 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         "attachments": [],
                     }
 
-                    try:
-                        # Write message bundle (canonical + outbox + inboxes) to Git
-                        await write_message_bundle(
-                            archive,
-                            message_dict,
-                            full_body,
-                            overseer_name,
-                            valid_recipients,
-                            extra_paths=None,
-                            commit_text=f"Human Overseer message: {subject}",
-                        )
-                    except Exception as git_error:
-                        # Rollback database transaction if Git write fails
-                        await session.rollback()
-                        raise HTTPException(
-                            status_code=500, detail=f"Failed to write message to Git archive: {git_error!s}"
-                        ) from git_error
+                    if is_archive_enabled(settings):
+                        try:
+                            # Write message bundle (canonical + outbox + inboxes) to Git
+                            await write_message_bundle(
+                                archive,
+                                message_dict,
+                                full_body,
+                                overseer_name,
+                                valid_recipients,
+                                extra_paths=None,
+                                commit_text=f"Human Overseer message: {subject}",
+                            )
+                        except Exception as git_error:
+                            # Rollback database transaction if Git write fails
+                            await session.rollback()
+                            raise HTTPException(
+                                status_code=500, detail=f"Failed to write message to Git archive: {git_error!s}"
+                            ) from git_error
 
                     # Update HumanOverseer activity timestamp (after successful Git write, before commit)
                     await session.execute(
@@ -3103,6 +3142,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 project_human_key = human_row[0] if human_row else None
 
             settings = get_settings()
+            if not is_archive_enabled(settings):
+                return await _render("error.html", message="Archive storage is disabled")
             archive = await ensure_archive(settings, project, project_key=project_human_key)
             tree = await get_archive_tree(archive, path)
 
@@ -3124,6 +3165,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     ).fetchone()
                     project_human_key = human_row[0] if human_row else None
                 settings = get_settings()
+                if not is_archive_enabled(settings):
+                    raise HTTPException(status_code=404, detail="Archive storage is disabled")
                 archive = await ensure_archive(settings, project, project_key=project_human_key)
                 content = await get_file_content(archive, path)
 
@@ -3231,6 +3274,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             try:
                 # Get project archive
                 settings = get_settings()
+                if not is_archive_enabled(settings):
+                    raise HTTPException(status_code=404, detail="Archive storage is disabled")
                 async with get_session() as session:
                     human_row = (
                         await session.execute(

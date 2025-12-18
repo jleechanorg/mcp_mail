@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from mcp_agent_mail.config import Settings, get_settings
-from mcp_agent_mail.storage import AsyncFileLock, ensure_archive
+from mcp_agent_mail.storage import AsyncFileLock, ensure_runtime_project_root
 from mcp_agent_mail.utils import safe_filesystem_component, slugify
 
 
@@ -73,12 +73,12 @@ async def acquire_build_slot(
     # Enforce minimum TTL
     ttl_seconds = max(60, ttl_seconds)
 
-    # Resolve project archive
+    # Resolve project runtime directory (does not require Git-backed archive)
     slug = slugify(project_key)
-    archive = await ensure_archive(settings, slug, project_key=project_key)
+    project_root = await ensure_runtime_project_root(settings, slug)
 
     # Create slot directory
-    slot_dir = _slot_dir(archive.root, slot)
+    slot_dir = _slot_dir(project_root, slot)
     branch = _normalize_branch(os.environ.get("BRANCH"))
     holder = safe_filesystem_component(f"{agent_name}__{branch}")
     lease_path = slot_dir / f"{holder}.json"
@@ -179,9 +179,9 @@ async def renew_build_slot(
         return {"disabled": True}
 
     slug = slugify(project_key)
-    archive = await ensure_archive(settings, slug, project_key=project_key)
+    project_root = await ensure_runtime_project_root(settings, slug)
 
-    slot_dir = archive.root / "build_slots" / safe_filesystem_component(slot)
+    slot_dir = project_root / "build_slots" / safe_filesystem_component(slot)
     if not slot_dir.exists():
         return {"renewed": False, "error": "Slot not found"}
 
@@ -248,9 +248,9 @@ async def release_build_slot(
         return {"disabled": True}
 
     slug = slugify(project_key)
-    archive = await ensure_archive(settings, slug, project_key=project_key)
+    project_root = await ensure_runtime_project_root(settings, slug)
 
-    slot_dir = archive.root / "build_slots" / safe_filesystem_component(slot)
+    slot_dir = project_root / "build_slots" / safe_filesystem_component(slot)
     if not slot_dir.exists():
         return {"released": False, "error": "Slot not found"}
 
@@ -287,6 +287,10 @@ async def release_build_slot(
 
 def _worktrees_enabled(settings: Settings | None = None) -> bool:
     """Return True when worktree-aware coordination is enabled."""
+    env_value = os.environ.get("WORKTREES_ENABLED")
+    if env_value is not None:
+        normalized = env_value.strip().lower()
+        return normalized in {"1", "true", "yes", "on"}
     try:
         config = settings or get_settings()
     except Exception:

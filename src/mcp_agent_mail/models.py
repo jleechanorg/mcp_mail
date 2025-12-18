@@ -125,3 +125,27 @@ class ProductProjectLink(SQLModel, table=True):
     product_id: int = Field(foreign_key="products.id", index=True)
     project_id: int = Field(foreign_key="projects.id", index=True)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class SlackThreadMapping(SQLModel, table=True):
+    """Maps MCP thread IDs to their corresponding Slack thread coordinates.
+
+    When an MCP message is posted to Slack, we store the mapping so that:
+    1. Subsequent MCP replies can be posted to the same Slack thread
+    2. Slack replies can be routed back to the correct MCP project
+    """
+
+    __tablename__ = "slack_thread_mappings"
+    __table_args__ = (
+        UniqueConstraint("slack_channel_id", "slack_thread_ts", name="uq_slack_thread"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    # The MCP thread ID (could be message ID as string, or thread_id field value)
+    mcp_thread_id: str = Field(max_length=128, index=True)
+    # Slack channel where the thread exists
+    slack_channel_id: str = Field(max_length=64, index=True)
+    # Slack timestamp that identifies the thread (the parent message's ts)
+    slack_thread_ts: str = Field(max_length=64, index=True)
+    # When this mapping was created
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
