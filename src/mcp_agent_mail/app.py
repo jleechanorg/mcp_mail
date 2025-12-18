@@ -60,11 +60,9 @@ from .storage import (
     heal_archive_locks,
     is_archive_enabled,
     process_attachments,
-    runtime_write_lock,
     write_agent_deletion_marker,
     write_agent_profile,
-    write_file_reservation_record,
-    write_file_reservation_record_runtime,
+    write_file_reservation_artifacts,
     write_message_bundle,
 )
 from .utils import generate_agent_name, sanitize_agent_name, slugify
@@ -6059,13 +6057,9 @@ def build_mcp_server() -> FastMCP:
             "expires_ts": _iso(file_reservation.expires_ts),
             "released_ts": None,
         }
-        if is_archive_enabled(settings):
-            archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-            async with _archive_write_lock(archive):
-                await write_file_reservation_record(archive, file_reservation_payload)
-        else:
-            async with runtime_write_lock(settings, project.slug):
-                await write_file_reservation_record_runtime(settings, project.slug, file_reservation_payload)
+        await write_file_reservation_artifacts(
+            settings, project.slug, [cast(dict[str, object], file_reservation_payload)], project_key=project.human_key
+        )
 
         granted = [
             {
@@ -6202,90 +6196,46 @@ def build_mcp_server() -> FastMCP:
 
         granted: list[dict[str, Any]] = []
         conflicts: list[dict[str, Any]] = []
-        if is_archive_enabled(settings):
-            archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-            async with _archive_write_lock(archive):
-                for path in paths:
-                    conflicting_holders: list[dict[str, Any]] = []
-                    for file_reservation_record, holder_name in existing_reservations:
-                        if _file_reservations_conflict(file_reservation_record, path, exclusive, agent):
-                            conflicting_holders.append(
-                                {
-                                    "agent": holder_name,
-                                    "path_pattern": file_reservation_record.path_pattern,
-                                    "exclusive": file_reservation_record.exclusive,
-                                    "expires_ts": _iso(file_reservation_record.expires_ts),
-                                }
-                            )
-                    if conflicting_holders:
-                        # Advisory model: still grant the file_reservation but surface conflicts
-                        conflicts.append({"path": path, "holders": conflicting_holders})
-                    file_reservation = await _create_file_reservation(
-                        project, agent, path, exclusive, reason, ttl_seconds
-                    )
-                    file_reservation_payload = {
-                        "id": file_reservation.id,
-                        "project": project.human_key,
-                        "agent": agent.name,
-                        "path_pattern": file_reservation.path_pattern,
-                        "exclusive": file_reservation.exclusive,
-                        "reason": file_reservation.reason,
-                        "created_ts": _iso(file_reservation.created_ts),
-                        "expires_ts": _iso(file_reservation.expires_ts),
-                        "released_ts": None,
-                    }
-                    await write_file_reservation_record(archive, file_reservation_payload)
-                    granted.append(
+        artifact_payloads: list[dict[str, object]] = []
+        for path in paths:
+            conflicting_holders = []
+            for file_reservation_record, holder_name in existing_reservations:
+                if _file_reservations_conflict(file_reservation_record, path, exclusive, agent):
+                    conflicting_holders.append(
                         {
-                            "id": file_reservation.id,
-                            "path_pattern": file_reservation.path_pattern,
-                            "exclusive": file_reservation.exclusive,
-                            "reason": file_reservation.reason,
-                            "expires_ts": _iso(file_reservation.expires_ts),
+                            "agent": holder_name,
+                            "path_pattern": file_reservation_record.path_pattern,
+                            "exclusive": file_reservation_record.exclusive,
+                            "expires_ts": _iso(file_reservation_record.expires_ts),
                         }
                     )
-                    existing_reservations.append((file_reservation, agent.name))
-        else:
-            async with runtime_write_lock(settings, project.slug):
-                for path in paths:
-                    conflicting_holders = []
-                    for file_reservation_record, holder_name in existing_reservations:
-                        if _file_reservations_conflict(file_reservation_record, path, exclusive, agent):
-                            conflicting_holders.append(
-                                {
-                                    "agent": holder_name,
-                                    "path_pattern": file_reservation_record.path_pattern,
-                                    "exclusive": file_reservation_record.exclusive,
-                                    "expires_ts": _iso(file_reservation_record.expires_ts),
-                                }
-                            )
-                    if conflicting_holders:
-                        conflicts.append({"path": path, "holders": conflicting_holders})
-                    file_reservation = await _create_file_reservation(
-                        project, agent, path, exclusive, reason, ttl_seconds
-                    )
-                    file_reservation_payload = {
-                        "id": file_reservation.id,
-                        "project": project.human_key,
-                        "agent": agent.name,
-                        "path_pattern": file_reservation.path_pattern,
-                        "exclusive": file_reservation.exclusive,
-                        "reason": file_reservation.reason,
-                        "created_ts": _iso(file_reservation.created_ts),
-                        "expires_ts": _iso(file_reservation.expires_ts),
-                        "released_ts": None,
-                    }
-                    await write_file_reservation_record_runtime(settings, project.slug, file_reservation_payload)
-                    granted.append(
-                        {
-                            "id": file_reservation.id,
-                            "path_pattern": file_reservation.path_pattern,
-                            "exclusive": file_reservation.exclusive,
-                            "reason": file_reservation.reason,
-                            "expires_ts": _iso(file_reservation.expires_ts),
-                        }
-                    )
-                    existing_reservations.append((file_reservation, agent.name))
+            if conflicting_holders:
+                # Advisory model: still grant the file_reservation but surface conflicts
+                conflicts.append({"path": path, "holders": conflicting_holders})
+            file_reservation = await _create_file_reservation(project, agent, path, exclusive, reason, ttl_seconds)
+            file_reservation_payload = {
+                "id": file_reservation.id,
+                "project": project.human_key,
+                "agent": agent.name,
+                "path_pattern": file_reservation.path_pattern,
+                "exclusive": file_reservation.exclusive,
+                "reason": file_reservation.reason,
+                "created_ts": _iso(file_reservation.created_ts),
+                "expires_ts": _iso(file_reservation.expires_ts),
+                "released_ts": None,
+            }
+            artifact_payloads.append(cast(dict[str, object], file_reservation_payload))
+            granted.append(
+                {
+                    "id": file_reservation.id,
+                    "path_pattern": file_reservation.path_pattern,
+                    "exclusive": file_reservation.exclusive,
+                    "reason": file_reservation.reason,
+                    "expires_ts": _iso(file_reservation.expires_ts),
+                }
+            )
+            existing_reservations.append((file_reservation, agent.name))
+        await write_file_reservation_artifacts(settings, project.slug, artifact_payloads, project_key=project.human_key)
         await ctx.info(f"Issued {len(granted)} file_reservations for '{agent.name}'. Conflicts: {len(conflicts)}")
         return {"granted": granted, "conflicts": conflicts}
 
@@ -6389,37 +6339,27 @@ def build_mcp_server() -> FastMCP:
                 await session.commit()
             affected = int(result.rowcount or 0)
             if affected and released_reservations:
-                if is_archive_enabled(settings):
-                    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-                    async with _archive_write_lock(archive):
-                        for reservation in released_reservations:
-                            payload = {
-                                "id": reservation.id,
-                                "project": project.human_key,
-                                "agent": agent.name,
-                                "path_pattern": reservation.path_pattern,
-                                "exclusive": reservation.exclusive,
-                                "reason": reservation.reason,
-                                "created_ts": _iso(reservation.created_ts),
-                                "expires_ts": _iso(reservation.expires_ts),
-                                "released_ts": _iso(now),
-                            }
-                            await write_file_reservation_record(archive, payload)
-                else:
-                    async with runtime_write_lock(settings, project.slug):
-                        for reservation in released_reservations:
-                            payload = {
-                                "id": reservation.id,
-                                "project": project.human_key,
-                                "agent": agent.name,
-                                "path_pattern": reservation.path_pattern,
-                                "exclusive": reservation.exclusive,
-                                "reason": reservation.reason,
-                                "created_ts": _iso(reservation.created_ts),
-                                "expires_ts": _iso(reservation.expires_ts),
-                                "released_ts": _iso(now),
-                            }
-                            await write_file_reservation_record_runtime(settings, project.slug, payload)
+                payloads: list[dict[str, object]] = []
+                for reservation in released_reservations:
+                    payloads.append(
+                        {
+                            "id": reservation.id,
+                            "project": project.human_key,
+                            "agent": agent.name,
+                            "path_pattern": reservation.path_pattern,
+                            "exclusive": reservation.exclusive,
+                            "reason": reservation.reason,
+                            "created_ts": _iso(reservation.created_ts),
+                            "expires_ts": _iso(reservation.expires_ts),
+                            "released_ts": _iso(now),
+                        }
+                    )
+                await write_file_reservation_artifacts(
+                    settings,
+                    project.slug,
+                    payloads,
+                    project_key=project.human_key,
+                )
             await ctx.info(f"Released {affected} file_reservations for '{agent.name}'.")
             return {"released": affected, "released_at": _iso(now)}
         except Exception as exc:
@@ -6554,15 +6494,12 @@ def build_mcp_server() -> FastMCP:
         # Emit an updated artifact so hooks/guards can observe the released state.
         artifact_payload = dict(summary)
         artifact_payload["project"] = project.human_key
-        if is_archive_enabled(settings):
-            archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-            async with _archive_write_lock(archive):
-                await write_file_reservation_record(archive, cast(dict[str, object], artifact_payload))
-        else:
-            async with runtime_write_lock(settings, project.slug):
-                await write_file_reservation_record_runtime(
-                    settings, project.slug, cast(dict[str, object], artifact_payload)
-                )
+        await write_file_reservation_artifacts(
+            settings,
+            project.slug,
+            [cast(dict[str, object], artifact_payload)],
+            project_key=project.human_key,
+        )
 
         await ctx.info(
             f"Force released reservation {file_reservation_id} held by '{holder.name}' on '{reservation.path_pattern}'."
@@ -6706,6 +6643,7 @@ def build_mcp_server() -> FastMCP:
             return {"renewed": 0, "file_reservations": []}
 
         updated: list[dict[str, Any]] = []
+        artifact_payloads: list[dict[str, object]] = []
         async with get_session() as session:
             for file_reservation in file_reservations:
                 old_exp = file_reservation.expires_ts
@@ -6724,40 +6662,28 @@ def build_mcp_server() -> FastMCP:
                         "new_expires_ts": _iso(file_reservation.expires_ts),
                     }
                 )
+                artifact_payloads.append(
+                    {
+                        "id": file_reservation.id,
+                        "project": project.human_key,
+                        "agent": agent.name,
+                        "path_pattern": file_reservation.path_pattern,
+                        "exclusive": file_reservation.exclusive,
+                        "reason": file_reservation.reason,
+                        "created_ts": _iso(file_reservation.created_ts),
+                        "expires_ts": _iso(file_reservation.expires_ts),
+                        "released_ts": None,
+                    }
+                )
             await session.commit()
 
         # Update artifacts for the renewed file_reservations (Git archive if enabled; otherwise runtime JSON)
-        if is_archive_enabled(settings):
-            archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-            async with _archive_write_lock(archive):
-                for file_reservation_info in updated:
-                    payload = {
-                        "id": file_reservation_info["id"],
-                        "project": project.human_key,
-                        "agent": agent.name,
-                        "path_pattern": file_reservation_info["path_pattern"],
-                        "exclusive": True,
-                        "reason": "renew",
-                        "created_ts": _iso(now),
-                        "expires_ts": file_reservation_info["new_expires_ts"],
-                        "released_ts": None,
-                    }
-                    await write_file_reservation_record(archive, payload)
-        else:
-            async with runtime_write_lock(settings, project.slug):
-                for file_reservation_info in updated:
-                    payload = {
-                        "id": file_reservation_info["id"],
-                        "project": project.human_key,
-                        "agent": agent.name,
-                        "path_pattern": file_reservation_info["path_pattern"],
-                        "exclusive": True,
-                        "reason": "renew",
-                        "created_ts": _iso(now),
-                        "expires_ts": file_reservation_info["new_expires_ts"],
-                        "released_ts": None,
-                    }
-                    await write_file_reservation_record_runtime(settings, project.slug, payload)
+        await write_file_reservation_artifacts(
+            settings,
+            project.slug,
+            artifact_payloads,
+            project_key=project.human_key,
+        )
         await ctx.info(f"Renewed {len(updated)} file_reservation(s) for '{agent.name}'.")
         return {"renewed": len(updated), "file_reservations": updated}
 

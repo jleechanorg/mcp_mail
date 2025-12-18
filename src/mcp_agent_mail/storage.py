@@ -80,6 +80,37 @@ async def write_file_reservation_record_runtime(
     return file_reservation_path
 
 
+async def write_file_reservation_artifacts(
+    settings: Settings,
+    project_slug: str,
+    payloads: list[dict[str, object]],
+    *,
+    project_key: str | None = None,
+) -> list[Path]:
+    """Write file reservation JSON artifacts regardless of archive enablement.
+
+    When archive storage is enabled, writes under the Git-backed project archive.
+    When archive storage is disabled, writes under the runtime artifact root
+    (default: ~/.mcp_agent_mail_runtime).
+    """
+    if not payloads:
+        return []
+
+    if is_archive_enabled(settings):
+        archive = await ensure_archive(settings, project_slug, project_key=project_key)
+        async with archive_write_lock(archive):
+            out: list[Path] = []
+            for payload in payloads:
+                out.append(await write_file_reservation_record(archive, payload))
+            return out
+
+    async with runtime_write_lock(settings, project_slug):
+        out: list[Path] = []
+        for payload in payloads:
+            out.append(await write_file_reservation_record_runtime(settings, project_slug, payload))
+        return out
+
+
 def is_archive_enabled(settings: Settings) -> bool:
     """Check if archive storage is enabled (either local or project-key based).
 
@@ -554,7 +585,7 @@ async def write_agent_deletion_marker(
     await _commit(archive.repo, archive.settings, f"agent: delete {agent_name}", [rel])
 
 
-async def write_file_reservation_record(archive: ProjectArchive, file_reservation: dict[str, object]) -> None:
+async def write_file_reservation_record(archive: ProjectArchive, file_reservation: dict[str, object]) -> Path:
     path_pattern = str(file_reservation.get("path_pattern") or file_reservation.get("path") or "").strip()
     if not path_pattern:
         raise ValueError("File reservation record must include 'path_pattern'.")
@@ -571,6 +602,7 @@ async def write_file_reservation_record(archive: ProjectArchive, file_reservatio
         f"file_reservation: {agent_name} {path_pattern}",
         [file_reservation_path.relative_to(archive.repo_root).as_posix()],
     )
+    return file_reservation_path
 
 
 async def write_message_bundle(

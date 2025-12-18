@@ -55,10 +55,8 @@ from .storage import (
     get_recent_commits,
     get_timeline_commits,
     is_archive_enabled,
-    runtime_write_lock,
     write_agent_profile,
-    write_file_reservation_record,
-    write_file_reservation_record_runtime,
+    write_file_reservation_artifacts,
     write_message_bundle,
 )
 
@@ -743,21 +741,14 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                             "expires_ts": expires_at.astimezone().isoformat(),
                                             "released_ts": None,
                                         }
-                                        if (
-                                            is_archive_enabled(settings)
-                                            and project_slug
-                                            and project_human_key is not None
-                                        ):
-                                            archive = await ensure_archive(
-                                                settings, project_slug, project_key=project_human_key
+                                        if project_slug:
+                                            payload["project"] = project_human_key or project_slug
+                                            await write_file_reservation_artifacts(
+                                                settings,
+                                                project_slug,
+                                                [cast(dict[str, object], payload)],
+                                                project_key=project_human_key,
                                             )
-                                            async with archive_write_lock(archive):
-                                                await write_file_reservation_record(archive, payload)
-                                        elif project_slug:
-                                            async with runtime_write_lock(settings, project_slug):
-                                                await write_file_reservation_record_runtime(
-                                                    settings, project_slug, payload
-                                                )
                                     except Exception:
                                         pass
                 except Exception:
