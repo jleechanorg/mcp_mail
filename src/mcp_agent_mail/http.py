@@ -32,7 +32,6 @@ from .app import (
     _create_message,
     _ensure_project,
     _expire_stale_file_reservations,
-    _get_agent_by_name_optional,
     _message_frontmatter,
     _tool_metrics_snapshot,
     build_mcp_server,
@@ -94,6 +93,7 @@ async def _project_from_thread_id(thread_id: str | None) -> tuple[int, str, str]
     """
     if not thread_id:
         return None
+    await ensure_schema()
     async with get_session() as session:
         row = await session.execute(
             text("""
@@ -1038,7 +1038,16 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 project = await _ensure_project(settings.slack.sync_project_name)
 
             sender_name = message_info["sender_name"]
-            sender_agent = await _get_agent_by_name_optional(sender_name)
+            # Look up existing agent within the resolved project (not globally)
+            # This ensures Slack replies use an agent scoped to the correct project
+            async with get_session() as session:
+                result = await session.execute(
+                    select(Agent).where(
+                        cast(Any, Agent.project_id) == project.id,
+                        cast(Any, Agent.name) == sender_name,
+                    )
+                )
+                sender_agent = result.scalars().first()
 
             if not sender_agent:
                 if source in {"slack", "slack_events"}:
