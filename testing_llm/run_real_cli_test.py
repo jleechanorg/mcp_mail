@@ -500,9 +500,7 @@ Evidence Files:
     # Determine overall status
     all_started = all(a["started"] for a in agents)
     no_timeouts = all(not a.get("timed_out") for a in agents if a["started"])
-    exit_codes_ok = all(
-        a.get("exit_code") in (None, 0) for a in agents if a["started"] and not a.get("timed_out")
-    )
+    exit_codes_ok = all(a.get("exit_code") in (None, 0) for a in agents if a["started"] and not a.get("timed_out"))
 
     all_success = all_started and no_timeouts and exit_codes_ok
     results["status"] = "success" if all_success else "failed"
