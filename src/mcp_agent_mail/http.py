@@ -1009,19 +1009,34 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 cache_key_added = True
 
         try:
-            # Determine project: If thread_id is a numeric MCP message ID, use that message's
-            # original project so Slack replies go to the same project as the original message.
-            # Otherwise, fall back to sync_project_name for new threads from Slack.
+            # Determine project: Look up the original project for this thread so Slack replies
+            # go to the same project as the original message. Supports both numeric message IDs
+            # and string thread_ids (e.g., "bd-123", "slack_<channel>_<ts>").
             thread_id = message_info.get("thread_id")
             project = None
 
-            if thread_id and thread_id.isdigit():
-                # thread_id is a numeric MCP message ID - look up its project
+            if thread_id:
                 async with get_session() as session:
-                    result = await session.execute(
-                        text("SELECT p.id, p.slug, p.human_key FROM messages m JOIN projects p ON p.id = m.project_id WHERE m.id = :mid"),
-                        {"mid": int(thread_id)},
-                    )
+                    if thread_id.isdigit():
+                        # thread_id is a numeric MCP message ID - look up by message.id
+                        result = await session.execute(
+                            text("SELECT p.id, p.slug, p.human_key FROM messages m JOIN projects p ON p.id = m.project_id WHERE m.id = :mid"),
+                            {"mid": int(thread_id)},
+                        )
+                    else:
+                        # thread_id is a string - look up by messages.thread_id
+                        # This handles non-numeric thread_ids like "bd-123", "slack_C123_456.789"
+                        result = await session.execute(
+                            text("""
+                                SELECT p.id, p.slug, p.human_key
+                                FROM messages m
+                                JOIN projects p ON p.id = m.project_id
+                                WHERE m.thread_id = :tid
+                                ORDER BY m.id ASC
+                                LIMIT 1
+                            """),
+                            {"tid": thread_id},
+                        )
                     row = result.fetchone()
                     if row:
                         from .models import Project
