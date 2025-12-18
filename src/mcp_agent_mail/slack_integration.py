@@ -300,7 +300,9 @@ class SlackClient:
                 )
                 session.add(db_mapping)
                 await session.commit()
-                logger.debug(f"Persisted thread mapping to DB: MCP={mcp_thread_id} -> Slack={slack_channel_id}/{slack_thread_ts}")
+                logger.debug(
+                    f"Persisted thread mapping to DB: MCP={mcp_thread_id} -> Slack={slack_channel_id}/{slack_thread_ts}"
+                )
         except Exception as e:
             # Log but don't fail - in-memory cache is still valid
             logger.warning(f"Failed to persist thread mapping to DB: {e}")
@@ -323,9 +325,7 @@ class SlackClient:
         try:
             async with get_session() as session:
                 result = await session.execute(
-                    select(SlackThreadMappingModel).where(
-                        SlackThreadMappingModel.mcp_thread_id == mcp_thread_id
-                    )
+                    select(SlackThreadMappingModel).where(SlackThreadMappingModel.mcp_thread_id == mcp_thread_id)
                 )
                 db_mapping = result.scalars().first()
                 if db_mapping:
@@ -338,7 +338,9 @@ class SlackClient:
                     # Update in-memory cache
                     async with self._mappings_lock:
                         self._thread_mappings[mcp_thread_id] = mapping
-                        self._reverse_thread_mappings[(db_mapping.slack_channel_id, db_mapping.slack_thread_ts)] = mcp_thread_id
+                        self._reverse_thread_mappings[(db_mapping.slack_channel_id, db_mapping.slack_thread_ts)] = (
+                            mcp_thread_id
+                        )
                     return mapping
         except Exception as e:
             logger.warning(f"Failed to query thread mapping from DB: {e}")

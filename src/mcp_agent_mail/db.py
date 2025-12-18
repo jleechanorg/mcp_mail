@@ -10,7 +10,8 @@ from functools import wraps
 from typing import Any, TypeVar
 
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (AsyncEngine, AsyncSession,
+                                    async_sessionmaker, create_async_engine)
 from sqlmodel import SQLModel
 
 from .config import DatabaseSettings, Settings, get_settings

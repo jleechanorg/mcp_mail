@@ -6,14 +6,9 @@ from typing import cast
 import pytest
 from fastmcp import Client, Context
 
-from mcp_agent_mail.app import (
-    ToolExecutionError,
-    _enforce_capabilities,
-    _iso,
-    _parse_iso,
-    _parse_json_safely,
-    build_mcp_server,
-)
+from mcp_agent_mail.app import (ToolExecutionError, _enforce_capabilities,
+                                _iso, _parse_iso, _parse_json_safely,
+                                build_mcp_server)
 
 
 def test_iso_and_parse_helpers():

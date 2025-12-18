@@ -9,13 +9,28 @@ from pathlib import Path
 from typing import Any
 
 from mcp_agent_mail.config import Settings, get_settings
-from mcp_agent_mail.storage import AsyncFileLock, ensure_runtime_project_root
+from mcp_agent_mail.storage import (AsyncFileLock, ensure_archive,
+                                    ensure_runtime_project_root,
+                                    is_archive_enabled)
 from mcp_agent_mail.utils import safe_filesystem_component, slugify
 
 
 def _normalize_branch(value: str | None) -> str:
     branch = (value or "main").strip()
     return branch or "main"
+
+
+async def _resolve_project_root(settings: Settings, project_key: str) -> Path:
+    """Return the filesystem root where build slot artifacts should be stored.
+
+    Prefer the Git-backed project archive when enabled; fall back to a runtime
+    root when archive storage is disabled.
+    """
+    if is_archive_enabled(settings):
+        archive = await ensure_archive(settings, project_key)
+        return archive.root
+    slug = slugify(project_key)
+    return await ensure_runtime_project_root(settings, slug)
 
 
 def _slot_dir(archive_root: Path, slot: str) -> Path:
@@ -73,9 +88,7 @@ async def acquire_build_slot(
     # Enforce minimum TTL
     ttl_seconds = max(60, ttl_seconds)
 
-    # Resolve project runtime directory (does not require Git-backed archive)
-    slug = slugify(project_key)
-    project_root = await ensure_runtime_project_root(settings, slug)
+    project_root = await _resolve_project_root(settings, project_key)
 
     # Create slot directory
     slot_dir = _slot_dir(project_root, slot)
@@ -178,8 +191,7 @@ async def renew_build_slot(
     if not _worktrees_enabled(settings):
         return {"disabled": True}
 
-    slug = slugify(project_key)
-    project_root = await ensure_runtime_project_root(settings, slug)
+    project_root = await _resolve_project_root(settings, project_key)
 
     slot_dir = project_root / "build_slots" / safe_filesystem_component(slot)
     if not slot_dir.exists():
@@ -247,8 +259,7 @@ async def release_build_slot(
     if not _worktrees_enabled(settings):
         return {"disabled": True}
 
-    slug = slugify(project_key)
-    project_root = await ensure_runtime_project_root(settings, slug)
+    project_root = await _resolve_project_root(settings, project_key)
 
     slot_dir = project_root / "build_slots" / safe_filesystem_component(slot)
     if not slot_dir.exists():

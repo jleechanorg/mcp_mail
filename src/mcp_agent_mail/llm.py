@@ -17,7 +17,8 @@ from urllib.parse import urlparse
 
 import litellm
 import structlog
-from decouple import Config as DecoupleConfig, RepositoryEnv
+from decouple import Config as DecoupleConfig
+from decouple import RepositoryEnv
 from litellm.types.caching import LiteLLMCacheType
 
 from .config import get_settings

@@ -25,7 +25,8 @@ from fastmcp import Context, FastMCP
 from fastmcp.tools.tool import ToolResult  # type: ignore
 from git import Repo
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
-from sqlalchemy import asc, bindparam, delete, desc, func, or_, select, text, update
+from sqlalchemy import (Column, Integer, MetaData, Table, asc, bindparam,
+                        delete, desc, func, or_, select, text, update)
 from sqlalchemy.exc import IntegrityError, NoResultFound, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -33,40 +34,25 @@ from sqlalchemy.orm import aliased
 from . import rich_logger
 from .config import Settings, get_settings
 from .db import ensure_schema, get_session, init_engine
-from .guard import install_guard as install_guard_script, uninstall_guard as uninstall_guard_script
+from .guard import install_guard as install_guard_script
+from .guard import uninstall_guard as uninstall_guard_script
 from .llm import complete_system_user
-from .models import (
-    Agent,
-    FileReservation,
-    Message,
-    MessageRecipient,
-    Product,
-    ProductProjectLink,
-    Project,
-    ProjectSiblingSuggestion,
-)
-from .slack_integration import SlackClient, notify_slack_ack, notify_slack_message
-from .slots import (
-    acquire_build_slot as acquire_slot_impl,
-    release_build_slot as release_slot_impl,
-    renew_build_slot as renew_slot_impl,
-)
-from .storage import (
-    ProjectArchive,
-    ProjectStorageResolutionError,
-    archive_write_lock,
-    collect_lock_status,
-    ensure_archive,
-    heal_archive_locks,
-    is_archive_enabled,
-    process_attachments,
-    runtime_write_lock,
-    write_agent_deletion_marker,
-    write_agent_profile,
-    write_file_reservation_record,
-    write_file_reservation_record_runtime,
-    write_message_bundle,
-)
+from .models import (Agent, FileReservation, Message, MessageRecipient,
+                     Product, ProductProjectLink, Project,
+                     ProjectSiblingSuggestion)
+from .slack_integration import (SlackClient, notify_slack_ack,
+                                notify_slack_message)
+from .slots import acquire_build_slot as acquire_slot_impl
+from .slots import release_build_slot as release_slot_impl
+from .slots import renew_build_slot as renew_slot_impl
+from .storage import (ProjectArchive, ProjectStorageResolutionError,
+                      archive_write_lock, collect_lock_status, ensure_archive,
+                      heal_archive_locks, is_archive_enabled,
+                      process_attachments, runtime_write_lock,
+                      write_agent_deletion_marker, write_agent_profile,
+                      write_file_reservation_record,
+                      write_file_reservation_record_runtime,
+                      write_message_bundle)
 from .utils import generate_agent_name, sanitize_agent_name, slugify
 
 logger = logging.getLogger(__name__)
@@ -513,11 +499,12 @@ def _iso(dt: Any) -> str:
         if isinstance(dt, str):
             try:
                 parsed = datetime.fromisoformat(dt)
-                return parsed.astimezone(timezone.utc).isoformat()
+                return _ensure_utc(parsed).isoformat()
             except Exception:
                 return dt
-        if hasattr(dt, "astimezone"):
-            return dt.astimezone(timezone.utc).isoformat()  # type: ignore[no-any-return]
+        if isinstance(dt, datetime):
+            normalized = _ensure_utc(dt)
+            return normalized.isoformat() if normalized is not None else str(dt)
         return str(dt)
     except Exception:
         return str(dt)
@@ -2411,22 +2398,25 @@ async def _find_mentions_in_global_inbox(
 
     await ensure_schema()
     sender_alias = aliased(Agent)
+    # fts_messages is a SQLite FTS5 virtual table created by db._setup_fts(). It is not part of SQLModel metadata,
+    # so we reference it via a lightweight Table construct for ORM-safe joins.
+    fts_messages = Table(
+        "fts_messages",
+        MetaData(),
+        Column("rowid", Integer),
+        Column("message_id", Integer),
+        Column("subject"),
+        Column("body"),
+    )
+    fts_query = f'"{agent_name}"'
 
     async with get_session() as session:
-        # Use FTS5 MATCH query for fast full-text search
-        # FTS5 query: agent_name will match complete tokens (words) due to tokenization
-        # This is similar to word boundary matching but faster
         stmt = (
             select(Message, MessageRecipient.kind, sender_alias.name)
             .join(MessageRecipient, MessageRecipient.message_id == Message.id)
             .join(sender_alias, Message.sender_id == sender_alias.id)
-            .join(
-                # Join with FTS5 virtual table
-                text("fts_messages ON messages.id = fts_messages.rowid")
-            )
             .where(
                 MessageRecipient.agent_id == global_inbox_agent.id,
-                # FTS5 MATCH query - searches subject and body for the agent name
                 text("fts_messages MATCH :agent_name"),
             )
             .order_by(desc(Message.created_ts))
@@ -2440,9 +2430,9 @@ async def _find_mentions_in_global_inbox(
         # Apply limit after all filters for clarity and maintainability
         stmt = stmt.limit(limit)
 
-        # Execute with agent name as parameter (escaped for FTS5)
-        # FTS5 tokenizes on word boundaries, so this effectively does word matching
-        result = await session.execute(stmt, {"agent_name": f'"{agent_name}"'})
+        stmt = stmt.join(fts_messages, Message.id == fts_messages.c.rowid)
+
+        result = await session.execute(stmt, {"agent_name": fts_query})
         rows = result.all()
 
     messages: list[dict[str, Any]] = []
@@ -2908,7 +2898,7 @@ async def _update_recipient_timestamp(
         current: Optional[datetime] = getattr(rec, field, None)
         if current is not None:
             # Already set; return existing value without updating
-            return current
+            return _ensure_utc(current)
         # Set only if null
         stmt = (
             update(MessageRecipient)
@@ -2931,7 +2921,7 @@ async def _get_recipient_timestamp(agent: Agent, message_id: int, field: str) ->
                 MessageRecipient.agent_id == agent.id,
             )
         )
-        return result.scalars().first()
+        return _ensure_utc(result.scalars().first())
 
 
 async def _validate_agent_is_recipient(agent: Agent, message_id: int) -> None:
@@ -3411,7 +3401,8 @@ def build_mcp_server() -> FastMCP:
                 task.add_done_callback(_slack_done_cb)
             elif settings.slack.webhook_url:
                 # Fallback to webhook URL if no client available
-                from .slack_integration import format_mcp_message_for_slack, post_via_webhook
+                from .slack_integration import (format_mcp_message_for_slack,
+                                                post_via_webhook)
 
                 async def _post_webhook():
                     text, blocks = format_mcp_message_for_slack(
@@ -8381,7 +8372,8 @@ def build_mcp_server() -> FastMCP:
         # Filter unread (no read_ts recorded)
         unread: list[dict[str, Any]] = []
         async with get_session() as session:
-            from .models import MessageRecipient  # local import to avoid cycle at top
+            from .models import \
+                MessageRecipient  # local import to avoid cycle at top
 
             for item in items:
                 result = await session.execute(

@@ -5,12 +5,8 @@ from __future__ import annotations
 import pytest
 from fastmcp import Client
 
-from mcp_agent_mail.app import (
-    _EXTENDED_TOOL_REGISTRY,
-    CORE_TOOLS,
-    EXTENDED_TOOLS,
-    build_mcp_server,
-)
+from mcp_agent_mail.app import (_EXTENDED_TOOL_REGISTRY, CORE_TOOLS,
+                                EXTENDED_TOOLS, build_mcp_server)
 
 
 @pytest.mark.asyncio
@@ -26,12 +22,11 @@ async def test_list_extended_tools(isolated_env):
         assert "by_category" in result
         assert "tools" in result
 
-        # Check correct count (21 extended tools)
-        assert result["total"] == 21
+        # Check correct count (keep in sync with EXTENDED_TOOLS)
         assert result["total"] == len(EXTENDED_TOOLS)
 
         # Check all tools have valid metadata
-        assert len(result["tools"]) == 21
+        assert len(result["tools"]) == len(EXTENDED_TOOLS)
         for tool in result["tools"]:
             assert "name" in tool
             assert "category" in tool
@@ -44,9 +39,9 @@ async def test_list_extended_tools(isolated_env):
         all_categorized_tools = []
         for tools_list in result["by_category"].values():
             all_categorized_tools.extend(tools_list)
-        # All 21 extended tools should be categorized
+        # All extended tools should be categorized
         # (contact-related tools were removed from EXTENDED_TOOLS entirely)
-        assert len(all_categorized_tools) == 21
+        assert len(all_categorized_tools) == len(EXTENDED_TOOLS)
 
 
 @pytest.mark.asyncio
@@ -139,8 +134,8 @@ def test_core_and_extended_tools_disjoint():
 
 
 def test_extended_tools_count():
-    """Test that we have exactly 21 extended tools (includes 3 build-slot tools and 3 Slack tools)."""
-    assert len(EXTENDED_TOOLS) == 21, f"Expected 21 extended tools, but found {len(EXTENDED_TOOLS)}"
+    """Test that we have exactly 22 extended tools (includes build-slot and Slack tools)."""
+    assert len(EXTENDED_TOOLS) == 22, f"Expected 22 extended tools, but found {len(EXTENDED_TOOLS)}"
 
 
 def test_core_tools_count():

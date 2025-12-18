@@ -14,17 +14,12 @@ from typer.testing import CliRunner
 import mcp_agent_mail.share as share
 from mcp_agent_mail import cli as cli_module
 from mcp_agent_mail.config import clear_settings_cache
-from mcp_agent_mail.share import (
-    SCRUB_PRESETS,
-    ShareExportError,
-    build_materialized_views,
-    bundle_attachments,
-    create_performance_indexes,
-    finalize_snapshot_for_export,
-    maybe_chunk_database,
-    scrub_snapshot,
-    summarize_snapshot,
-)
+from mcp_agent_mail.share import (SCRUB_PRESETS, ShareExportError,
+                                  build_materialized_views, bundle_attachments,
+                                  create_performance_indexes,
+                                  finalize_snapshot_for_export,
+                                  maybe_chunk_database, scrub_snapshot,
+                                  summarize_snapshot)
 
 warnings.filterwarnings("ignore", category=ResourceWarning)
 

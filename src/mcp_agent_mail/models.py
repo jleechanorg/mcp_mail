@@ -136,9 +136,7 @@ class SlackThreadMapping(SQLModel, table=True):
     """
 
     __tablename__ = "slack_thread_mappings"
-    __table_args__ = (
-        UniqueConstraint("slack_channel_id", "slack_thread_ts", name="uq_slack_thread"),
-    )
+    __table_args__ = (UniqueConstraint("slack_channel_id", "slack_thread_ts", name="uq_slack_thread"),)
 
     id: Optional[int] = Field(default=None, primary_key=True)
     # The MCP thread ID (could be message ID as string, or thread_id field value)

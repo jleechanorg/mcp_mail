@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 
 from mcp_agent_mail.config import get_settings
-from mcp_agent_mail.guard import install_guard, render_precommit_script, uninstall_guard
+from mcp_agent_mail.guard import (install_guard, render_precommit_script,
+                                  uninstall_guard)
 from mcp_agent_mail.storage import ensure_archive
 
 

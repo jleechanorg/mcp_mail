@@ -8,7 +8,8 @@ import subprocess
 from pathlib import Path
 
 from .config import Settings
-from .storage import ensure_archive, ensure_runtime_project_root, is_archive_enabled
+from .storage import (ensure_archive, ensure_runtime_project_root,
+                      is_archive_enabled)
 
 __all__ = [
     "install_guard",
@@ -77,7 +78,7 @@ def render_precommit_script(file_reservations_dir: Path) -> str:
         "        try:",
         "            expires_dt = datetime.fromisoformat(expires)",
         "            if expires_dt < now:",
-                "                continue",
+        "                continue",
         "        except Exception:",
         "            pass",
         '    pattern = file_reservation.get("path_pattern")',

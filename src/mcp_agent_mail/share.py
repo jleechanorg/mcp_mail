@@ -141,6 +141,12 @@ def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
     return column in columns
 
 
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    """Check if a table exists in the snapshot database."""
+    cursor = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1", (table,))
+    return cursor.fetchone() is not None
+
+
 @dataclass(slots=True, frozen=True)
 class ProjectRecord:
     id: int
@@ -1038,6 +1044,21 @@ def build_materialized_views(snapshot_path: Path) -> None:
     try:
         # Check if thread_id column exists in messages table
         has_thread_id = _column_exists(conn, "messages", "thread_id")
+        has_message_recipients = _table_exists(conn, "message_recipients")
+
+        can_build_message_overview = all(
+            _column_exists(conn, "messages", column)
+            for column in (
+                "project_id",
+                "sender_id",
+                "subject",
+                "body_md",
+                "importance",
+                "ack_required",
+                "created_ts",
+                "attachments",
+            )
+        ) and _table_exists(conn, "agents")
 
         # Build thread_id expression based on column existence
         # Fallback to synthetic thread_id using message ID if column doesn't exist
@@ -1046,26 +1067,15 @@ def build_materialized_views(snapshot_path: Path) -> None:
         assert thread_id_expr in ("m.thread_id", "printf('msg:%d', m.id)")
 
         # Message overview materialized view
-        # Denormalizes messages with sender names for efficient list rendering
-        conn.executescript(
-            f"""
-            DROP TABLE IF EXISTS message_overview_mv;
-            CREATE TABLE message_overview_mv AS
-            SELECT
-                m.id,
-                m.project_id,
-                {thread_id_expr} AS thread_id,
-                m.subject,
-                m.importance,
-                m.ack_required,
-                m.created_ts,
-                a.name AS sender_name,
-                LENGTH(m.body_md) AS body_length,
-                json_array_length(m.attachments) AS attachment_count,
-                SUBSTR(COALESCE(m.body_md, ''), 1, 280) AS latest_snippet,
-                COALESCE(r.recipients, '') AS recipients
-            FROM messages m
-            JOIN agents a ON m.sender_id = a.id
+        # Denormalizes messages with sender names for efficient list rendering.
+        #
+        # Some legacy snapshots may not include full message metadata (subject/body/importance) or recipient tables;
+        # in that case, skip this view rather than failing the whole export pipeline.
+        conn.execute("DROP TABLE IF EXISTS message_overview_mv;")
+        if can_build_message_overview:
+            recipients_select = "COALESCE(r.recipients, '')" if has_message_recipients else "''"
+            recipients_join = (
+                """
             LEFT JOIN (
                 SELECT
                     mr.message_id,
@@ -1074,68 +1084,93 @@ def build_materialized_views(snapshot_path: Path) -> None:
                 LEFT JOIN agents ag ON ag.id = mr.agent_id
                 GROUP BY mr.message_id
             ) r ON r.message_id = m.id
-            ORDER BY m.created_ts DESC;
+                """
+                if has_message_recipients
+                else ""
+            )
+            conn.executescript(
+                f"""
+                CREATE TABLE message_overview_mv AS
+                SELECT
+                    m.id,
+                    m.project_id,
+                    {thread_id_expr} AS thread_id,
+                    m.subject,
+                    m.importance,
+                    m.ack_required,
+                    m.created_ts,
+                    a.name AS sender_name,
+                    LENGTH(m.body_md) AS body_length,
+                    json_array_length(m.attachments) AS attachment_count,
+                    SUBSTR(COALESCE(m.body_md, ''), 1, 280) AS latest_snippet,
+                    {recipients_select} AS recipients
+                FROM messages m
+                JOIN agents a ON m.sender_id = a.id
+                {recipients_join}
+                ORDER BY m.created_ts DESC;
 
-            -- Covering indexes for common query patterns
-            CREATE INDEX idx_msg_overview_created ON message_overview_mv(created_ts DESC);
-            CREATE INDEX idx_msg_overview_thread ON message_overview_mv(thread_id, created_ts DESC);
-            CREATE INDEX idx_msg_overview_project ON message_overview_mv(project_id, created_ts DESC);
-            CREATE INDEX idx_msg_overview_importance ON message_overview_mv(importance, created_ts DESC);
-            """
-        )
+                -- Covering indexes for common query patterns
+                CREATE INDEX idx_msg_overview_created ON message_overview_mv(created_ts DESC);
+                CREATE INDEX idx_msg_overview_thread ON message_overview_mv(thread_id, created_ts DESC);
+                CREATE INDEX idx_msg_overview_project ON message_overview_mv(project_id, created_ts DESC);
+                CREATE INDEX idx_msg_overview_importance ON message_overview_mv(importance, created_ts DESC);
+                """
+            )
 
         # Attachments by message materialized view
         # Flattens JSON attachments array for easier filtering and counting
-        conn.executescript(
-            f"""
-            DROP TABLE IF EXISTS attachments_by_message_mv;
-            CREATE TABLE attachments_by_message_mv AS
-            SELECT
-                m.id AS message_id,
-                m.project_id,
-                {thread_id_expr} AS thread_id,
-                m.created_ts,
-                json_extract(value, '$.type') AS attachment_type,
-                json_extract(value, '$.media_type') AS media_type,
-                json_extract(value, '$.path') AS path,
-                CAST(json_extract(value, '$.size_bytes') AS INTEGER) AS size_bytes
-            FROM messages m,
-                 json_each(m.attachments)
-            WHERE m.attachments != '[]';
+        conn.execute("DROP TABLE IF EXISTS attachments_by_message_mv;")
+        if _column_exists(conn, "messages", "attachments"):
+            conn.executescript(
+                f"""
+                CREATE TABLE attachments_by_message_mv AS
+                SELECT
+                    m.id AS message_id,
+                    m.project_id,
+                    {thread_id_expr} AS thread_id,
+                    m.created_ts,
+                    json_extract(value, '$.type') AS attachment_type,
+                    json_extract(value, '$.media_type') AS media_type,
+                    json_extract(value, '$.path') AS path,
+                    CAST(json_extract(value, '$.size_bytes') AS INTEGER) AS size_bytes
+                FROM messages m,
+                     json_each(m.attachments)
+                WHERE m.attachments != '[]';
 
-            -- Indexes for attachment queries
-            CREATE INDEX idx_attach_by_msg ON attachments_by_message_mv(message_id);
-            CREATE INDEX idx_attach_by_type ON attachments_by_message_mv(attachment_type, created_ts DESC);
-            CREATE INDEX idx_attach_by_project ON attachments_by_message_mv(project_id, created_ts DESC);
-            """
-        )
+                -- Indexes for attachment queries
+                CREATE INDEX idx_attach_by_msg ON attachments_by_message_mv(message_id);
+                CREATE INDEX idx_attach_by_type ON attachments_by_message_mv(attachment_type, created_ts DESC);
+                CREATE INDEX idx_attach_by_project ON attachments_by_message_mv(project_id, created_ts DESC);
+                """
+            )
 
         # FTS search overview materialized view
         # Pre-computes search result snippets and highlights for efficient rendering
         # Only created if FTS5 is available
         try:
             conn.execute("SELECT 1 FROM fts_messages LIMIT 1")
-            conn.executescript(
-                """
-                DROP TABLE IF EXISTS fts_search_overview_mv;
-                CREATE TABLE fts_search_overview_mv AS
-                SELECT
-                    m.rowid,
-                    m.id,
-                    m.subject,
-                    m.created_ts,
-                    m.importance,
-                    a.name AS sender_name,
-                    SUBSTR(m.body_md, 1, 200) AS snippet
-                FROM messages m
-                JOIN agents a ON m.sender_id = a.id
-                ORDER BY m.created_ts DESC;
+            conn.execute("DROP TABLE IF EXISTS fts_search_overview_mv;")
+            if can_build_message_overview:
+                conn.executescript(
+                    """
+                    CREATE TABLE fts_search_overview_mv AS
+                    SELECT
+                        m.rowid,
+                        m.id,
+                        m.subject,
+                        m.created_ts,
+                        m.importance,
+                        a.name AS sender_name,
+                        SUBSTR(m.body_md, 1, 200) AS snippet
+                    FROM messages m
+                    JOIN agents a ON m.sender_id = a.id
+                    ORDER BY m.created_ts DESC;
 
-                -- Index for FTS result lookups
-                CREATE INDEX idx_fts_overview_rowid ON fts_search_overview_mv(rowid);
-                CREATE INDEX idx_fts_overview_created ON fts_search_overview_mv(created_ts DESC);
-                """
-            )
+                    -- Index for FTS result lookups
+                    CREATE INDEX idx_fts_overview_rowid ON fts_search_overview_mv(rowid);
+                    CREATE INDEX idx_fts_overview_created ON fts_search_overview_mv(created_ts DESC);
+                    """
+                )
         except sqlite3.OperationalError:
             # FTS5 not available or not configured, skip this view
             pass
@@ -1201,6 +1236,10 @@ def create_performance_indexes(snapshot_path: Path) -> None:
               ON messages(sender_lower);
             """
         )
+
+        # Update planner stats after adding indexes to keep viewer queries fast.
+        conn.execute("PRAGMA analysis_limit=400")
+        conn.execute("ANALYZE")
 
         conn.commit()
     finally:
@@ -1778,8 +1817,10 @@ def verify_bundle(bundle_path: Path, *, public_key: Optional[str] = None) -> dic
         if not key_b64 or not signature_b64:
             raise ShareExportError("manifest.sig.json missing public_key or signature fields.")
         try:
-            from nacl.exceptions import BadSignatureError  # type: ignore[import-not-found]
-            from nacl.signing import VerifyKey  # type: ignore[import-not-found]
+            from nacl.exceptions import \
+                BadSignatureError  # type: ignore[import-not-found]
+            from nacl.signing import \
+                VerifyKey  # type: ignore[import-not-found]
         except ImportError as exc:  # pragma: no cover - optional dependency
             raise ShareExportError("PyNaCl is required to verify manifest signatures.") from exc
 
