@@ -90,7 +90,7 @@ async def test_e2e_build_slots_with_file_reservations(isolated_env, tmp_path: Pa
         # Agent1 releases the build slot
         result = await client.call_tool(
             "release_build_slot",
-            arguments={"project_key": "e2e-project", "agent_name": "Agent1", "slot": "backend-build"}
+            arguments={"project_key": "e2e-project", "agent_name": "Agent1", "slot": "backend-build"},
         )
         data = json.loads(result.content[0].text)
         assert data["released"] is True
