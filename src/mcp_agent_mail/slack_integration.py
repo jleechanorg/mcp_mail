@@ -306,10 +306,13 @@ class SlackClient:
         try:
             request_time = int(timestamp)
             current_time = int(time.time())
-            if abs(current_time - request_time) > 60 * 5:  # Slack recommends a 5 minute tolerance for replay safety
+            # Tolerance in seconds - configurable via env for debugging, default 5 minutes per Slack recommendations
+            tolerance = int(os.environ.get("SLACK_TIMESTAMP_TOLERANCE", 60 * 5))
+            diff = abs(current_time - request_time)
+            if diff > tolerance:
                 logger.warning(
-                    "Slack request timestamp outside tolerance (possible replay)",
-                    extra={"diff": abs(current_time - request_time)},
+                    f"Slack request timestamp outside tolerance: diff={diff}s (tolerance={tolerance}s, "
+                    f"request_time={request_time}, current_time={current_time})"
                 )
                 return False
 
