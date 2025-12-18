@@ -23,7 +23,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
-from sqlalchemy import func, select, text
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError, NoResultFound
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.types import Receive, Scope, Send
@@ -34,7 +34,6 @@ from .app import (
     _expire_stale_file_reservations,
     _get_agent_by_name_optional,
     _message_frontmatter,
-    _retire_conflicting_agents,
     _tool_metrics_snapshot,
     build_mcp_server,
     get_project_sibling_data,
@@ -1079,34 +1078,16 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 project = await _ensure_project(settings.slack.sync_project_name)
 
             sender_name = message_info["sender_name"]
-            # Agent names are globally unique. First check if an agent with this
-            # name already exists anywhere (could be in a different project).
-            existing_global_agent = await _get_agent_by_name_optional(sender_name)
-
-            sender_agent: Agent | None = None
-            if existing_global_agent:
-                if existing_global_agent.project_id == project.id:
-                    # Agent already exists in the target project - reuse it
-                    sender_agent = existing_global_agent
-                    logger.debug(
-                        "slack_bridge_agent_reused",
-                        agent_name=sender_name,
-                        project_id=project.id,
-                    )
-                else:
-                    # Agent exists in a different project. For Slack bridge agents,
-                    # retire the old one and create in the target project so each
-                    # Slack sync project can have its own bridge identity.
-                    logger.info(
-                        "slack_bridge_agent_project_migration",
-                        agent_name=sender_name,
-                        old_project_id=existing_global_agent.project_id,
-                        new_project_id=project.id,
-                    )
-                    await _retire_conflicting_agents(
-                        sender_name, project_to_keep=project, settings=settings
-                    )
-                    # sender_agent remains None so we create a new one below
+            # Agent names are globally unique. Treat Slack-derived senders as a shared/global
+            # identity: reuse the same agent across projects to avoid cross-project mutation.
+            sender_agent = await _get_agent_by_name_optional(sender_name)
+            if sender_agent:
+                logger.debug(
+                    "slack_bridge_agent_reused",
+                    agent_name=sender_name,
+                    agent_project_id=sender_agent.project_id,
+                    target_project_id=project.id,
+                )
 
             if not sender_agent:
                 if source in {"slack", "slack_events"}:
@@ -1131,37 +1112,10 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         logger.info("slack_bridge_agent_created", agent_name=sender_name)
                     except IntegrityError:
                         await session.rollback()
-                        # Agent names are globally unique (case-insensitive). If the Slack bridge
-                        # name is already active in a different project, retire the conflicting
-                        # agent(s) so this project can claim the name.
-                        await _retire_conflicting_agents(sender_name, project_to_keep=project, settings=settings)
-
-                        # Retry after retirement.
-                        sender_agent = Agent(
-                            name=sender_name,
-                            project_id=project.id,
-                            program=program,
-                            model=model,
-                            task_description="Bridges Slack messages into MCP Agent Mail",
-                            is_active=True,
-                        )
-                        session.add(sender_agent)
-                        try:
-                            await session.commit()
-                            await session.refresh(sender_agent)
-                        except IntegrityError:
-                            await session.rollback()
-                            result = await session.execute(
-                                select(Agent).where(
-                                    cast(Any, Agent.project_id) == project.id,
-                                    func.lower(Agent.name) == sender_name.lower(),
-                                    cast(Any, Agent.is_active).is_(True),
-                                )
-                            )
-                            existing_agent = result.scalars().first()
-                            if not existing_agent:
-                                raise
-                            sender_agent = existing_agent
+                        # Race: another request created this globally-unique agent first.
+                        sender_agent = await _get_agent_by_name_optional(sender_name)
+                        if not sender_agent:
+                            raise
 
             async with get_session() as session:
                 result = await session.execute(
