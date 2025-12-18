@@ -146,7 +146,7 @@ def _build_engine(settings: DatabaseSettings) -> AsyncEngine:
     if is_sqlite:
 
         @event.listens_for(engine.sync_engine, "connect")
-        def set_sqlite_pragma(dbapi_conn, connection_record):
+        def set_sqlite_pragma(dbapi_conn: Any, connection_record: Any) -> None:  # pragma: no cover - db hook
             """Set SQLite PRAGMAs for better concurrent performance on each connection."""
             cursor = dbapi_conn.cursor()
             # Enable WAL mode for concurrent reads/writes
@@ -155,6 +155,8 @@ def _build_engine(settings: DatabaseSettings) -> AsyncEngine:
             cursor.execute("PRAGMA synchronous=NORMAL")
             # Set busy timeout (wait up to 60 seconds for locks, increased from 30)
             cursor.execute("PRAGMA busy_timeout=60000")
+            # Enforce foreign key constraints (SQLite defaults to OFF)
+            cursor.execute("PRAGMA foreign_keys=ON")
             cursor.close()
 
     return engine
@@ -434,6 +436,18 @@ def _migrate_project_id_nullable(connection) -> None:
 
 def _recreate_agents_table_nullable_project_id(connection) -> None:
     """Recreate agents table with nullable project_id."""
+    invalid_count_result = connection.exec_driver_sql(
+        """
+        SELECT COUNT(*)
+        FROM agents
+        WHERE name IS NULL OR program IS NULL OR model IS NULL
+        """
+    )
+    invalid_count = invalid_count_result.scalar_one()
+    if invalid_count > 0:
+        raise RuntimeError(
+            "Cannot migrate agents table: rows contain NULL in required columns (name/program/model)."
+        )
     # Create new table with nullable project_id
     connection.exec_driver_sql(
         """
@@ -456,20 +470,23 @@ def _recreate_agents_table_nullable_project_id(connection) -> None:
     )
 
     # Copy data from old table
-    connection.exec_driver_sql(
-        """
-        INSERT INTO agents_new (
-            id, project_id, name, program, model, task_description,
-            inception_ts, last_active_ts, attachments_policy, contact_policy,
-            is_active, deleted_ts, is_placeholder
+    try:
+        connection.exec_driver_sql(
+            """
+            INSERT INTO agents_new (
+                id, project_id, name, program, model, task_description,
+                inception_ts, last_active_ts, attachments_policy, contact_policy,
+                is_active, deleted_ts, is_placeholder
+            )
+            SELECT
+                id, project_id, name, program, model, task_description,
+                inception_ts, last_active_ts, attachments_policy, contact_policy,
+                is_active, deleted_ts, is_placeholder
+            FROM agents
+            """
         )
-        SELECT
-            id, project_id, name, program, model, task_description,
-            inception_ts, last_active_ts, attachments_policy, contact_policy,
-            is_active, deleted_ts, is_placeholder
-        FROM agents
-        """
-    )
+    except Exception as exc:  # pragma: no cover - defensive logging
+        raise RuntimeError("Failed to migrate data from agents to agents_new") from exc
 
     # Drop old table and rename new one
     connection.exec_driver_sql("DROP TABLE agents")
@@ -478,10 +495,27 @@ def _recreate_agents_table_nullable_project_id(connection) -> None:
     # Recreate indexes
     connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_agents_project_id ON agents(project_id)")
     connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_agents_name ON agents(name)")
+    connection.exec_driver_sql(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_agents_name_ci ON agents(lower(name)) WHERE is_active = 1"
+    )
 
 
 def _recreate_messages_table_nullable_project_id(connection) -> None:
     """Recreate messages table with nullable project_id."""
+    invalid_count_result = connection.exec_driver_sql(
+        """
+        SELECT COUNT(*)
+        FROM messages
+        WHERE sender_id IS NULL
+           OR subject IS NULL
+           OR body_md IS NULL
+        """
+    )
+    invalid_count = invalid_count_result.scalar_one()
+    if invalid_count > 0:
+        raise RuntimeError(
+            "Cannot migrate messages table: NULL values found in required columns (sender_id/subject/body_md)."
+        )
     # Create new table with nullable project_id
     connection.exec_driver_sql(
         """
@@ -501,18 +535,21 @@ def _recreate_messages_table_nullable_project_id(connection) -> None:
     )
 
     # Copy data from old table
-    connection.exec_driver_sql(
-        """
-        INSERT INTO messages_new (
-            id, project_id, sender_id, thread_id, subject, body_md,
-            importance, ack_required, created_ts, attachments
+    try:
+        connection.exec_driver_sql(
+            """
+            INSERT INTO messages_new (
+                id, project_id, sender_id, thread_id, subject, body_md,
+                importance, ack_required, created_ts, attachments
+            )
+            SELECT
+                id, project_id, sender_id, thread_id, subject, body_md,
+                importance, ack_required, created_ts, attachments
+            FROM messages
+            """
         )
-        SELECT
-            id, project_id, sender_id, thread_id, subject, body_md,
-            importance, ack_required, created_ts, attachments
-        FROM messages
-        """
-    )
+    except Exception as exc:  # pragma: no cover - defensive logging
+        raise RuntimeError("Failed to migrate data from messages to messages_new") from exc
 
     # Drop old table and rename new one
     connection.exec_driver_sql("DROP TABLE messages")

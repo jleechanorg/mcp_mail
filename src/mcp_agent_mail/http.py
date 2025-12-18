@@ -28,11 +28,12 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.types import Receive, Scope, Send
 
 from .app import (
+    DEFAULT_PROJECT_KEY,
     _create_message,
     _ensure_project,
-    _get_default_project,
     _expire_stale_file_reservations,
     _get_agent_by_name_optional,
+    _get_default_project,
     _message_frontmatter,
     _tool_metrics_snapshot,
     build_mcp_server,
@@ -1032,7 +1033,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         # For thread replies, try to find the original message's project
                         thread_id = message_info.get("thread_id")
                         project = None
-                        
+                        thread_context_checked = False
+
                         if thread_id:
                             # Try to look up project from existing thread messages
                             async with get_session() as session:
@@ -1041,12 +1043,14 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                     {"tid": thread_id}
                                 )
                                 row = result.fetchone()
-                                if row and row[0]:
+                                if row is not None:
+                                    thread_context_checked = True
+                                if row and row[0] is not None:
                                     from .models import Project
                                     project = await session.get(Project, row[0])
-                        
+
                         # If no project from thread context, use default or sync project for backwards compat
-                        if project is None:
+                        if project is None and not thread_context_checked:
                             if settings.slack.sync_project_name:
                                 project = await _ensure_project(settings.slack.sync_project_name)
                             else:
@@ -1061,7 +1065,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                             async with get_session() as session:
                                 sender_agent = Agent(
                                     name=sender_name,
-                                    project_id=project.id,
+                                    project_id=project.id if project else None,
                                     program="slack_bridge",
                                     model="slack-events",
                                     task_description="Bridges Slack messages into MCP Agent Mail",
@@ -1087,17 +1091,16 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
                         # Get all active agents as recipients (broadcast)
                         async with get_session() as session:
-                            result = await session.execute(
-                                select(Agent).where(
-                                    cast(Any, Agent.project_id) == project.id,
-                                    cast(Any, Agent.is_active).is_(True),
-                                    cast(Any, Agent.id) != sender_agent.id,  # Don't send to self
-                                )
-                            )
+                            filters = [cast(Any, Agent.is_active).is_(True), cast(Any, Agent.id) != sender_agent.id]
+                            if project is None:
+                                filters.append(cast(Any, Agent.project_id).is_(None))
+                            else:
+                                filters.append(cast(Any, Agent.project_id) == project.id)
+                            result = await session.execute(select(Agent).where(*filters))
                             recipient_agents = list(result.scalars().all())
 
                         if not recipient_agents:
-                            logger.warning("slack_no_recipients", project=project.slug)
+                            logger.warning("slack_no_recipients", project=(project.slug if project else DEFAULT_PROJECT_KEY))
                             return JSONResponse({"ok": True, "message": "No active recipients"})
 
                         # Create message
@@ -1130,7 +1133,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
                         async def _persist_archive() -> None:
                             try:
-                                archive = await ensure_archive(settings, project.slug)
+                                archive_project = project or await _get_default_project()
+                                archive = await ensure_archive(settings, archive_project.slug)
                                 await write_message_bundle(
                                     archive=archive,
                                     message=frontmatter,
