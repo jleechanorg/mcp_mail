@@ -1020,7 +1020,9 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     if thread_id.isdigit():
                         # thread_id is a numeric MCP message ID - look up by message.id
                         result = await session.execute(
-                            text("SELECT p.id, p.slug, p.human_key FROM messages m JOIN projects p ON p.id = m.project_id WHERE m.id = :mid"),
+                            text(
+                                "SELECT p.id, p.slug, p.human_key FROM messages m JOIN projects p ON p.id = m.project_id WHERE m.id = :mid"
+                            ),
                             {"mid": int(thread_id)},
                         )
                     else:
@@ -1040,6 +1042,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     row = result.fetchone()
                     if row:
                         from .models import Project
+
                         project = Project(id=row[0], slug=row[1], human_key=row[2])
                         logger.info(
                             "slack_reply_routed_to_original_project",

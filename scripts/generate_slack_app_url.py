@@ -83,9 +83,7 @@ def generate_slack_app_url(server_url: str | None = None) -> str:
     if server_url:
         # Deep copy and update the request URL
         manifest = json.loads(json.dumps(MANIFEST))
-        manifest["settings"]["event_subscriptions"]["request_url"] = (
-            f"{server_url.rstrip('/')}/slack/events"
-        )
+        manifest["settings"]["event_subscriptions"]["request_url"] = f"{server_url.rstrip('/')}/slack/events"
 
     # URL-encode the manifest JSON
     manifest_json = json.dumps(manifest, separators=(",", ":"))
@@ -95,9 +93,7 @@ def generate_slack_app_url(server_url: str | None = None) -> str:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Generate Slack App creation URL with pre-filled manifest"
-    )
+    parser = argparse.ArgumentParser(description="Generate Slack App creation URL with pre-filled manifest")
     parser.add_argument(
         "--server-url",
         help="Your MCP Agent Mail server URL (e.g., https://mcp.example.com)",
@@ -140,6 +136,7 @@ def main():
 
     if args.open:
         import webbrowser
+
         webbrowser.open(url)
         print("✓ Opened URL in browser")
 
