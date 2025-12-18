@@ -48,7 +48,7 @@ try:
     orchestration_module = importlib.import_module("orchestration.task_dispatcher")
     CLI_PROFILES = getattr(orchestration_module, "CLI_PROFILES", {})
     ORCHESTRATION_AVAILABLE = True
-except ImportError:
+except ImportError:  # Orchestration framework not installed - tests will skip gracefully
     CLI_PROFILES = {}
     ORCHESTRATION_AVAILABLE = False
 
@@ -156,7 +156,10 @@ class BaseCLITest:
             return False, f"{MCP_AGENT_MAIL_SERVER} unreachable at {host}:{port} ({exc})"
 
     def _parse_tool_names_from_output(self, output: str) -> set[str]:
-        """Parse tool names from CLI output."""
+        """Parse tool names from CLI output.
+
+        Note: This is a best-effort heuristic that may produce false positives.
+        """
         tokens = set(re.findall(r"[A-Za-z_]+", output.lower()))
         return tokens
 
@@ -342,18 +345,26 @@ class BaseCLITest:
 
             # Handle stdin redirection from profile
             stdin_template = self.cli_profile.get("stdin_template", "/dev/null")
-            with contextlib.ExitStack() as stack:
-                stdin_file = None
-                if stdin_template != "/dev/null":
-                    stdin_file = stack.enter_context(Path(prompt_file).open())
-
+            stdin_file = None
+            if stdin_template != "/dev/null":
+                with Path(prompt_file).open() as stdin_file:
+                    result = subprocess.run(
+                        cli_command,
+                        shell=False,  # Security: avoid shell injection
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                        stdin=stdin_file,
+                        env={**os.environ, "NO_COLOR": "1"},
+                    )
+            else:
                 result = subprocess.run(
                     cli_command,
                     shell=False,  # Security: avoid shell injection
                     capture_output=True,
                     text=True,
                     timeout=timeout,
-                    stdin=stdin_file,
+                    stdin=None,
                     env={**os.environ, "NO_COLOR": "1"},
                 )
 
