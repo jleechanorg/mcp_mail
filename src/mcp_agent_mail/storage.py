@@ -29,6 +29,19 @@ logger = logging.getLogger(__name__)
 _IMAGE_PATTERN = re.compile(r"!\[(?P<alt>[^\]]*)\]\((?P<path>[^)]+)\)")
 
 
+def is_archive_enabled(settings: Settings) -> bool:
+    """Check if archive storage is enabled (either local or project-key based).
+
+    Archive storage is optional for some core features (for example, basic
+    project and agent registration), which can operate using the SQLite
+    database alone. However, many higher-level application operations
+    (such as message archiving and related Git-backed workflows) still
+    require archive storage to be enabled and will call :func:`ensure_archive`.
+    Archive is used for git-based file storage of messages as .md files.
+    """
+    return settings.storage.local_archive_enabled or settings.storage.project_key_storage_enabled
+
+
 @dataclass(slots=True)
 class ProjectArchive:
     settings: Settings

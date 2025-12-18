@@ -86,6 +86,32 @@ async def _project_identifiers_from_id(pid: int | None) -> tuple[str | None, str
         return (res[0], res[1])
 
 
+async def _project_from_thread_id(thread_id: str | None) -> tuple[int, str, str] | None:
+    """Look up the project of the first message in a thread.
+
+    Returns (project_id, slug, human_key) if a message with thread_id exists,
+    otherwise None. Used to route Slack replies to the original message's project.
+    """
+    if not thread_id:
+        return None
+    async with get_session() as session:
+        row = await session.execute(
+            text("""
+                SELECT p.id, p.slug, p.human_key
+                FROM messages m
+                JOIN projects p ON m.project_id = p.id
+                WHERE m.thread_id = :thread_id
+                ORDER BY m.id ASC
+                LIMIT 1
+            """),
+            {"thread_id": thread_id},
+        )
+        res = row.fetchone()
+        if res:
+            return (res[0], res[1], res[2])
+        return None
+
+
 __all__ = ["build_http_app", "main"]
 
 
@@ -1029,31 +1055,23 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
                     # Create MCP message from Slack event
                     try:
-                        # Determine project from thread context or use default
-                        # For thread replies, try to find the original message's project
+                        # Determine project: use original thread's project for replies,
+                        # fall back to slack-sync or default project for new messages
                         thread_id = message_info.get("thread_id")
                         project = None
-                        thread_context_checked = False
-
                         if thread_id:
-                            # Try to look up project from existing thread messages
-                            async with get_session() as session:
-                                result = await session.execute(
-                                    text("SELECT project_id FROM messages WHERE thread_id = :tid LIMIT 1"),
-                                    {"tid": thread_id},
+                            thread_project = await _project_from_thread_id(thread_id)
+                            if thread_project:
+                                # Use original message's project for thread replies
+                                _project_id, slug, human_key = thread_project
+                                project = await _ensure_project(human_key)
+                                logger.info(
+                                    "slack_reply_using_thread_project",
+                                    thread_id=thread_id,
+                                    project_slug=slug,
                                 )
-                                row = result.fetchone()
-                                if row is not None:
-                                    if row[0] is None:
-                                        thread_context_checked = True
-                                    else:
-                                        from .models import Project
-
-                                        project = await session.get(Project, row[0])
-                                        thread_context_checked = project is not None
-
-                        # If no project from thread context, use default or sync project for backwards compat
-                        if project is None and not thread_context_checked:
+                        if not project:
+                            # New message or thread not found - use slack-sync or default
                             if settings.slack.sync_project_name:
                                 project = await _ensure_project(settings.slack.sync_project_name)
                             else:
