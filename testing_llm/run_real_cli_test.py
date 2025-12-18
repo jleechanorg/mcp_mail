@@ -200,12 +200,7 @@ def run_cli_agent(
     mcp_config: dict[str, Any] = MCP_CLI_CONFIG.get(cli_name, {})
     config_env = mcp_config.get("mcp_config_env")
     config_file = mcp_config.get("mcp_config_file")
-    if (
-        isinstance(config_env, str)
-        and config_env
-        and isinstance(config_file, str)
-        and config_file
-    ):
+    if isinstance(config_env, str) and config_env and isinstance(config_file, str) and config_file:
         env[config_env] = config_file
     env["NO_COLOR"] = "1"  # Disable color output for cleaner logs
 
@@ -411,12 +406,14 @@ def run_multi_agent_test(
         )
 
         agent_pid = process.pid if process else None
-        agents.append({
-            "name": agent_name,
-            "started": success,
-            "message": msg,
-            "pid": agent_pid,
-        })
+        agents.append(
+            {
+                "name": agent_name,
+                "started": success,
+                "message": msg,
+                "pid": agent_pid,
+            }
+        )
 
         if process:
             processes.append((agent_name, process, output_stack))
@@ -451,7 +448,7 @@ def run_multi_agent_test(
 ======================================
 
 Test Directory: {test_dir}
-Timestamp: {results['timestamp']}
+Timestamp: {results["timestamp"]}
 CLI: {cli_name}
 Run ID: {run_id}
 

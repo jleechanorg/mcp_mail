@@ -324,9 +324,7 @@ class BaseCLITest:
 
         try:
             # Build command using CLI profile template
-            command_template = self.cli_profile.get(
-                "command_template", "{binary} -p {prompt_file}"
-            )
+            command_template = self.cli_profile.get("command_template", "{binary} -p {prompt_file}")
             cli_command_str = command_template.format(
                 binary=cli_path,
                 prompt_file=prompt_file,
@@ -425,9 +423,7 @@ class BaseCLITest:
             ],
             "summary": {
                 "passed": sum(1 for r in self.results if r.passed and not r.skipped),
-                "failed": sum(
-                    1 for r in self.results if not r.passed and not r.skipped
-                ),
+                "failed": sum(1 for r in self.results if not r.passed and not r.skipped),
                 "skipped": sum(1 for r in self.results if r.skipped),
             },
         }
@@ -444,11 +440,7 @@ class BaseCLITest:
         Returns:
             Exit code (0 = success, 1 = failure)
         """
-        display_name = (
-            self.cli_profile.get("display_name", self.CLI_NAME)
-            if self.cli_profile
-            else "Unknown"
-        )
+        display_name = self.cli_profile.get("display_name", self.CLI_NAME) if self.cli_profile else "Unknown"
         print("=" * 70)
         print(f"{display_name} - MCP Mail Integration Tests (REAL CLI)")
         print("=" * 70)
@@ -468,11 +460,7 @@ class BaseCLITest:
         if self.check_cli_available():
             self.record("cli", True, "Installed and responding")
         else:
-            cli_binary = (
-                self.cli_profile.get("binary", self.CLI_NAME)
-                if self.cli_profile
-                else self.CLI_NAME
-            )
+            cli_binary = self.cli_profile.get("binary", self.CLI_NAME) if self.cli_profile else self.CLI_NAME
             self.record(
                 "cli",
                 False,

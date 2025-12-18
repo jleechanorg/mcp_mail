@@ -93,15 +93,11 @@ class MCPMailClaudeCLITest(ClaudeCLITest):
 
         # Basic CLI invocation test
         print("\n[TEST] Basic CLI invocation...")
-        success, output = self.run_cli(
-            "Respond with exactly: 'MCP Mail integration test successful'"
-        )
+        success, output = self.run_cli("Respond with exactly: 'MCP Mail integration test successful'")
         if success and "successful" in output.lower():
             self.record("basic_invocation", True, "CLI responded correctly")
         elif success:
-            self.record(
-                "basic_invocation", True, f"CLI responded: {output[:100]}..."
-            )
+            self.record("basic_invocation", True, f"CLI responded: {output[:100]}...")
         else:
             self.record("basic_invocation", False, f"CLI failed: {output[:200]}")
 
@@ -280,9 +276,9 @@ if __name__ == "__main__":
         results = []
         for name, cls in test_classes.items():
             if is_cli_available(name):
-                print(f"\n{'='*70}")
+                print(f"\n{'=' * 70}")
                 print(f"Running {name.upper()} tests...")
-                print(f"{'='*70}\n")
+                print(f"{'=' * 70}\n")
                 test = cls()
                 results.append((name, test.run_all_tests()))
             else:
