@@ -85,7 +85,7 @@ class MCPMailClaudeCLITest(ClaudeCLITest):
                 skip=True,
             )
             return self._finish()
-            self.record("cli", True, "Installed and responding")
+        self.record("cli", True, "Installed and responding")
 
         print("\n[TEST] MCP Agent Mail tools via CLI...")
         if not self.validate_mcp_mail_access(timeout=120):

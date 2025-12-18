@@ -166,14 +166,12 @@ def run_cli_agent(
     agent_name: str,
     prompt: str,
     test_dir: Path,
-    timeout: int = 120,
     dry_run: bool = False,
 ) -> tuple[
     bool,
     str,
     Optional[subprocess.Popen[str]],
     Optional[contextlib.ExitStack],
-    Optional[int],
 ]:
     """Run a CLI agent with the given prompt.
 
@@ -184,11 +182,10 @@ def run_cli_agent(
         agent_name: Name for this agent instance
         prompt: The prompt to send
         test_dir: Test directory for outputs
-        timeout: Timeout in seconds
         dry_run: If True, don't actually execute
 
     Returns:
-        Tuple of (success, message, process, output_stack, timeout_used)
+        Tuple of (success, message, process, output_stack)
     """
     prompt_file = test_dir / "prompts" / f"{agent_name}_task.txt"
     output_file = test_dir / "outputs" / f"{agent_name}_output.txt"
@@ -196,7 +193,7 @@ def run_cli_agent(
     try:
         command = build_cli_command(cli_name, prompt, prompt_file)
     except (ValueError, FileNotFoundError) as e:
-        return False, str(e), None, None, None
+        return False, str(e), None, None
 
     # Set up environment with MCP config
     env = os.environ.copy()
@@ -216,7 +213,7 @@ def run_cli_agent(
     print(f"  Output: {output_file}")
 
     if dry_run:
-        return True, "Dry run - command not executed", None, None, timeout
+        return True, "Dry run - command not executed", None, None
 
     output_stack: Optional[contextlib.ExitStack] = None
     try:
@@ -234,12 +231,12 @@ def run_cli_agent(
         )
 
         pid_message = f"Started with PID {process.pid}" if process else "Started"
-        return True, pid_message, process, output_stack, timeout
+        return True, pid_message, process, output_stack
 
     except Exception as e:
         if output_stack:
             output_stack.close()
-        return False, f"Failed to start: {e}", None, None, None
+        return False, f"Failed to start: {e}", None, None
 
 
 def create_agent_prompts(run_id: str, project_key: str) -> dict[str, str]:
@@ -405,12 +402,11 @@ def run_multi_agent_test(
             if not dry_run:
                 time.sleep(delay)
 
-        success, msg, process, output_stack, agent_timeout = run_cli_agent(
+        success, msg, process, output_stack = run_cli_agent(
             cli_name=cli_name,
             agent_name=agent_name,
             prompt=prompt,
             test_dir=test_dir,
-            timeout=timeout,
             dry_run=dry_run,
         )
 
@@ -423,7 +419,7 @@ def run_multi_agent_test(
         })
 
         if process:
-            processes.append((agent_name, process, output_stack, agent_timeout))
+            processes.append((agent_name, process, output_stack))
         elif output_stack:
             output_stack.close()
 
@@ -435,10 +431,9 @@ def run_multi_agent_test(
     # Wait for completion
     if not dry_run and processes:
         print("\n[WAIT] Waiting for agents to complete...")
-        for agent_name, process, output_stack, agent_timeout in processes:
+        for agent_name, process, output_stack in processes:
             try:
-                process_timeout = agent_timeout or timeout
-                process.wait(timeout=process_timeout)
+                process.wait(timeout=timeout)
                 print(f"  DONE: {agent_name} (exit code: {process.returncode})")
             except subprocess.TimeoutExpired:
                 print(f"  TIMEOUT: {agent_name} - killing process")

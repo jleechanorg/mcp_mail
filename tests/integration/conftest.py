@@ -40,7 +40,8 @@ def init_git_repo(path: Path) -> None:
     """Initialize a git repository with basic configuration.
 
     This function wraps the git_utils.init_git_repo for backward compatibility
-    with existing tests.
+    with existing tests. Unlike the underlying utility, this wrapper returns
+    None. Use the git_repo fixture if you need a GitRunner instance.
 
     Args:
         path: Path to initialize as a git repository
