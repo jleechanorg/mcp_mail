@@ -192,6 +192,13 @@ def get_global_inbox_name(project: Project) -> str:
     return f"global-inbox-{project.slug}"
 
 
+async def ensure_archive_if_enabled(settings: Settings, project: Project) -> ProjectArchive | None:
+    """Return the project archive when enabled; otherwise, skip archive work."""
+    if not is_archive_enabled(settings):
+        return None
+    return await ensure_archive(settings, project.slug, project_key=project.human_key)
+
+
 class ToolExecutionError(Exception):
     def __init__(
         self, error_type: str, message: str, *, recoverable: bool = True, data: Optional[dict[str, Any]] = None
@@ -1493,9 +1500,8 @@ async def _get_or_create_agent(
                             session.add(agent)
                             await session.commit()
                             await session.refresh(agent)
-                            # Write updated profile to archive (only if archive is enabled)
-                            if is_archive_enabled(settings):
-                                archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+                            archive = await ensure_archive_if_enabled(settings, project)
+                            if archive:
                                 async with _archive_write_lock(archive):
                                     await write_agent_profile(archive, _agent_to_dict(agent))
                             return agent
@@ -1621,9 +1627,8 @@ async def _get_or_create_agent(
                         "hint": "Retry the operation; if it persists, call register_agent with force_reclaim=True",
                     },
                 ) from exc
-    # Write agent profile to archive (only if archive is enabled)
-    if is_archive_enabled(settings):
-        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+    archive = await ensure_archive_if_enabled(settings, project)
+    if archive:
         async with _archive_write_lock(archive):
             await write_agent_profile(archive, _agent_to_dict(agent))
     return agent
@@ -1701,10 +1706,10 @@ async def _create_placeholder_agent(
                 return existing
             raise ValueError(f"Failed to create placeholder agent: {sanitized}") from exc
 
-    # Write placeholder profile to archive
-    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-    async with _archive_write_lock(archive):
-        await write_agent_profile(archive, _agent_to_dict(agent))
+    archive = await ensure_archive_if_enabled(settings, project)
+    if archive:
+        async with _archive_write_lock(archive):
+            await write_agent_profile(archive, _agent_to_dict(agent))
     return agent
 
 
@@ -1716,7 +1721,7 @@ async def _delete_agent(project: Project, name: str, settings: Settings) -> dict
     2. Deletes associated MessageRecipient records
     3. Deletes messages sent by the agent
     4. Deletes file reservations held by the agent
-    5. Writes a deletion marker to the Git archive
+    5. Writes a deletion marker to the Git archive when archive storage is enabled
 
     Returns a dict with deletion statistics.
     """
@@ -1772,9 +1777,10 @@ async def _delete_agent(project: Project, name: str, settings: Settings) -> dict
         await session.execute(delete(Agent).where(Agent.id == agent_id))
 
     # Write deletion marker to Git archive
-    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-    async with _archive_write_lock(archive):
-        await write_agent_deletion_marker(archive, agent_name, stats)
+    archive = await ensure_archive_if_enabled(settings, project)
+    if archive:
+        async with _archive_write_lock(archive):
+            await write_agent_deletion_marker(archive, agent_name, stats)
 
     return stats
 
@@ -1824,9 +1830,10 @@ async def _retire_agent(agent: Agent, project: Project, settings: Settings) -> A
         await session.refresh(db_agent)
         agent = db_agent
 
-    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-    async with _archive_write_lock(archive):
-        await write_agent_profile(archive, _agent_to_dict(agent))
+    archive = await ensure_archive_if_enabled(settings, project)
+    if archive:
+        async with _archive_write_lock(archive):
+            await write_agent_profile(archive, _agent_to_dict(agent))
     return agent
 
 
@@ -3513,8 +3520,9 @@ def build_mcp_server() -> FastMCP:
         - Accepts any string as the project identifier (human_key).
         - Computes a stable slug from `human_key` (lowercased, safe characters) so
           multiple agents can refer to the same project consistently.
-        - Ensures DB row exists and that the on-disk archive is initialized
-          (e.g., `messages/`, `agents/`, `file_reservations/` directories).
+        - Ensures the DB row exists and, when archive storage is enabled, initializes
+          the on-disk archive (e.g., `messages/`, `agents/`, `file_reservations/`
+          directories).
 
         CRITICAL: Project Identity Rules
         ---------------------------------
@@ -3570,13 +3578,12 @@ def build_mcp_server() -> FastMCP:
         Idempotency
         -----------
         - Safe to call multiple times. If the project already exists, the existing
-          record is returned and the archive is ensured on disk (no destructive changes).
+          record is returned and, when enabled, the archive is ensured on disk (no
+          destructive changes).
         """
         await ctx.info(f"Ensuring project for key '{human_key}'.")
         project = await _ensure_project(human_key)
-        # Archive is optional - only initialize if enabled
-        if is_archive_enabled(settings):
-            await ensure_archive(settings, project.slug, project_key=project.human_key)
+        await ensure_archive_if_enabled(settings, project)
         return _project_to_dict(project)
 
     @mcp.tool(name="register_agent")
@@ -3603,7 +3610,8 @@ def build_mcp_server() -> FastMCP:
         inbox_include_bodies: bool = False,
     ) -> dict[str, Any]:
         """
-        Create or update an agent identity within a project and persist its profile to Git.
+        Create or update an agent identity within a project and persist its profile to
+        Git when archive storage is enabled.
 
         IMPORTANT: Global Namespace
         ---------------------------
@@ -3623,7 +3631,9 @@ def build_mcp_server() -> FastMCP:
         - If `name` is omitted, a random adjective+noun name is auto-generated (e.g., "BlueLake").
         - Reusing the same `name` updates the profile (program/model/task) and
           refreshes `last_active_ts`.
-        - A `profile.json` file is written under `agents/<Name>/` in the project archive.
+        - When archive storage is enabled, a `profile.json` file is written under
+          `agents/<Name>/` in the project archive. If archive is disabled, registration
+          still succeeds but Git persistence is skipped.
         - Providing a name that is active in another project automatically retires that identity so you can claim the handle.
 
         CRITICAL: Agent Naming Rules
@@ -3685,9 +3695,7 @@ def build_mcp_server() -> FastMCP:
         """
         # Auto-create project if it doesn't exist (allows any string as project_key)
         project = await _ensure_project(project_key)
-        # Archive is optional - only initialize if enabled
-        if is_archive_enabled(settings):
-            await ensure_archive(settings, project.slug, project_key=project.human_key)
+        await ensure_archive_if_enabled(settings, project)
 
         if settings.tools_log_enabled:
             try:
