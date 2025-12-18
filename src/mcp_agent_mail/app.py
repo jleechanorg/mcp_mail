@@ -90,6 +90,13 @@ CLUSTER_PRODUCT = "product"
 # Global inbox configuration
 
 
+async def _ensure_archive_if_enabled(settings: Settings, project: Project) -> ProjectArchive | None:
+    """Initialize and return the project archive when archive storage is enabled."""
+    if not is_archive_enabled(settings):
+        return None
+    return await ensure_archive(settings, project.slug, project_key=project.human_key)
+
+
 def _resolve_project_identity(target_path: str) -> dict[str, Any]:
     """
     Resolve project identity using markers and git metadata.
@@ -3517,8 +3524,9 @@ def build_mcp_server() -> FastMCP:
         - Accepts any string as the project identifier (human_key).
         - Computes a stable slug from `human_key` (lowercased, safe characters) so
           multiple agents can refer to the same project consistently.
-        - Ensures DB row exists and that the on-disk archive is initialized
-          (e.g., `messages/`, `agents/`, `file_reservations/` directories).
+        - Ensures the DB row exists and, when archive storage is enabled, initializes
+          the on-disk archive (e.g., `messages/`, `agents/`, `file_reservations/`
+          directories).
 
         CRITICAL: Project Identity Rules
         ---------------------------------
@@ -3574,13 +3582,12 @@ def build_mcp_server() -> FastMCP:
         Idempotency
         -----------
         - Safe to call multiple times. If the project already exists, the existing
-          record is returned and the archive is ensured on disk (no destructive changes).
+          record is returned and the archive is ensured on disk when archive storage
+          is enabled (no destructive changes).
         """
         await ctx.info(f"Ensuring project for key '{human_key}'.")
         project = await _ensure_project(human_key)
-        # Archive is optional - only initialize if enabled
-        if is_archive_enabled(settings):
-            await ensure_archive(settings, project.slug, project_key=project.human_key)
+        await _ensure_archive_if_enabled(settings, project)
         return _project_to_dict(project)
 
     @mcp.tool(name="register_agent")
@@ -3607,7 +3614,7 @@ def build_mcp_server() -> FastMCP:
         inbox_include_bodies: bool = False,
     ) -> dict[str, Any]:
         """
-        Create or update an agent identity within a project and persist its profile to Git.
+        Create or update an agent identity within a project and persist its profile to Git when enabled.
 
         IMPORTANT: Global Namespace
         ---------------------------
@@ -3627,7 +3634,10 @@ def build_mcp_server() -> FastMCP:
         - If `name` is omitted, a random adjective+noun name is auto-generated (e.g., "BlueLake").
         - Reusing the same `name` updates the profile (program/model/task) and
           refreshes `last_active_ts`.
-        - A `profile.json` file is written under `agents/<Name>/` in the project archive.
+        - Registration succeeds even when archive storage is disabled; in that case
+          Git profile writes are skipped.
+        - When archive storage is enabled, a `profile.json` file is written under
+          `agents/<Name>/` in the project archive.
         - Providing a name that is active in another project automatically retires that identity so you can claim the handle.
 
         CRITICAL: Agent Naming Rules
@@ -3689,9 +3699,7 @@ def build_mcp_server() -> FastMCP:
         """
         # Auto-create project if it doesn't exist (allows any string as project_key)
         project = await _ensure_project(project_key)
-        # Archive is optional - only initialize if enabled
-        if is_archive_enabled(settings):
-            await ensure_archive(settings, project.slug, project_key=project.human_key)
+        await _ensure_archive_if_enabled(settings, project)
 
         if settings.tools_log_enabled:
             try:
