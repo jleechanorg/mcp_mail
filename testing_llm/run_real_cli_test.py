@@ -210,12 +210,15 @@ def run_cli_agent(
     if dry_run:
         return True, "Dry run - command not executed", None, None
 
+    # Note: We keep the output file open and return the stack to the caller
+    # The caller MUST close the output_stack after the process completes
     output_stack: Optional[contextlib.ExitStack] = None
     try:
         # Open output file for writing and keep handle alive until caller closes
         output_stack = contextlib.ExitStack()
         output_handle = output_stack.enter_context(output_file.open("w"))
-        # Start process (non-blocking)
+        # Start process (non-blocking) - stdout writes to output_handle
+        # The file handle MUST stay open until process completes
         process = subprocess.Popen(
             command,
             stdout=output_handle,
@@ -225,8 +228,7 @@ def run_cli_agent(
             text=True,
         )
 
-        pid_message = f"Started with PID {process.pid}" if process else "Started"
-        return True, pid_message, process, output_stack
+        return True, f"Started with PID {process.pid}", process, output_stack
 
     except Exception as e:
         if output_stack:
@@ -405,7 +407,8 @@ def run_multi_agent_test(
             dry_run=dry_run,
         )
 
-        agent_pid = process.pid if process else None
+        # Safely get PID only if process is not None
+        agent_pid = process.pid if process is not None else None
         agents.append(
             {
                 "name": agent_name,

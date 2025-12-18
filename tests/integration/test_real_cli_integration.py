@@ -92,6 +92,8 @@ class MCPMailClaudeCLITest(ClaudeCLITest):
             return self._finish()
 
         # Basic CLI invocation test
+        # The validate_mcp_mail_access() call above already tests MCP tool availability
+        # by prompting the CLI to list tools. This is the actual MCP functionality test.
         print("\n[TEST] Basic CLI invocation...")
         success, output = self.run_cli("Respond with exactly: 'MCP Mail integration test successful'")
         if success and "successful" in output.lower():
