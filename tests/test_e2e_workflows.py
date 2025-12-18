@@ -45,18 +45,24 @@ async def test_e2e_build_slots_with_file_reservations(isolated_env, monkeypatch,
     async with Client(server) as client:
         await client.call_tool("ensure_project", {"human_key": "e2e-project"})
         # Register agents
-        await client.call_tool("register_agent", {
-            "project_key": "e2e-project",
-            "name": "Agent1",
-            "program": "cli",
-            "model": "test",
-        })
-        await client.call_tool("register_agent", {
-            "project_key": "e2e-project",
-            "name": "Agent2",
-            "program": "cli",
-            "model": "test",
-        })
+        await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "e2e-project",
+                "name": "Agent1",
+                "program": "cli",
+                "model": "test",
+            },
+        )
+        await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "e2e-project",
+                "name": "Agent2",
+                "program": "cli",
+                "model": "test",
+            },
+        )
 
         # Agent1 creates a file reservation
         # create_file_reservation -> file_reservation_paths
@@ -312,18 +318,24 @@ async def test_e2e_multi_agent_workflow(isolated_env, monkeypatch, tmp_path: Pat
     async with Client(server) as client:
         await client.call_tool("ensure_project", {"human_key": "multi-agent-project"})
         # Register agents
-        await client.call_tool("register_agent", {
-            "project_key": "multi-agent-project",
-            "name": "FrontendAgent",
-            "program": "cli",
-            "model": "test",
-        })
-        await client.call_tool("register_agent", {
-            "project_key": "multi-agent-project",
-            "name": "BackendAgent",
-            "program": "cli",
-            "model": "test",
-        })
+        await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "multi-agent-project",
+                "name": "FrontendAgent",
+                "program": "cli",
+                "model": "test",
+            },
+        )
+        await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "multi-agent-project",
+                "name": "BackendAgent",
+                "program": "cli",
+                "model": "test",
+            },
+        )
 
         # Frontend agent claims frontend build slot
         result = await client.call_tool(
@@ -425,7 +437,11 @@ async def test_e2e_multi_agent_workflow(isolated_env, monkeypatch, tmp_path: Pat
             "call_extended_tool",
             {
                 "tool_name": "release_build_slot",
-                "arguments": {"project_key": "multi-agent-project", "agent_name": "FrontendAgent", "slot": "frontend-build"},
+                "arguments": {
+                    "project_key": "multi-agent-project",
+                    "agent_name": "FrontendAgent",
+                    "slot": "frontend-build",
+                },
             },
         )
         assert json.loads(result.content[0].text)["result"]["released"] is True
@@ -434,7 +450,11 @@ async def test_e2e_multi_agent_workflow(isolated_env, monkeypatch, tmp_path: Pat
             "call_extended_tool",
             {
                 "tool_name": "release_build_slot",
-                "arguments": {"project_key": "multi-agent-project", "agent_name": "BackendAgent", "slot": "backend-build"},
+                "arguments": {
+                    "project_key": "multi-agent-project",
+                    "agent_name": "BackendAgent",
+                    "slot": "backend-build",
+                },
             },
         )
         assert json.loads(result.content[0].text)["result"]["released"] is True
