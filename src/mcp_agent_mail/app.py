@@ -3706,7 +3706,11 @@ def build_mcp_server() -> FastMCP:
         -------
         dict
             Agent profile augmented with { recent_commits: [] }.
-            If agent not found, returns { "error": "...", "suggestions": [...] }.
+
+        Raises
+        ------
+        ToolExecutionError
+            If the agent cannot be found. The error payload includes suggestions.
         """
         project = await _get_project_by_identifier(project_key)
 
@@ -3725,12 +3729,15 @@ def build_mcp_server() -> FastMCP:
                 suggestion_text = f" Did you mean one of: {suggestions}?"
             error_msg = f"Agent '{agent_name}' not found.{suggestion_text}"
             await ctx.warning(error_msg)
-            return {
-                "error": f"Agent '{agent_name}' not registered for project '{project.human_key}'.{suggestion_text}",
-                "agent_name": agent_name,
-                "suggestions": suggestions,
-                "_tip": "Use resource://agents to see all registered agents globally.",
-            }
+            raise ToolExecutionError(
+                "NOT_FOUND",
+                f"Agent '{agent_name}' not registered for project '{project.human_key}'.{suggestion_text}",
+                data={
+                    "agent_name": agent_name,
+                    "suggestions": suggestions,
+                    "tip": "Use resource://agents to see all registered agents globally.",
+                },
+            )
 
         # Get the agent's actual project for commit history and logging
         # This matters when agent was found via global fallback (different from requested project)
@@ -3938,11 +3945,11 @@ def build_mcp_server() -> FastMCP:
         }}}
         ```
 
-        2) Inline image (auto-convert to WebP and inline if small):
+        2) Inline image (referenced via path or data URI; recorded as metadata only):
         ```json
         {"jsonrpc":"2.0","id":"6a","method":"tools/call","params":{"name":"send_message","arguments":{
           "project_key":"/abs/path/backend","sender_name":"GreenCastle","to":["BlueLake"],
-          "subject":"Diagram","body_md":"![diagram](docs/flow.png)","convert_images":true
+          "subject":"Diagram","body_md":"![diagram](docs/flow.png)"
         }}}
         ```
 
@@ -5836,7 +5843,7 @@ def build_mcp_server() -> FastMCP:
         ---------
         - Conflicts are reported if an overlapping active exclusive reservation exists held by another agent
         - Glob matching is symmetric (`fnmatchcase(a,b)` or `fnmatchcase(b,a)`), including exact matches
-        - When granted, a JSON artifact is written under `file_reservations/<sha1(path)>.json` and the DB is updated
+        - The database is the source of truth; archive artifacts are disabled when archive storage is removed
         - TTL must be >= 60 seconds (enforced by the server settings/policy)
 
         Do / Don't

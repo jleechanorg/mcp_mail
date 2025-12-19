@@ -7,7 +7,9 @@ All message storage is handled via SQLite database.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -222,5 +224,7 @@ async def write_file_reservation_artifacts(
 
 async def ensure_runtime_project_root(settings: Settings, project_slug: str) -> Path:
     """Stub function - archive functionality has been removed."""
-    path = Path("/tmp/mcp_mail_dummy_runtime") / project_slug
+    base = Path(tempfile.gettempdir()) / "mcp_mail_dummy_runtime"
+    path = base / project_slug
+    await asyncio.to_thread(path.mkdir, parents=True, exist_ok=True)
     return path

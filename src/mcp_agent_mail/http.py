@@ -43,7 +43,6 @@ from .app import (
 from .config import Settings, get_settings
 from .db import ensure_schema, get_session
 from .storage import (
-    archive_write_lock,
     collect_lock_status,
     ensure_archive,
     get_agent_communication_graph,
@@ -55,8 +54,6 @@ from .storage import (
     get_recent_commits,
     get_timeline_commits,
     is_archive_enabled,
-    write_agent_profile,
-    write_file_reservation_artifacts,
     write_message_bundle,
 )
 
@@ -678,34 +675,10 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                                     if isinstance(hid2, int):
                                                         holder_agent_id = hid2
                                                         (
-                                                            project_slug,
-                                                            project_human_key,
+                                                            _project_slug,
+                                                            _project_human_key,
                                                         ) = await _project_identifiers_from_id(project_id)
-                                                        # Write profile.json to archive
-                                                        if (
-                                                            is_archive_enabled(settings)
-                                                            and project_slug
-                                                            and project_human_key is not None
-                                                        ):
-                                                            archive = await ensure_archive(
-                                                                settings,
-                                                                project_slug,
-                                                                project_key=project_human_key,
-                                                            )
-                                                            async with archive_write_lock(archive):
-                                                                await write_agent_profile(
-                                                                    archive,
-                                                                    {
-                                                                        "id": holder_agent_id,
-                                                                        "name": settings.ack_escalation_claim_holder_name,
-                                                                        "program": "ops",
-                                                                        "model": "system",
-                                                                        "project_slug": project_slug,
-                                                                        "inception_ts": now.astimezone().isoformat(),
-                                                                        "inception_iso": now.astimezone().isoformat(),
-                                                                        "task": "ops-escalation",
-                                                                    },
-                                                                )
+                                                        # Archive storage has been removed; no profile artifacts are written.
                                         async with get_session() as s2:
                                             await s2.execute(
                                                 text(
@@ -726,29 +699,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                                 },
                                             )
                                             await s2.commit()
-                                        # Also write JSON artifact to archive
-                                        project_slug, project_human_key = await _project_identifiers_from_id(project_id)
-                                        expires_at = now + _dt.timedelta(
-                                            seconds=settings.ack_escalation_claim_ttl_seconds
-                                        )
-                                        payload = {
-                                            "project": project_slug,
-                                            "agent": settings.ack_escalation_claim_holder_name or "ops",
-                                            "path_pattern": pattern,
-                                            "exclusive": settings.ack_escalation_claim_exclusive,
-                                            "reason": "ack-overdue",
-                                            "created_ts": now.astimezone().isoformat(),
-                                            "expires_ts": expires_at.astimezone().isoformat(),
-                                            "released_ts": None,
-                                        }
-                                        if project_slug:
-                                            payload["project"] = project_human_key or project_slug
-                                            await write_file_reservation_artifacts(
-                                                settings,
-                                                project_slug,
-                                                [cast(dict[str, object], payload)],
-                                                project_key=project_human_key,
-                                            )
+                                        # Archive storage has been removed; no file-reservation artifacts are written.
                                     except Exception:
                                         pass
                 except Exception:
