@@ -1285,6 +1285,25 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 if message_info:
                     slack_ts = message_info.get("slack_ts")
                     slack_channel = message_info.get("slack_channel")
+                    cache_key = (slack_channel, slack_ts) if slack_ts and slack_channel else None
+
+                    # Check for duplicate events before processing
+                    if cache_key:
+                        async with _slack_event_cache_lock:
+                            if cache_key in _slack_event_cache:
+                                logger.info(
+                                    "slack_message_duplicate_skipped",
+                                    slack_ts=slack_ts,
+                                    channel=slack_channel,
+                                )
+                                return JSONResponse({"ok": True, "message": "Duplicate Slack event skipped"})
+
+                            # Add to cache before processing to prevent concurrent duplicates
+                            while len(_slack_event_cache_order) >= _SLACK_EVENT_CACHE_MAX_SIZE:
+                                old = _slack_event_cache_order.popleft()
+                                _slack_event_cache.discard(old)
+                            _slack_event_cache.add(cache_key)
+                            _slack_event_cache_order.append(cache_key)
 
                     # Create MCP message from Slack event
                     try:
@@ -1408,16 +1427,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
                         _archive_task = asyncio.create_task(_persist_archive())
                         _ = _archive_task
-
-                        # Record dedupe key after successful creation
-                        if slack_ts and slack_channel:
-                            key = (slack_channel, slack_ts)
-                            _slack_event_cache.add(key)
-                            _slack_event_cache_order.append(key)
-                            # Trim cache if over capacity (deque handles oldest eviction)
-                            while len(_slack_event_cache_order) > _SLACK_EVENT_CACHE_MAX_SIZE:
-                                old = _slack_event_cache_order.popleft()
-                                _slack_event_cache.discard(old)
 
                         # Capture thread mapping so outbound replies stay in the same Slack thread
                         slack_client_ref = None
