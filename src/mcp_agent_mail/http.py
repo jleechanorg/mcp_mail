@@ -1644,11 +1644,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             from bleach.css_sanitizer import CSSSanitizer  # type: ignore
         except Exception:  # tinycss2 may be missing; degrade gracefully
             CSSSanitizer = None  # type: ignore
-        from jinja2 import (
-            Environment,
-            FileSystemLoader,  # type: ignore
-            select_autoescape,
-        )
+        from jinja2 import FileSystemLoader  # type: ignore  # noqa: I001
+        from jinja2 import Environment, select_autoescape
 
         templates_root = Path(__file__).resolve().parent / "templates"
         env = Environment(
