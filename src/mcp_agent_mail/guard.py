@@ -10,7 +10,6 @@ import asyncio
 from pathlib import Path
 
 from .config import Settings
-from .storage import ProjectArchive
 
 __all__ = [
     "install_guard",
@@ -34,18 +33,18 @@ async def _write_guard_stub(hook_path: Path) -> None:
     await asyncio.to_thread(_write)
 
 
-def render_precommit_script(archive: ProjectArchive) -> str:
+def render_precommit_script(file_reservations_dir: Path) -> str:
     """Return stub pre-commit script.
 
-    NOTE: Archive storage has been removed. This keeps the legacy signature for compatibility.
+    NOTE: Archive storage has been removed. The file_reservations_dir is ignored.
     """
     return _guard_stub_script()
 
 
-def render_prepush_script(file_reservations_dir: Path | ProjectArchive) -> str:
+def render_prepush_script(file_reservations_dir: Path) -> str:
     """Return stub pre-push script.
 
-    NOTE: Archive storage has been removed. This keeps the legacy signature for compatibility.
+    NOTE: Archive storage has been removed. The file_reservations_dir is ignored.
     """
     return _guard_stub_script()
 
