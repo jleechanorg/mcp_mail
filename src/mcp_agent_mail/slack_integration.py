@@ -290,19 +290,37 @@ class SlackClient:
             self._thread_mappings[mcp_thread_id] = mapping
             self._reverse_thread_mappings[(slack_channel_id, slack_thread_ts)] = mcp_thread_id
 
-        # Persist to database
+        # Persist to database (upsert pattern to handle duplicates)
         try:
+            from sqlalchemy import select
+
             async with get_session() as session:
-                db_mapping = SlackThreadMappingModel(
-                    mcp_thread_id=mcp_thread_id,
-                    slack_channel_id=slack_channel_id,
-                    slack_thread_ts=slack_thread_ts,
+                # Check for existing mapping
+                stmt = select(SlackThreadMappingModel).where(
+                    SlackThreadMappingModel.slack_channel_id == slack_channel_id,
+                    SlackThreadMappingModel.slack_thread_ts == slack_thread_ts,
                 )
-                session.add(db_mapping)
+                result = await session.execute(stmt)
+                existing = result.scalar_one_or_none()
+
+                if existing:
+                    # Update existing mapping
+                    existing.mcp_thread_id = mcp_thread_id
+                    logger.debug(
+                        f"Updated existing thread mapping in DB: MCP={mcp_thread_id} -> Slack={slack_channel_id}/{slack_thread_ts}"
+                    )
+                else:
+                    # Insert new mapping
+                    db_mapping = SlackThreadMappingModel(
+                        mcp_thread_id=mcp_thread_id,
+                        slack_channel_id=slack_channel_id,
+                        slack_thread_ts=slack_thread_ts,
+                    )
+                    session.add(db_mapping)
+                    logger.debug(
+                        f"Persisted new thread mapping to DB: MCP={mcp_thread_id} -> Slack={slack_channel_id}/{slack_thread_ts}"
+                    )
                 await session.commit()
-                logger.debug(
-                    f"Persisted thread mapping to DB: MCP={mcp_thread_id} -> Slack={slack_channel_id}/{slack_thread_ts}"
-                )
         except Exception as e:
             # Log but don't fail - in-memory cache is still valid
             logger.warning(f"Failed to persist thread mapping to DB: {e}")
