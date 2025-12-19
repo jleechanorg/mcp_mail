@@ -6,6 +6,7 @@ since it previously depended on the archive's file_reservations directory.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from .config import Settings
@@ -39,23 +40,23 @@ def render_prepush_script(archive: ProjectArchive) -> str:
 async def install_guard(settings: Settings, project_slug: str, repo_path: Path) -> Path:
     """Install the pre-commit guard for the given project into the repo.
 
-    NOTE: Archive storage has been removed. This is a no-op.
+    NOTE: Archive storage has been removed. This is a no-op that returns a placeholder path.
     """
-    raise NotImplementedError("Archive storage has been removed. Guard installation is disabled.")
+    return repo_path / ".git" / "hooks" / "pre-commit"
 
 
 async def install_prepush_guard(settings: Settings, project_slug: str, repo_path: Path) -> Path:
     """Install the pre-push guard for the given project into the repo.
 
-    NOTE: Archive storage has been removed. This is a no-op.
+    NOTE: Archive storage has been removed. This is a no-op that returns a placeholder path.
     """
-    raise NotImplementedError("Archive storage has been removed. Guard installation is disabled.")
+    return repo_path / ".git" / "hooks" / "pre-push"
 
 
 async def uninstall_guard(repo_path: Path) -> bool:
     """Remove the pre-commit guard from repo, returning True if removed."""
     hook_path = repo_path / ".git" / "hooks" / "pre-commit"
     if hook_path.exists():
-        hook_path.unlink()
+        await asyncio.to_thread(hook_path.unlink)
         return True
     return False

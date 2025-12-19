@@ -7,8 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Final, Literal, cast
 
-from decouple import Config as DecoupleConfig
-from decouple import RepositoryEmpty, RepositoryEnv
+from decouple import Config as DecoupleConfig, RepositoryEmpty, RepositoryEnv
 
 _DOTENV_PATH: Final[Path] = Path(".env")
 _DOTENV_REPO: Final[RepositoryEnv | RepositoryEmpty] = (

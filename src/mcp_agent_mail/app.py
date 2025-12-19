@@ -25,8 +25,7 @@ from fastmcp import Context, FastMCP
 from fastmcp.tools.tool import ToolResult  # type: ignore
 from git import Repo
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
-from sqlalchemy import (asc, bindparam, delete, desc, func, or_, select, text,
-                        update)
+from sqlalchemy import asc, bindparam, delete, desc, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, NoResultFound, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -34,19 +33,25 @@ from sqlalchemy.orm import aliased
 from . import rich_logger
 from .config import Settings, get_settings
 from .db import ensure_schema, get_session, init_engine
-from .guard import install_guard as install_guard_script
-from .guard import uninstall_guard as uninstall_guard_script
+from .guard import install_guard as install_guard_script, uninstall_guard as uninstall_guard_script
 from .llm import complete_system_user
-from .models import (Agent, FileReservation, Message, MessageRecipient,
-                     Product, ProductProjectLink, Project,
-                     ProjectSiblingSuggestion)
-from .slack_integration import (SlackClient, notify_slack_ack,
-                                notify_slack_message)
-from .slots import acquire_build_slot as acquire_slot_impl
-from .slots import release_build_slot as release_slot_impl
-from .slots import renew_build_slot as renew_slot_impl
-from .storage import (ProjectArchive, ProjectStorageResolutionError,
-                      collect_lock_status, heal_archive_locks)
+from .models import (
+    Agent,
+    FileReservation,
+    Message,
+    MessageRecipient,
+    Product,
+    ProductProjectLink,
+    Project,
+    ProjectSiblingSuggestion,
+)
+from .slack_integration import SlackClient, notify_slack_ack, notify_slack_message
+from .slots import (
+    acquire_build_slot as acquire_slot_impl,
+    release_build_slot as release_slot_impl,
+    renew_build_slot as renew_slot_impl,
+)
+from .storage import ProjectArchive, ProjectStorageResolutionError, collect_lock_status, heal_archive_locks
 from .utils import generate_agent_name, sanitize_agent_name, slugify
 
 logger = logging.getLogger(__name__)
@@ -2511,6 +2516,7 @@ def _canonical_relpath_for_message(project: Project, message: Message, archive) 
     """Resolve the canonical repo-relative path for a message markdown file.
 
     NOTE: Archive storage has been removed. This always returns None.
+    Deprecated: parameters are retained for backwards compatibility.
     """
     return None
 
@@ -2519,6 +2525,7 @@ async def _commit_info_for_message(settings: Settings, project: Project, message
     """Fetch commit metadata for the canonical message file.
 
     NOTE: Archive storage has been removed. This always returns None.
+    Deprecated: parameters are retained for backwards compatibility.
     """
     return None
 
@@ -3054,12 +3061,24 @@ def build_mcp_server() -> FastMCP:
                     }
                 }
 
-        # Body processing - attachments handled inline (archive storage removed)
+        # Body processing - attachments tracked as metadata only (archive storage removed)
         processed_body = body_md
         attachments_meta: list[dict[str, object]] = []
         # Detect inline data URI images in body
         if "data:image" in body_md:
             attachments_meta.append({"type": "inline", "media_type": "image/webp"})
+        if attachment_paths:
+            for attachment_path in attachment_paths:
+                try:
+                    path_str = str(Path(attachment_path))
+                except TypeError:
+                    continue
+                attachments_meta.append({"type": "file", "path": path_str})
+            await ctx.warning(
+                "Attachment paths are recorded as metadata only; files are no longer copied into storage."
+            )
+        if convert_images_override is not None:
+            await ctx.warning("convert_images override is deprecated; images are no longer converted or copied.")
 
         db_write_start = time.perf_counter()
         message = await _create_message(
@@ -3147,8 +3166,7 @@ def build_mcp_server() -> FastMCP:
                 task.add_done_callback(_slack_done_cb)
             elif settings.slack.webhook_url:
                 # Fallback to webhook URL if no client available
-                from .slack_integration import (format_mcp_message_for_slack,
-                                                post_via_webhook)
+                from .slack_integration import format_mcp_message_for_slack, post_via_webhook
 
                 async def _post_webhook():
                     text, blocks = format_mcp_message_for_slack(
@@ -3165,8 +3183,6 @@ def build_mcp_server() -> FastMCP:
                 task = asyncio.create_task(_post_webhook())
                 task.add_done_callback(_slack_done_cb)
 
-        if payload is None:
-            raise RuntimeError("Message payload was not generated.")
         return payload
 
     @mcp.tool(name="health_check", description="Return basic readiness information for the Agent Mail server.")
@@ -3647,7 +3663,7 @@ def build_mcp_server() -> FastMCP:
         commit_limit: int = 5,
     ) -> dict[str, Any]:
         """
-        Return enriched profile details for an agent, optionally including recent archive commits.
+        Return enriched profile details for an agent.
 
         IMPORTANT: Global Namespace
         ---------------------------
@@ -3669,14 +3685,14 @@ def build_mcp_server() -> FastMCP:
         agent_name : str
             Agent name to look up (use resource://agents to discover names globally).
         include_recent_commits : bool
-            If true, include latest commits touching the project archive authored by the configured git author.
+            Deprecated. Retained for compatibility; recent commits are no longer available.
         commit_limit : int
-            Maximum number of recent commits to include.
+            Deprecated. Retained for compatibility; recent commits are no longer available.
 
         Returns
         -------
         dict
-            Agent profile augmented with { recent_commits: [{hexsha, summary, authored_ts}] } when requested.
+            Agent profile augmented with { recent_commits: [] }.
             If agent not found, returns { "error": "...", "suggestions": [...] }.
         """
         project = await _get_project_by_identifier(project_key)
@@ -3823,7 +3839,7 @@ def build_mcp_server() -> FastMCP:
         auto_contact_if_blocked: bool = False,
     ) -> dict[str, Any]:
         """
-        Send a Markdown message to one or more recipients and persist canonical and mailbox copies to Git.
+        Send a Markdown message to one or more recipients and persist it to SQLite.
 
         IMPORTANT: Global Namespace
         ---------------------------
@@ -3843,10 +3859,8 @@ def build_mcp_server() -> FastMCP:
         What this does
         --------------
         - Stores message (and recipients) in the database; updates sender's activity
-        - Writes a canonical `.md` under `messages/YYYY/MM/`
-        - Writes sender outbox and per-recipient inbox copies
-        - Optionally converts referenced images to WebP and embeds small images inline
-        - Supports explicit attachments via `attachment_paths` in addition to inline references
+        - Records attachment metadata for inline data URIs and explicit attachment paths
+        - Does not copy files or convert images (archive storage is removed)
 
         Parameters
         ----------
@@ -3863,9 +3877,9 @@ def build_mcp_server() -> FastMCP:
         cc, bcc : Optional[list[str]]
             Additional recipients by name.
         attachment_paths : Optional[list[str]]
-            Extra file paths to include as attachments; will be converted to WebP and stored.
+            Extra file paths to include as attachment metadata (files are not copied).
         convert_images : Optional[bool]
-            Overrides server default for image conversion/inlining. If None, server settings apply.
+            Deprecated. Retained for compatibility; images are not converted or copied.
         importance : str
             One of {"low","normal","high","urgent"} (free form tolerated; used by filters).
         ack_required : bool
@@ -3885,7 +3899,7 @@ def build_mcp_server() -> FastMCP:
         ----------
         - If no recipients are given, the call fails.
         - Unknown recipient names fail fast; register them first.
-        - Non-absolute attachment paths are resolved relative to the project archive root.
+        - Non-absolute attachment paths are preserved as provided; clients resolve them.
 
         Do / Don't
         ----------
@@ -3894,7 +3908,7 @@ def build_mcp_server() -> FastMCP:
         - Use `thread_id` (or `reply_message`) to keep related discussion in a single thread.
         - Address only relevant recipients; use CC/BCC sparingly and intentionally.
         - Prefer Markdown links; attach images only when they materially aid understanding. The server
-          auto-converts images to WebP and may inline small images depending on policy.
+          records attachment metadata but does not copy or convert files.
 
         Don't:
         - Send large, repeated binaries—reuse prior attachments via `attachment_paths` when possible.
@@ -5734,8 +5748,8 @@ def build_mcp_server() -> FastMCP:
         ```
         """
         project = await _get_project_by_identifier(project_key)
-        get_settings()
-        if get_settings().tools_log_enabled:
+        settings = get_settings()
+        if settings.tools_log_enabled:
             try:
                 import importlib as _imp
 
@@ -7816,9 +7830,6 @@ def build_mcp_server() -> FastMCP:
         # Filter unread (no read_ts recorded)
         unread: list[dict[str, Any]] = []
         async with get_session() as session:
-            from .models import \
-                MessageRecipient  # local import to avoid cycle at top
-
             for item in items:
                 result = await session.execute(
                     select(MessageRecipient.read_ts).where(
@@ -8077,12 +8088,12 @@ def build_mcp_server() -> FastMCP:
     @mcp.resource("resource://mailbox/{agent}", mime_type="application/json")
     async def mailbox_resource(agent: str, project: Optional[str] = None, limit: int = 20) -> dict[str, Any]:
         """
-        List recent messages in an agent's mailbox with lightweight Git commit context.
+        List recent messages in an agent's mailbox.
 
         Returns
         -------
         dict
-            { project, agent, count, messages: [{ id, subject, from, created_ts, importance, ack_required, kind, commit: {hexsha, summary} | null }] }
+            { project, agent, count, messages: [{ id, subject, from, created_ts, importance, ack_required, kind, commit: null }] }
         """
         # Parse query embedded in agent path if present
         if "?" in agent:
@@ -8133,7 +8144,7 @@ def build_mcp_server() -> FastMCP:
     async def mailbox_with_commits_resource(
         agent: str, project: Optional[str] = None, limit: int = 20
     ) -> dict[str, Any]:
-        """List recent messages in an agent's mailbox with commit metadata including diff summaries."""
+        """List recent messages in an agent's mailbox (commit metadata unavailable)."""
         # Parse query embedded in agent path if present
         if "?" in agent:
             name_part, _, qs = agent.partition("?")
@@ -8167,17 +8178,12 @@ def build_mcp_server() -> FastMCP:
         agent_obj = await _get_agent(project_obj, agent)
         items = await _list_inbox(project_obj, agent_obj, limit, urgent_only=False, include_bodies=False, since_ts=None)
 
-        enriched: list[dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for item in items:
-            try:
-                msg_obj = await _get_message(project_obj, int(item["id"]))
-                commit_info = await _commit_info_for_message(settings, project_obj, msg_obj)
-                if commit_info:
-                    item["commit"] = commit_info
-            except Exception:
-                pass
-            enriched.append(item)
-        return {"project": project_obj.human_key, "agent": agent_obj.name, "count": len(enriched), "messages": enriched}
+            payload = dict(item)
+            payload["commit"] = None
+            out.append(payload)
+        return {"project": project_obj.human_key, "agent": agent_obj.name, "count": len(out), "messages": out}
 
     @mcp.resource("resource://outbox/{agent}", mime_type="application/json")
     async def outbox_resource(
@@ -8187,7 +8193,7 @@ def build_mcp_server() -> FastMCP:
         include_bodies: bool = False,
         since_ts: Optional[str] = None,
     ) -> dict[str, Any]:
-        """List messages sent by the agent, enriched with commit metadata for canonical files."""
+        """List messages sent by the agent (commit metadata unavailable)."""
         # Support toolkits that incorrectly pass query in the template segment
         if "?" in agent:
             name_part, _, qs = agent.partition("?")
@@ -8209,23 +8215,17 @@ def build_mcp_server() -> FastMCP:
                     since_ts = parsed["since_ts"][0]
             except Exception:
                 pass
-        """List messages sent by the agent, enriched with commit metadata for canonical files."""
         if project is None:
             raise ValueError("project parameter is required for outbox resource")
         project_obj = await _get_project_by_identifier(project)
         agent_obj = await _get_agent(project_obj, agent)
         items = await _list_outbox(project_obj, agent_obj, limit, include_bodies, since_ts)
-        enriched: list[dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for item in items:
-            try:
-                msg_obj = await _get_message(project_obj, int(item["id"]))
-                commit_info = await _commit_info_for_message(settings, project_obj, msg_obj)
-                if commit_info:
-                    item["commit"] = commit_info
-            except Exception:
-                pass
-            enriched.append(item)
-        return {"project": project_obj.human_key, "agent": agent_obj.name, "count": len(enriched), "messages": enriched}
+            payload = dict(item)
+            payload["commit"] = None
+            out.append(payload)
+        return {"project": project_obj.human_key, "agent": agent_obj.name, "count": len(out), "messages": out}
 
     # No explicit output-schema transform; the tool returns ToolResult with {"result": ...}
 

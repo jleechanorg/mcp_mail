@@ -24,25 +24,39 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError, NoResultFound
-from starlette.middleware.base import (BaseHTTPMiddleware,
-                                       RequestResponseEndpoint)
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.types import Receive, Scope, Send
 
-from .app import (_create_message, _ensure_project,
-                  _expire_stale_file_reservations, _get_agent_by_name_optional,
-                  _message_frontmatter, _tool_metrics_snapshot,
-                  build_mcp_server, get_project_sibling_data,
-                  refresh_project_sibling_suggestions,
-                  update_project_sibling_status)
+from .app import (
+    _create_message,
+    _ensure_project,
+    _expire_stale_file_reservations,
+    _get_agent_by_name_optional,
+    _message_frontmatter,
+    _tool_metrics_snapshot,
+    build_mcp_server,
+    get_project_sibling_data,
+    refresh_project_sibling_suggestions,
+    update_project_sibling_status,
+)
 from .config import Settings, get_settings
 from .db import ensure_schema, get_session
-from .storage import (archive_write_lock, collect_lock_status, ensure_archive,
-                      get_agent_communication_graph, get_archive_tree,
-                      get_commit_detail, get_file_content,
-                      get_historical_inbox_snapshot, get_message_commit_sha,
-                      get_recent_commits, get_timeline_commits,
-                      write_agent_profile, write_file_reservation_record,
-                      write_message_bundle)
+from .storage import (
+    archive_write_lock,
+    collect_lock_status,
+    ensure_archive,
+    get_agent_communication_graph,
+    get_archive_tree,
+    get_commit_detail,
+    get_file_content,
+    get_historical_inbox_snapshot,
+    get_message_commit_sha,
+    get_recent_commits,
+    get_timeline_commits,
+    write_agent_profile,
+    write_file_reservation_record,
+    write_message_bundle,
+)
 
 # Slack webhook dedupe cache (in-memory best-effort)
 _slack_event_cache: set[tuple[str, str]] = set()
@@ -1164,9 +1178,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         # Capture thread mapping so outbound replies stay in the same Slack thread
                         slack_client_ref = None
                         try:
-                            from .app import \
-                                _slack_client as \
-                                _global_slack_client  # lazy import to avoid cycles
+                            from .app import _slack_client as _global_slack_client  # lazy import to avoid cycles
 
                             slack_client_ref = _global_slack_client
                         except Exception:
@@ -1360,8 +1372,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             from bleach.css_sanitizer import CSSSanitizer  # type: ignore
         except Exception:  # tinycss2 may be missing; degrade gracefully
             CSSSanitizer = None  # type: ignore
-        from jinja2 import (Environment, FileSystemLoader,  # type: ignore
-                            select_autoescape)
+        from jinja2 import Environment, FileSystemLoader, select_autoescape  # type: ignore
 
         templates_root = Path(__file__).resolve().parent / "templates"
         env = Environment(

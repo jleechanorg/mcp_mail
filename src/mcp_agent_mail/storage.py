@@ -34,8 +34,8 @@ class ProjectArchive:
     slug: str
     root: Path
     repo: Any = field(default=None)  # Was: Repo
-    lock_path: Path = field(default_factory=lambda: Path("/dev/null"))
-    repo_root: Path = field(default_factory=lambda: Path("/dev/null"))
+    lock_path: Path = Path("/dev/null")
+    repo_root: Path = Path("/dev/null")
 
     @property
     def attachments_dir(self) -> Path:
