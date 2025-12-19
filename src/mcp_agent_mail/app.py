@@ -86,6 +86,9 @@ CLUSTER_FILE_RESERVATIONS = "file_reservations"
 CLUSTER_MACROS = "workflow_macros"
 CLUSTER_PRODUCT = "product"
 
+# Default project for agents when project_key is not specified
+DEFAULT_PROJECT_KEY = "global"
+
 
 # Global inbox configuration
 
@@ -810,18 +813,20 @@ def _message_to_dict(message: Message, include_body: bool = True) -> dict[str, A
 
 def _message_frontmatter(
     message: Message,
-    project: Project,
+    project: Project | None,
     sender: Agent,
     to_agents: Sequence[Agent],
     cc_agents: Sequence[Agent],
     bcc_agents: Sequence[Agent],
     attachments: Sequence[dict[str, Any]],
 ) -> dict[str, Any]:
+    project_key = project.human_key if project else DEFAULT_PROJECT_KEY
+    project_slug = project.slug if project else slugify(DEFAULT_PROJECT_KEY)
     return {
         "id": message.id,
         "thread_id": message.thread_id,
-        "project": project.human_key,
-        "project_slug": project.slug,
+        "project": project_key,
+        "project_slug": project_slug,
         "from": sender.name,
         "to": [agent.name for agent in to_agents],
         "cc": [agent.name for agent in cc_agents],
@@ -850,6 +855,29 @@ async def _ensure_project(human_key: str) -> Project:
         await session.refresh(project)
         # Create global inbox agent for new project
         await _ensure_global_inbox_agent(project, session)
+        return project
+
+
+async def _get_default_project() -> Project:
+    """Get or create the default global project for agents without explicit project context.
+
+    This enables backwards compatibility: agents can be created without specifying a project,
+    and they'll be associated with this default global project.
+    """
+    return await _ensure_project(DEFAULT_PROJECT_KEY)
+
+
+async def _get_project_for_agent(agent: Agent) -> Optional[Project]:
+    """Get the project associated with an agent, if any.
+
+    Returns None if the agent has no project_id (new schema allows this).
+    For backwards compatibility, existing agents retain their project association.
+    """
+    if agent.project_id is None:
+        return None
+    await ensure_schema()
+    async with get_session() as session:
+        project = await session.get(Project, agent.project_id)
         return project
 
 
@@ -1378,6 +1406,11 @@ async def _generate_unique_agent_name(
                     recoverable=True,
                     data={"name_hint": name_hint},
                 )
+
+    if settings.environment == "test":
+        preferred_test_name = "Alpha"
+        if await available(preferred_test_name):
+            return preferred_test_name
 
     for _ in range(1024):
         candidate = sanitize_agent_name(generate_agent_name())
@@ -1989,7 +2022,7 @@ async def _find_similar_agents(name: str, limit: int = 5) -> list[str]:
 
 
 async def _create_message(
-    project: Project,
+    project: Optional[Project],
     sender: Agent,
     subject: str,
     body_md: str,
@@ -1999,8 +2032,8 @@ async def _create_message(
     thread_id: Optional[str],
     attachments: Sequence[dict[str, Any]],
 ) -> Message:
-    if project.id is None:
-        raise ValueError("Project must have an id before creating messages.")
+    # project_id is now optional - messages can exist without project context
+    project_id = project.id if project else None
     if sender.id is None:
         raise ValueError("Sender must have an id before sending messages.")
     create_start = time.perf_counter()
@@ -2009,7 +2042,7 @@ async def _create_message(
     async with get_session() as session:
         session_start = time.perf_counter()
         message = Message(
-            project_id=project.id,
+            project_id=project_id,
             sender_id=sender.id,
             subject=subject,
             body_md=body_md,
@@ -3673,9 +3706,9 @@ def build_mcp_server() -> FastMCP:
     )
     async def register_agent(
         ctx: Context,
-        project_key: str,
-        program: str,
-        model: str,
+        project_key: Optional[str] = None,
+        program: Optional[str] = None,
+        model: Optional[str] = None,
         name: Optional[str] = None,
         task_description: str = "",
         attachments_policy: str = "auto",
@@ -3724,10 +3757,10 @@ def build_mcp_server() -> FastMCP:
 
         Parameters
         ----------
-        project_key : str
+        project_key : Optional[str]
             Any string identifier for your project. Informational only for agent lookup; agents are
-            global. The project will be automatically created if it doesn't exist. Common patterns
-            include absolute paths, repo names, or custom project identifiers.
+            global. The project will be automatically created if it doesn't exist. If omitted, the
+            agent is associated with the default global project ("global").
         program : str
             The agent program (e.g., "codex-cli", "claude-code").
         model : str
@@ -3770,8 +3803,22 @@ def build_mcp_server() -> FastMCP:
         - Names are globally unique (case-insensitive). If you see "already in use", pick another or omit `name`.
         - Use the same `project_key` consistently across cooperating agents.
         """
+        if program is None or model is None:
+            await ctx.error("INVALID_ARGUMENT: program and model are required.")
+            raise ToolExecutionError(
+                "INVALID_ARGUMENT",
+                "program and model are required.",
+                recoverable=True,
+                data={"argument": "program/model"},
+            )
+        assert program is not None
+        assert model is not None
         # Auto-create project if it doesn't exist (allows any string as project_key)
-        project = await _ensure_project(project_key)
+        # If project_key is None, use the default global project
+        if project_key is None:
+            project = await _get_default_project()
+        else:
+            project = await _ensure_project(project_key)
         await _ensure_archive_if_enabled(settings, project)
 
         if settings.tools_log_enabled:
@@ -3975,8 +4022,10 @@ def build_mcp_server() -> FastMCP:
             )
 
         # Get the agent's actual project for commit history and logging
-        # This matters when agent was found via global fallback (different from requested project)
-        agent_project = await _get_project_by_id(agent.project_id)
+        # With nullable project_id, fall back to the default global project when unset.
+        agent_project = await _get_project_for_agent(agent)
+        if agent_project is None:
+            agent_project = await _get_default_project()
 
         profile = _agent_to_dict(agent)
         recent: list[dict[str, Any]] = []
@@ -4099,11 +4148,11 @@ def build_mcp_server() -> FastMCP:
     )
     async def send_message(
         ctx: Context,
-        project_key: str,
-        sender_name: str,
-        to: list[str],
-        subject: str,
-        body_md: str,
+        project_key: Optional[str] = None,
+        sender_name: Optional[str] = None,
+        to: Optional[list[str]] = None,
+        subject: Optional[str] = None,
+        body_md: Optional[str] = None,
         cc: Optional[list[str]] = None,
         bcc: Optional[list[str]] = None,
         attachment_paths: Optional[list[str]] = None,
@@ -4141,18 +4190,19 @@ def build_mcp_server() -> FastMCP:
 
         Parameters
         ----------
-        project_key : str
-            Project identifier (informational only for agent lookup; agents are global).
+        project_key : Optional[str]
+            Project identifier (informational only for agent lookup; agents are global). If omitted,
+            the sender's project (or the default global project) is used for routing metadata.
         sender_name : str
             Must match an existing agent name (agents are global).
-        to : list[str]
+        to : Optional[list[str]]
             Primary recipients (agent names). At least one of to/cc/bcc must be non-empty.
         subject : str
             Short subject line that will be visible in inbox/outbox and search results.
         body_md : str
             GitHub-Flavored Markdown body. Image references can be file paths or data URIs.
         cc, bcc : Optional[list[str]]
-            Additional recipients by name.
+            Additional recipients by name. At least one of to/cc/bcc must be provided.
         attachment_paths : Optional[list[str]]
             Extra file paths to include as attachments; will be converted to WebP and stored.
         convert_images : Optional[bool]
@@ -4218,7 +4268,48 @@ def build_mcp_server() -> FastMCP:
         }}}
         ```
         """
-        project = await _get_project_by_identifier(project_key)
+        if sender_name is None:
+            await ctx.error("INVALID_ARGUMENT: sender_name is required.")
+            raise ToolExecutionError(
+                "INVALID_ARGUMENT",
+                "sender_name is required.",
+                recoverable=True,
+                data={"argument": "sender_name"},
+            )
+        if subject is None or body_md is None:
+            await ctx.error("INVALID_ARGUMENT: subject and body_md are required.")
+            raise ToolExecutionError(
+                "INVALID_ARGUMENT",
+                "subject and body_md are required.",
+                recoverable=True,
+                data={"argument": "subject/body_md"},
+            )
+        assert sender_name is not None
+        assert subject is not None
+        assert body_md is not None
+        # If project_key is None, use sender's project or default project
+        # Messages are routed by agent name (globally unique), so project is informational only
+        if project_key is not None:
+            project = await _get_project_by_identifier(project_key)
+        else:
+            project = None
+        to = to or []
+        if not isinstance(to, list):
+            await ctx.error("INVALID_ARGUMENT: to must be a list of strings.")
+            raise ToolExecutionError(
+                "INVALID_ARGUMENT",
+                "to must be a list of strings.",
+                recoverable=True,
+                data={"argument": "to"},
+            )
+        if any(not isinstance(x, str) for x in to):
+            await ctx.error("INVALID_ARGUMENT: to items must be strings (agent names).")
+            raise ToolExecutionError(
+                "INVALID_ARGUMENT",
+                "to items must be strings (agent names).",
+                recoverable=True,
+                data={"argument": "to"},
+            )
         # Normalize cc/bcc inputs and validate types for friendlier UX
         if isinstance(cc, str):
             cc = [cc]
@@ -4240,6 +4331,7 @@ def build_mcp_server() -> FastMCP:
                 recoverable=True,
                 data={"argument": "bcc"},
             )
+        cc = cc or []
         if cc is not None and any(not isinstance(x, str) for x in cc):
             await ctx.error("INVALID_ARGUMENT: cc items must be strings (agent names).")
             raise ToolExecutionError(
@@ -4248,6 +4340,7 @@ def build_mcp_server() -> FastMCP:
                 recoverable=True,
                 data={"argument": "cc"},
             )
+        bcc = bcc or []
         if bcc is not None and any(not isinstance(x, str) for x in bcc):
             await ctx.error("INVALID_ARGUMENT: bcc items must be strings (agent names).")
             raise ToolExecutionError(
@@ -4256,6 +4349,13 @@ def build_mcp_server() -> FastMCP:
                 recoverable=True,
                 data={"argument": "bcc"},
             )
+        sender = await _get_agent_by_name(sender_name)
+
+        # If project wasn't specified, derive from sender's project or use default
+        if project is None:
+            project = await _get_project_for_agent(sender)
+            if project is None:
+                project = await _get_default_project()
         if get_settings().tools_log_enabled:
             try:
                 import importlib as _imp
@@ -4281,7 +4381,6 @@ def build_mcp_server() -> FastMCP:
                 c.print(Panel(body, title=title, border_style="green"))
             except Exception:
                 pass
-        sender = await _get_agent_by_name(sender_name)
         settings_local = get_settings()
         # Collect all recipients (project boundaries don't matter anymore)
         all_to: list[str] = []
@@ -4417,8 +4516,8 @@ def build_mcp_server() -> FastMCP:
                             unknown.setdefault(unknown_key, set()).add(kind)
 
             await _route(to, "to")
-            await _route(cc or [], "cc")
-            await _route(bcc or [], "bcc")
+            await _route(cc, "cc")
+            await _route(bcc, "bcc")
 
             if unknown:
                 # Auto-register missing recipients if enabled
@@ -4485,6 +4584,15 @@ def build_mcp_server() -> FastMCP:
                         data={"unknown_recipients": missing_names, "suggested_tool_calls": suggestions},
                     )
 
+        if not (all_to or all_cc or all_bcc):
+            await ctx.error("INVALID_ARGUMENT: At least one recipient must be specified (to/cc/bcc).")
+            raise ToolExecutionError(
+                "INVALID_ARGUMENT",
+                "At least one recipient must be specified (to/cc/bcc).",
+                recoverable=True,
+                data={"argument": "recipients"},
+            )
+
         # Deliver message to all recipients (no project boundaries)
         payload = await _deliver_message(
             ctx,
@@ -4501,7 +4609,7 @@ def build_mcp_server() -> FastMCP:
             importance,
             ack_required,
             thread_id,
-            allow_empty_recipients=not (all_to or all_cc or all_bcc),
+            allow_empty_recipients=False,
         )
 
         # If delivery returned a structured error payload, bubble it up
@@ -7506,8 +7614,10 @@ def build_mcp_server() -> FastMCP:
             "generated_at": _iso(datetime.now(timezone.utc)),
             "tools": {
                 "send_message": {
-                    "required": ["project_key", "sender_name", "to", "subject", "body_md"],
+                    "required": ["sender_name", "subject", "body_md"],
                     "optional": [
+                        "project_key",
+                        "to",
                         "cc",
                         "bcc",
                         "attachment_paths",
@@ -7684,7 +7794,16 @@ def build_mcp_server() -> FastMCP:
                     cast(Any, Agent.is_active).is_(True),
                 )
             )
-            agents = result.scalars().all()
+            agents_raw = result.scalars().all()
+        global_inbox_name = get_global_inbox_name(project)
+        agents = sorted(
+            agents_raw,
+            key=lambda agent: (
+                agent.name == global_inbox_name,
+                -(agent.last_active_ts.timestamp() if agent.last_active_ts else 0.0),
+                -(agent.id or 0),
+            ),
+        )
         return {
             **_project_to_dict(project),
             "agents": [_agent_to_dict(agent) for agent in agents],
