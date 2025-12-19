@@ -96,7 +96,9 @@ def check_cli_available(cli_name: str) -> tuple[bool, str]:
     if cli_name not in CLI_PROFILES:
         return False, f"CLI '{cli_name}' not in CLI_PROFILES"
 
-    binary = CLI_PROFILES[cli_name].get("binary")
+    binary = CLI_PROFILES[cli_name].get("binary") or cli_name
+    if not binary:
+        return False, f"CLI '{cli_name}' missing binary configuration"
     binary_path = shutil.which(binary)
 
     if not binary_path:
@@ -131,7 +133,9 @@ def build_cli_command(
     profile = CLI_PROFILES[cli_name]
     mcp_config = MCP_CLI_CONFIG.get(cli_name, {})
 
-    binary = profile.get("binary")
+    binary = profile.get("binary") or cli_name
+    if not binary:
+        raise ValueError(f"CLI '{cli_name}' missing binary configuration")
     binary_path = shutil.which(binary)
     if not binary_path:
         raise FileNotFoundError(f"CLI binary not found: {binary}")

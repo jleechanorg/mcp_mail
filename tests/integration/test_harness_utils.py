@@ -265,7 +265,9 @@ class BaseCLITest:
         if not self.cli_profile:
             raise ValueError(f"CLI_NAME '{self.CLI_NAME}' not found in CLI_PROFILES")
 
-        cli_binary = self.cli_profile.get("binary")
+        cli_binary = self.cli_profile.get("binary") or self.CLI_NAME
+        if not cli_binary:
+            return False
         cli_path = shutil.which(cli_binary)
 
         if not cli_path:
@@ -313,7 +315,9 @@ class BaseCLITest:
         if not self.cli_profile:
             raise ValueError(f"CLI_NAME '{self.CLI_NAME}' not found in CLI_PROFILES")
 
-        cli_binary = self.cli_profile.get("binary")
+        cli_binary = self.cli_profile.get("binary") or self.CLI_NAME
+        if not cli_binary:
+            return False, "CLI binary not configured"
         cli_path = shutil.which(cli_binary)
         if not cli_path:
             return False, f"{cli_binary} not found"
@@ -546,5 +550,7 @@ def is_cli_available(cli_name: str) -> bool:
     if cli_name not in CLI_PROFILES:
         return False
 
-    binary = CLI_PROFILES[cli_name].get("binary")
+    binary = CLI_PROFILES[cli_name].get("binary") or cli_name
+    if not binary:
+        return False
     return shutil.which(binary) is not None
