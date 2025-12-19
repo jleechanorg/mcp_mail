@@ -56,7 +56,6 @@ from .storage import (
     ProjectStorageResolutionError,
     collect_lock_status,
     heal_archive_locks,
-    is_archive_enabled,
 )
 from .utils import generate_agent_name, sanitize_agent_name, slugify
 
@@ -5747,7 +5746,7 @@ def build_mcp_server() -> FastMCP:
         """
         project = await _get_project_by_identifier(project_key)
         settings = get_settings()
-        if get_settings().tools_log_enabled:
+        if settings.tools_log_enabled:
             try:
                 import importlib as _imp
 
