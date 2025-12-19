@@ -44,6 +44,7 @@ from .app import (
 )
 from .config import Settings, get_settings
 from .db import ensure_schema, get_session
+from .models import Agent
 from .storage import (
     archive_write_lock,
     collect_lock_status,
@@ -1315,8 +1316,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
                         if not sender_agent:
                             # Auto-create SlackBridge system agent; tolerate concurrent creation
-                            from .models import Agent
-
                             async with get_session() as session:
                                 sender_agent = Agent(
                                     name=sender_name,
@@ -1416,7 +1415,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                             _slack_event_cache.add(key)
                             _slack_event_cache_order.append(key)
                             # Trim cache if over capacity (deque handles oldest eviction)
-                            while len(_slack_event_cache_order) > _slack_event_cache_order.maxlen:
+                            while len(_slack_event_cache_order) > _SLACK_EVENT_CACHE_MAX_SIZE:
                                 old = _slack_event_cache_order.popleft()
                                 _slack_event_cache.discard(old)
 
