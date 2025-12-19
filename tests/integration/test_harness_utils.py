@@ -355,7 +355,8 @@ class BaseCLITest:
                 if stdin_template == "/dev/null":
                     stdin_file = subprocess.DEVNULL
                 else:
-                    stdin_file = stack.enter_context(Path(prompt_file).open())
+                    stdin_path = Path(stdin_template.format(prompt_file=str(prompt_file)))
+                    stdin_file = stack.enter_context(stdin_path.open())
 
                 result = subprocess.run(
                     cli_command,
