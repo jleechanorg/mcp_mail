@@ -73,17 +73,21 @@ class DatabaseSettings:
 
 @dataclass(slots=True, frozen=True)
 class StorageSettings:
-    """Filesystem/Git storage configuration."""
+    """Storage configuration.
 
-    root: str
-    git_author_name: str
-    git_author_email: str
-    inline_image_max_bytes: int
-    convert_images: bool
-    keep_original_images: bool
-    project_key_storage_enabled: bool
-    local_archive_enabled: bool
-    project_key_prompt_enabled: bool
+    NOTE: Local disk message archiving to .mcp_mail/projects/ has been removed.
+    Most of these settings are kept for backwards compatibility but have no effect.
+    """
+
+    root: str  # Kept for database path compatibility
+    git_author_name: str  # Deprecated - no longer used
+    git_author_email: str  # Deprecated - no longer used
+    inline_image_max_bytes: int  # Deprecated - no longer used
+    convert_images: bool  # Deprecated - no longer used
+    keep_original_images: bool  # Deprecated - no longer used
+    project_key_storage_enabled: bool  # Deprecated - always treated as False
+    local_archive_enabled: bool  # Deprecated - always treated as False
+    project_key_prompt_enabled: bool  # Deprecated - no longer used
 
 
 @dataclass(slots=True, frozen=True)
