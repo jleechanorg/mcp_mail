@@ -28,8 +28,6 @@ def _tool_json(result) -> dict:
         pytest.fail(f"Failed to parse tool result JSON: {exc}")
 
 
-
-
 @pytest.mark.asyncio
 async def test_e2e_materialized_views_with_share_export(isolated_env, tmp_path: Path):
     """End-to-end test: Create messages, export with materialized views and indexes."""
