@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Iterable, Sequence
 
@@ -33,7 +33,7 @@ class ProjectArchive:
     settings: Settings
     slug: str
     root: Path
-    repo: Any = field(default=None)  # Was: Repo
+    repo: Any = None  # Was: Repo
     lock_path: Path = Path("/dev/null")
     repo_root: Path = Path("/dev/null")
 

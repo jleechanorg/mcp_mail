@@ -41,6 +41,18 @@ async def install_guard(settings: Settings, project_slug: str, repo_path: Path) 
     """Install the pre-commit guard for the given project into the repo.
 
     NOTE: Archive storage has been removed. This is a no-op that returns a placeholder path.
+    Parameters are retained for backwards compatibility but are unused.
+
+    Args:
+        settings: Unused, kept for backwards compatibility
+        project_slug: Unused, kept for backwards compatibility
+        repo_path: Repository path for constructing the hook path
+
+    Returns:
+        Path to where the pre-commit hook would be installed
+
+    .. deprecated::
+        Guard functionality has been removed along with archive storage.
     """
     return repo_path / ".git" / "hooks" / "pre-commit"
 
@@ -49,6 +61,18 @@ async def install_prepush_guard(settings: Settings, project_slug: str, repo_path
     """Install the pre-push guard for the given project into the repo.
 
     NOTE: Archive storage has been removed. This is a no-op that returns a placeholder path.
+    Parameters are retained for backwards compatibility but are unused.
+
+    Args:
+        settings: Unused, kept for backwards compatibility
+        project_slug: Unused, kept for backwards compatibility
+        repo_path: Repository path for constructing the hook path
+
+    Returns:
+        Path to where the pre-push hook would be installed
+
+    .. deprecated::
+        Guard functionality has been removed along with archive storage.
     """
     return repo_path / ".git" / "hooks" / "pre-push"
 
