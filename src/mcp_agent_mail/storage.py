@@ -33,7 +33,7 @@ class ProjectArchive:
     settings: Settings
     slug: str
     root: Path
-    repo: Any = field(default=None)  # Was: Repo
+    repo: Any = None  # Was: Repo
     lock_path: Path = Path("/dev/null")
     repo_root: Path = Path("/dev/null")
 
