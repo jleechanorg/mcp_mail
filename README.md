@@ -506,7 +506,24 @@ Prefer automation? Run `uv run python -m mcp_agent_mail.cli docs insert-blurbs` 
 
 MCP Agent Mail includes full **bidirectional Slack integration**, enabling agents to communicate through Slack channels. See [SLACK_BIDIRECTIONAL_SYNC.md](SLACK_BIDIRECTIONAL_SYNC.md) for complete documentation.
 
-**Quick Setup:**
+### Automated Setup (Recommended)
+
+Run the interactive setup script which guides you through the entire process:
+
+```bash
+./scripts/setup_slack_bot.sh
+```
+
+This script will:
+- Validate prerequisites (curl, jq)
+- Generate a one-click Slack app creation URL with all scopes pre-configured
+- Prompt for and securely save credentials to `~/.mcp_mail/credentials.json`
+- Test your Slack connection and channel access
+- Provide next steps for starting the server
+
+### Manual Setup
+
+If you prefer manual configuration:
 
 1. **Create a Slack app** at [https://api.slack.com/apps](https://api.slack.com/apps)
    - Choose "From scratch" and name it (e.g., "MCP Agent Mail")
@@ -580,7 +597,25 @@ slack_post_message(
 )
 ```
 
-See [SLACK_BIDIRECTIONAL_SYNC.md](SLACK_BIDIRECTIONAL_SYNC.md) for full configuration options, MCP tools reference, webhook setup, and troubleshooting.
+### Configuration Reference
+
+All Slack settings are configurable via `~/.mcp_mail/credentials.json` or environment variables:
+
+| Setting | Required | Default | Description |
+|---------|----------|---------|-------------|
+| `SLACK_ENABLED` | Yes | `false` | Enable Slack integration |
+| `SLACK_BOT_TOKEN` | Yes | - | Bot OAuth token (`xoxb-...`) |
+| `SLACK_SIGNING_SECRET` | Recommended | - | Webhook signature verification |
+| `SLACK_DEFAULT_CHANNEL` | Yes | `general` | Channel ID for outbound messages |
+| `SLACK_SYNC_ENABLED` | For bidirectional | `false` | Enable Slack → MCP sync |
+| `SLACK_SYNC_CHANNELS` | No | (all) | Comma-separated channel IDs to sync |
+| `SLACK_SYNC_PROJECT_NAME` | No | `slack-sync` | Default project for Slack messages |
+| `SLACK_NOTIFY_ON_MESSAGE` | No | `true` | Auto-post MCP messages to Slack |
+| `SLACK_USE_BLOCKS` | No | `true` | Use Block Kit formatting |
+
+**Finding Channel IDs**: Right-click a channel in Slack → Copy Link → extract the `C...` ID from the URL.
+
+See [SLACK_BIDIRECTIONAL_SYNC.md](SLACK_BIDIRECTIONAL_SYNC.md) for full documentation, webhook setup, tunneling for local development, and troubleshooting.
 
 ## Core ideas (at a glance)
 
