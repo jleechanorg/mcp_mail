@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from mcp_agent_mail.config import Settings, get_settings
+from mcp_agent_mail.config import Settings
 
 
 async def acquire_build_slot(
