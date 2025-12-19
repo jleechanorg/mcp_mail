@@ -263,7 +263,8 @@ def get_settings() -> Settings:
     environment = _decouple_config("APP_ENVIRONMENT", default="development")
 
     def _csv(name: str, default: str) -> list[str]:
-        raw = _decouple_config(name, default=default)
+        # Use credentials-aware precedence (env > credentials.json > .env > default)
+        raw = _get_config_value(name, default=default)
         items = [part.strip() for part in raw.split(",") if part.strip()]
         return items
 
@@ -366,7 +367,7 @@ def get_settings() -> Settings:
         cost_logging_enabled=_bool(_decouple_config("LLM_COST_LOGGING_ENABLED", default="true"), default=True),
     )
 
-    raw_mention_format = _decouple_config("SLACK_NOTIFY_MENTION_FORMAT", default="agent_name").strip().lower()
+    raw_mention_format = _get_config_value("SLACK_NOTIFY_MENTION_FORMAT", default="agent_name").strip().lower()
     allowed_mention_formats: tuple[Literal["real_name", "display_name", "agent_name"], ...] = (
         "real_name",
         "display_name",
@@ -389,16 +390,16 @@ def get_settings() -> Settings:
         sync_enabled=_bool(_get_config_value("SLACK_SYNC_ENABLED", default="false"), default=False),
         sync_project_name=_get_config_value("SLACK_SYNC_PROJECT_NAME", default="Slack Sync"),
         sync_channels=_csv("SLACK_SYNC_CHANNELS", default=""),
-        sync_thread_replies=_bool(_decouple_config("SLACK_SYNC_THREAD_REPLIES", default="true"), default=True),
-        sync_reactions=_bool(_decouple_config("SLACK_SYNC_REACTIONS", default="true"), default=True),
-        use_blocks=_bool(_decouple_config("SLACK_USE_BLOCKS", default="true"), default=True),
-        include_attachments=_bool(_decouple_config("SLACK_INCLUDE_ATTACHMENTS", default="true"), default=True),
-        webhook_url=_decouple_config("SLACK_WEBHOOK_URL", default="") or None,
+        sync_thread_replies=_bool(_get_config_value("SLACK_SYNC_THREAD_REPLIES", default="true"), default=True),
+        sync_reactions=_bool(_get_config_value("SLACK_SYNC_REACTIONS", default="true"), default=True),
+        use_blocks=_bool(_get_config_value("SLACK_USE_BLOCKS", default="true"), default=True),
+        include_attachments=_bool(_get_config_value("SLACK_INCLUDE_ATTACHMENTS", default="true"), default=True),
+        webhook_url=_get_config_value("SLACK_WEBHOOK_URL", default="") or None,
         slackbox_enabled=_bool(_get_config_value("SLACKBOX_ENABLED", default="false"), default=False),
         slackbox_token=_get_config_value("SLACKBOX_TOKEN", default="") or None,
         slackbox_channels=_csv("SLACKBOX_CHANNELS", default=""),
-        slackbox_sender_name=_decouple_config("SLACKBOX_SENDER_NAME", default="Slackbox"),
-        slackbox_subject_prefix=_decouple_config("SLACKBOX_SUBJECT_PREFIX", default="[Slackbox]"),
+        slackbox_sender_name=_get_config_value("SLACKBOX_SENDER_NAME", default="Slackbox"),
+        slackbox_subject_prefix=_get_config_value("SLACKBOX_SUBJECT_PREFIX", default="[Slackbox]"),
     )
 
     def _agent_name_mode(value: str) -> str:

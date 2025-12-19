@@ -294,7 +294,7 @@ Thread linking enables proper conversation continuity between Slack and MCP.
 - Thread mappings use a **singleton pattern** ensuring consistency across all code paths
 
 **Thread Flow Example**:
-```
+```text
 #181 (Claude → Slack) "Hello from Claude!"
   └── #182 (Slack → MCP) "test reply" [thread_id=181] ✓
       └── #183 (Claude → Slack) "Got it!" [thread_id=181] ✓
@@ -307,7 +307,7 @@ Thread linking enables proper conversation continuity between Slack and MCP.
 ### Example 1: Human asks agent for help
 
 **Slack:**
-```
+```text
 @human: Can someone review the PR?
 ```
 
