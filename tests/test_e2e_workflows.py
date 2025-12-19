@@ -2,15 +2,32 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
 import pytest
 
-# Removed imports related to guards and build slots
 from mcp_agent_mail.share import build_materialized_views, create_performance_indexes, finalize_snapshot_for_export
 
 # Removed _init_git_repo and _create_and_commit_file helpers as they were only used by removed tests
+
+
+def _tool_text(result) -> str:
+    assert result.content, "Expected non-empty result content"
+    text = result.content[0].text
+    assert text, "Expected text content"
+    return text
+
+
+def _tool_json(result) -> dict:
+    text = _tool_text(result)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:  # pragma: no cover - defensive assertion helper
+        pytest.fail(f"Failed to parse tool result JSON: {exc}")
+
+
 
 
 @pytest.mark.asyncio
@@ -87,9 +104,9 @@ async def test_e2e_materialized_views_with_share_export(isolated_env, tmp_path: 
         conn.close()
 
     # Run full export finalization
-    finalize_snapshot_for_export(snapshot)
     build_materialized_views(snapshot)
     create_performance_indexes(snapshot)
+    finalize_snapshot_for_export(snapshot)
 
     # Verify all optimizations were applied
     conn = sqlite3.connect(str(snapshot))
@@ -237,8 +254,9 @@ async def test_e2e_incremental_share_updates(isolated_env, tmp_path: Path):
         conn.close()
 
     # Export v1
-    finalize_snapshot_for_export(snapshot_v1)
     build_materialized_views(snapshot_v1)
+    create_performance_indexes(snapshot_v1)
+    finalize_snapshot_for_export(snapshot_v1)
 
     # Verify v1 has optimizations
     conn = sqlite3.connect(str(snapshot_v1))
@@ -266,8 +284,9 @@ async def test_e2e_incremental_share_updates(isolated_env, tmp_path: Path):
         conn.close()
 
     # Export v2 (incremental update)
-    finalize_snapshot_for_export(snapshot_v2)
     build_materialized_views(snapshot_v2)
+    create_performance_indexes(snapshot_v2)
+    finalize_snapshot_for_export(snapshot_v2)
 
     # Verify v2 has all messages in materialized view
     conn = sqlite3.connect(str(snapshot_v2))

@@ -23,16 +23,18 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError, NoResultFound
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.types import Receive, Scope, Send
 
 from .app import (
+    DEFAULT_PROJECT_KEY,
     _create_message,
     _ensure_project,
     _expire_stale_file_reservations,
     _get_agent_by_name_optional,
+    _get_default_project,
     _message_frontmatter,
     _tool_metrics_snapshot,
     build_mcp_server,
@@ -42,6 +44,7 @@ from .app import (
 )
 from .config import Settings, get_settings
 from .db import ensure_schema, get_session
+from .models import Agent
 from .storage import (
     collect_lock_status,
     ensure_archive,
@@ -1233,16 +1236,198 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 if message_info:
                     slack_ts = message_info.get("slack_ts")
                     slack_channel = message_info.get("slack_channel")
-                    dedupe_key = (slack_channel, slack_ts) if slack_ts and slack_channel else None
+                    cache_key = (slack_channel, slack_ts) if slack_ts and slack_channel else None
 
-                    return await _ingest_slack_bridge_message(
-                        message_info,
-                        logger=logger,
-                        dedupe_key=dedupe_key,
-                        source="slack_events",
-                    )
+                    # Check for duplicate events before processing
+                    cache_key_added = False
+                    if cache_key:
+                        async with _slack_event_cache_lock:
+                            if cache_key in _slack_event_cache:
+                                logger.info(
+                                    "slack_message_duplicate_skipped",
+                                    slack_ts=slack_ts,
+                                    channel=slack_channel,
+                                )
+                                return JSONResponse({"ok": True, "message": "Duplicate Slack event skipped"})
 
-                return JSONResponse({"ok": True, "message": "Event ignored"})
+                            # Add to cache before processing to prevent concurrent duplicates
+                            while len(_slack_event_cache_order) >= _SLACK_EVENT_CACHE_MAX_SIZE:
+                                old = _slack_event_cache_order.popleft()
+                                _slack_event_cache.discard(old)
+                            _slack_event_cache.add(cache_key)
+                            _slack_event_cache_order.append(cache_key)
+                            cache_key_added = True
+
+                    # Create MCP message from Slack event
+                    try:
+                        # Determine project: use original thread's project for replies,
+                        # fall back to slack-sync or default project for new messages
+                        thread_id = message_info.get("thread_id")
+                        project = None
+                        if thread_id:
+                            thread_project = await _project_from_thread_id(thread_id)
+                            if thread_project:
+                                # Use original message's project for thread replies
+                                _project_id, slug, human_key = thread_project
+                                project = await _ensure_project(human_key)
+                                logger.info(
+                                    "slack_reply_using_thread_project",
+                                    thread_id=thread_id,
+                                    project_slug=slug,
+                                )
+                        if not project:
+                            # New message or thread not found - use slack-sync or default
+                            if settings.slack.sync_project_name:
+                                project = await _ensure_project(settings.slack.sync_project_name)
+                            else:
+                                project = await _get_default_project()
+
+                        # Get or create SlackBridge agent
+                        sender_name = message_info["sender_name"]
+                        sender_agent = await _get_agent_by_name_optional(sender_name)
+
+                        if not sender_agent:
+                            # Auto-create SlackBridge system agent; tolerate concurrent creation
+                            async with get_session() as session:
+                                sender_agent = Agent(
+                                    name=sender_name,
+                                    project_id=project.id if project else None,
+                                    program="slack_bridge",
+                                    model="slack-events",
+                                    task_description="Bridges Slack messages into MCP Agent Mail",
+                                    is_active=True,
+                                )
+                                session.add(sender_agent)
+                                try:
+                                    await session.commit()
+                                    await session.refresh(sender_agent)
+                                    logger.info("slack_bridge_agent_created", agent_name=sender_name)
+                                except IntegrityError:
+                                    await session.rollback()
+                                    # Agent names are globally unique; look up without project filter
+                                    # Must filter by is_active since unique index only covers active agents
+                                    result = await session.execute(
+                                        select(Agent).where(
+                                            func.lower(Agent.name) == func.lower(sender_name),
+                                            cast(Any, Agent.is_active).is_(True),
+                                        )
+                                    )
+                                    existing_agent = result.scalars().first()
+                                    if not existing_agent:
+                                        raise
+                                    sender_agent = existing_agent
+
+                        # Broadcast to all active agents globally (agent names are globally unique)
+                        # We intentionally avoid project scoping so Slack messages always reach active agents,
+                        # even when thread context has no project or the project was deleted.
+                        async with get_session() as session:
+                            result = await session.execute(
+                                select(Agent).where(
+                                    cast(Any, Agent.is_active).is_(True),
+                                    cast(Any, Agent.id) != sender_agent.id,
+                                )
+                            )
+                            recipient_agents = list(result.scalars().all())
+
+                        if not recipient_agents:
+                            logger.warning(
+                                "slack_no_recipients", project=(project.slug if project else DEFAULT_PROJECT_KEY)
+                            )
+                            return JSONResponse({"ok": True, "message": "No active recipients"})
+
+                        # Create message
+                        recipients_list = [(agent, "to") for agent in recipient_agents]
+                        message = await _create_message(
+                            project=project,
+                            sender=sender_agent,
+                            subject=message_info["subject"],
+                            body_md=message_info["body_md"],
+                            recipients=recipients_list,
+                            importance="normal",
+                            ack_required=False,
+                            thread_id=message_info.get("thread_id"),
+                            attachments=[],
+                        )
+
+                        # Write message to archive in background to avoid webhook timeout
+                        to_agents = [r[0] for r in recipients_list if r[1] == "to"]
+                        cc_agents = [r[0] for r in recipients_list if r[1] == "cc"]
+                        bcc_agents = [r[0] for r in recipients_list if r[1] == "bcc"]
+                        frontmatter = _message_frontmatter(
+                            message=message,
+                            project=project,
+                            sender=sender_agent,
+                            to_agents=to_agents,
+                            cc_agents=cc_agents,
+                            bcc_agents=bcc_agents,
+                            attachments=[],
+                        )
+
+                        async def _persist_archive() -> None:
+                            try:
+                                archive_project = project or await _get_default_project()
+                                archive = await ensure_archive(settings, archive_project.slug)
+                                await write_message_bundle(
+                                    archive=archive,
+                                    message=frontmatter,
+                                    body_md=message.body_md,
+                                    sender=sender_agent.name,
+                                    recipients=[agent.name for agent in recipient_agents],
+                                    extra_paths=[],
+                                )
+                            except Exception as exc:
+                                logger.error("slack_archive_write_failed", error=str(exc))
+
+                        _archive_task = asyncio.create_task(_persist_archive())
+                        _ = _archive_task
+
+                        # Capture thread mapping so outbound replies stay in the same Slack thread
+                        slack_client_ref = None
+                        try:
+                            from .app import _slack_client as _global_slack_client  # lazy import to avoid cycles
+
+                            slack_client_ref = _global_slack_client
+                        except Exception:
+                            slack_client_ref = None
+
+                        if (
+                            slack_client_ref
+                            and message_info.get("thread_id")
+                            and message_info.get("slack_thread_ts")
+                            and message_info.get("slack_channel")
+                        ):
+                            try:
+                                await slack_client_ref.map_thread(
+                                    mcp_thread_id=message_info["thread_id"],
+                                    slack_channel_id=message_info["slack_channel"],
+                                    slack_thread_ts=message_info["slack_thread_ts"],
+                                )
+                            except Exception as exc:  # best-effort; do not block ingestion
+                                logger.warning("slack_thread_map_failed", error=str(exc))
+
+                        logger.info(
+                            "slack_message_created",
+                            message_id=message.id,
+                            subject=message.subject[:50],
+                            recipients=len(recipient_agents),
+                        )
+
+                        return JSONResponse({"ok": True, "message_id": str(message.id)})
+
+                    except Exception as e:
+                        # Clean up cache on failure to allow Slack retries
+                        if cache_key and cache_key_added:
+                            async with _slack_event_cache_lock:
+                                _slack_event_cache.discard(cache_key)
+                                with contextlib.suppress(ValueError):
+                                    _slack_event_cache_order.remove(cache_key)
+                        logger.error("slack_message_creation_failed", error=str(e))
+                        raise HTTPException(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to create message: {e}"
+                        ) from e
+                else:
+                    # Message was filtered/ignored (e.g., bot message, wrong channel)
+                    return JSONResponse({"ok": True, "message": "Event ignored"})
 
             # Handle reaction_added events (future: map to acknowledgments)
             elif event_subtype == "reaction_added":
