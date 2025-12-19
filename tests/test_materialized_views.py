@@ -6,10 +6,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from mcp_agent_mail.share import (
-    build_materialized_views,
-    create_performance_indexes,
-)
+from mcp_agent_mail.share import build_materialized_views, create_performance_indexes
 
 
 def _create_test_snapshot(snapshot_path: Path) -> None:
@@ -60,7 +57,7 @@ def _create_test_snapshot(snapshot_path: Path) -> None:
                 )
                 VALUES (?, 1, ?, ?, ?, ?, 'normal', 0, ?, '[]')
                 """,
-                (i, (i % 2) + 1, f"thread-{i}", f"Subject {i}", f"Body {i}", f"2025-01-{i:02d}T00:00:00Z"),
+                (i, ((i + 1) % 2) + 1, f"thread-{i}", f"Subject {i}", f"Body {i}", f"2025-01-{i:02d}T00:00:00Z"),
             )
 
         # Insert message recipients

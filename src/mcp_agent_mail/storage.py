@@ -28,6 +28,88 @@ logger = logging.getLogger(__name__)
 
 _IMAGE_PATTERN = re.compile(r"!\[(?P<alt>[^\]]*)\]\((?P<path>[^)]+)\)")
 
+_DEFAULT_RUNTIME_ROOT = Path.home() / ".mcp_agent_mail_runtime"
+
+
+def runtime_root(settings: Settings) -> Path:
+    """Return a non-repo runtime root for lightweight JSON artifacts.
+
+    This is used when Git-backed archive storage is disabled (for example,
+    STORAGE_LOCAL_ARCHIVE_ENABLED=false and STORAGE_PROJECT_KEY_ENABLED=false),
+    but the server still needs a filesystem location for hooks/guards to read
+    advisory artifacts like file reservations.
+    """
+    _ = settings  # reserved for future config wiring
+    env = (os.environ.get("MCP_AGENT_MAIL_RUNTIME_ROOT") or "").strip()
+    root = Path(env).expanduser() if env else _DEFAULT_RUNTIME_ROOT
+    return root.resolve()
+
+
+async def ensure_runtime_project_root(settings: Settings, project_slug: str) -> Path:
+    root = runtime_root(settings) / "projects" / project_slug
+    await _to_thread(root.mkdir, parents=True, exist_ok=True)
+    return root
+
+
+@asynccontextmanager
+async def runtime_write_lock(settings: Settings, project_slug: str, *, timeout_seconds: float = 120.0):
+    root = await ensure_runtime_project_root(settings, project_slug)
+    lock = AsyncFileLock(root / ".runtime.lock", timeout_seconds=timeout_seconds)
+    async with lock:
+        yield root
+
+
+async def write_file_reservation_record_runtime(
+    settings: Settings,
+    project_slug: str,
+    file_reservation: dict[str, object],
+) -> Path:
+    path_pattern = str(file_reservation.get("path_pattern") or file_reservation.get("path") or "").strip()
+    if not path_pattern:
+        raise ValueError("File reservation record must include 'path_pattern'.")
+    normalized_file_reservation = dict(file_reservation)
+    normalized_file_reservation["path_pattern"] = path_pattern
+    normalized_file_reservation.pop("path", None)
+    digest = hashlib.sha1(path_pattern.encode("utf-8")).hexdigest()
+
+    project_root = await ensure_runtime_project_root(settings, project_slug)
+    file_reservations_dir = project_root / "file_reservations"
+    await _to_thread(file_reservations_dir.mkdir, parents=True, exist_ok=True)
+    file_reservation_path = file_reservations_dir / f"{digest}.json"
+    await _write_json(file_reservation_path, normalized_file_reservation)
+    return file_reservation_path
+
+
+async def write_file_reservation_artifacts(
+    settings: Settings,
+    project_slug: str,
+    payloads: list[dict[str, object]],
+    *,
+    project_key: str | None = None,
+) -> list[Path]:
+    """Write file reservation JSON artifacts regardless of archive enablement.
+
+    When archive storage is enabled, writes under the Git-backed project archive.
+    When archive storage is disabled, writes under the runtime artifact root
+    (default: ~/.mcp_agent_mail_runtime).
+    """
+    if not payloads:
+        return []
+
+    if is_archive_enabled(settings):
+        archive = await ensure_archive(settings, project_slug, project_key=project_key)
+        async with archive_write_lock(archive):
+            out: list[Path] = []
+            for payload in payloads:
+                out.append(await write_file_reservation_record(archive, payload))
+            return out
+
+    async with runtime_write_lock(settings, project_slug):
+        out: list[Path] = []
+        for payload in payloads:
+            out.append(await write_file_reservation_record_runtime(settings, project_slug, payload))
+        return out
+
 
 def is_archive_enabled(settings: Settings) -> bool:
     """Check if archive storage is enabled (either local or project-key based).
@@ -503,7 +585,7 @@ async def write_agent_deletion_marker(
     await _commit(archive.repo, archive.settings, f"agent: delete {agent_name}", [rel])
 
 
-async def write_file_reservation_record(archive: ProjectArchive, file_reservation: dict[str, object]) -> None:
+async def write_file_reservation_record(archive: ProjectArchive, file_reservation: dict[str, object]) -> Path:
     path_pattern = str(file_reservation.get("path_pattern") or file_reservation.get("path") or "").strip()
     if not path_pattern:
         raise ValueError("File reservation record must include 'path_pattern'.")
@@ -520,6 +602,7 @@ async def write_file_reservation_record(archive: ProjectArchive, file_reservatio
         f"file_reservation: {agent_name} {path_pattern}",
         [file_reservation_path.relative_to(archive.repo_root).as_posix()],
     )
+    return file_reservation_path
 
 
 async def write_message_bundle(
