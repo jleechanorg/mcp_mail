@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp_mail"
-version = "0.1.12"
+version = "0.1.13"
 description = "Coordinated multi-agent messaging and coordination MCP server."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -83,9 +83,17 @@ exclude = ["/.venv", "/.vscode", "/.idea", "/.git", "/__pycache__", "*.py[cod]",
 
 [tool.ty]
 overrides = [
-    { include = ["scripts/**/*.py"], rules = { "unresolved-reference" = "ignore" } },
-    { include = ["src/mcp_agent_mail/app.py"], rules = { "redundant-cast" = "warn" } },
-    { include = ["src/mcp_agent_mail/http.py"], rules = { "invalid-argument-type" = "warn" } }
+    # Scripts/tests are not held to the same typing strictness as the core library.
+    { include = ["scripts/**/*.py"], rules = { "unresolved-reference" = "ignore", "invalid-argument-type" = "warn", "invalid-return-type" = "warn" } },
+    { include = ["tests/**/*.py"], rules = { "invalid-argument-type" = "warn", "no-matching-overload" = "warn", "unsupported-operator" = "warn", "invalid-return-type" = "warn", "invalid-assignment" = "warn" } },
+
+    # SQLModel/SQLAlchemy-heavy modules: ty currently struggles to type many ORM expressions.
+    { include = ["src/mcp_agent_mail/app.py"], rules = { "redundant-cast" = "warn", "invalid-argument-type" = "warn", "no-matching-overload" = "warn", "unresolved-attribute" = "warn", "invalid-return-type" = "warn", "invalid-assignment" = "warn" } },
+    { include = ["src/mcp_agent_mail/cli.py"], rules = { "invalid-argument-type" = "warn", "no-matching-overload" = "warn", "unresolved-attribute" = "warn", "invalid-return-type" = "warn", "invalid-assignment" = "warn", "unsupported-operator" = "warn" } },
+    { include = ["src/mcp_agent_mail/storage.py"], rules = { "invalid-argument-type" = "warn", "no-matching-overload" = "warn", "unsupported-operator" = "warn", "invalid-return-type" = "warn", "invalid-assignment" = "warn" } },
+    { include = ["src/mcp_agent_mail/slack_integration.py"], rules = { "invalid-argument-type" = "warn", "no-matching-overload" = "warn", "unresolved-attribute" = "warn", "invalid-return-type" = "warn" } },
+
+    { include = ["src/mcp_agent_mail/http.py"], rules = { "invalid-argument-type" = "warn" } },
 ]
 
 [tool.ruff]

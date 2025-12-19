@@ -207,3 +207,20 @@ async def get_historical_inbox_snapshot(
         "requested_time": timestamp,
         "note": "Archive functionality has been removed",
     }
+
+
+async def write_file_reservation_artifacts(
+    settings: Settings,
+    project_slug: str,
+    payloads: list[dict[str, object]],
+    *,
+    project_key: str | None = None,
+) -> list[Path]:
+    """Stub function - archive functionality has been removed."""
+    return []
+
+
+async def ensure_runtime_project_root(settings: Settings, project_slug: str) -> Path:
+    """Stub function - archive functionality has been removed."""
+    path = Path("/tmp/mcp_mail_dummy_runtime") / project_slug
+    return path

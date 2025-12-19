@@ -158,6 +158,43 @@ Current credentials configured in `~/.bashrc`:
 - `GITHUB_TOKEN` - GitHub API access (see GitHub Authentication section above)
 - `PYPI_TOKEN` - PyPI package publishing
 
+### MCP Agent Mail Credentials
+
+For MCP Agent Mail server credentials (especially Slack integration), use the dedicated credentials file at `~/.mcp_mail/credentials.json`. This is the **preferred location for PyPI installs** where there's no local `.env` file.
+
+**Credential precedence** (highest to lowest):
+1. Environment variables
+2. `~/.mcp_mail/credentials.json` (user-level, recommended)
+3. Local `.env` file (development)
+4. Built-in defaults
+
+**Example `~/.mcp_mail/credentials.json`:**
+```json
+{
+  "SLACK_ENABLED": "true",
+  "SLACK_BOT_TOKEN": "xoxb-your-bot-token",
+  "SLACK_SIGNING_SECRET": "your-signing-secret",
+  "SLACK_WEBHOOK_URL": "https://your-tunnel-url.example.com/slack/events",
+  "SLACK_SYNC_PROJECT_NAME": "slack-sync",
+  "SLACK_ALLOWED_CHANNELS": "",
+  "SLACK_IGNORE_BOT_MESSAGES": "true",
+  "SLACKBOX_ENABLED": "false",
+  "SLACKBOX_TOKEN": "",
+  "SLACKBOX_CHANNELS": ""
+}
+```
+
+**Setup steps:**
+1. Create the directory: `mkdir -p ~/.mcp_mail`
+2. Create the credentials file with your values
+3. Secure permissions: `chmod 600 ~/.mcp_mail/credentials.json`
+4. Restart the MCP Agent Mail server
+
+**Where to get Slack credentials:**
+- `SLACK_BOT_TOKEN`: Slack App > OAuth & Permissions > Bot User OAuth Token (`xoxb-...`)
+- `SLACK_SIGNING_SECRET`: Slack App > Basic Information > App Credentials > Signing Secret
+- `SLACK_WEBHOOK_URL`: Your public URL for receiving Slack events (use Tunnelmole: `npm i -g tunnelmole && tmole 8765`)
+
 ### Best Practices
 
 - **Never commit credentials** to Git repositories

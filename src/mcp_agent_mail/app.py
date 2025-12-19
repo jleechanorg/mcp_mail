@@ -25,7 +25,7 @@ from fastmcp import Context, FastMCP
 from fastmcp.tools.tool import ToolResult  # type: ignore
 from git import Repo
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
-from sqlalchemy import asc, bindparam, delete, desc, func, or_, select, text, update
+from sqlalchemy import Column, Integer, MetaData, Table, asc, bindparam, delete, desc, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, NoResultFound, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -51,7 +51,13 @@ from .slots import (
     release_build_slot as release_slot_impl,
     renew_build_slot as renew_slot_impl,
 )
-from .storage import ProjectArchive, ProjectStorageResolutionError, collect_lock_status, heal_archive_locks
+from .storage import (
+    ProjectArchive,
+    ProjectStorageResolutionError,
+    collect_lock_status,
+    heal_archive_locks,
+    write_file_reservation_artifacts,
+)
 from .utils import generate_agent_name, sanitize_agent_name, slugify
 
 logger = logging.getLogger(__name__)
@@ -466,11 +472,10 @@ def _lifespan_factory(settings: Settings):
             )
         await ensure_schema(settings)
 
-        # Initialize Slack client if enabled
+        # Initialize Slack client if enabled (using singleton to share thread mappings)
         if settings.slack.enabled:
             try:
-                _slack_client = SlackClient(settings.slack)
-                await _slack_client.connect()
+                _slack_client = await SlackClient.get_instance(settings.slack)
                 logger.info("Slack integration initialized successfully")
             except Exception as e:
                 logger.error(f"Failed to initialize Slack integration: {e}")
@@ -2354,22 +2359,25 @@ async def _find_mentions_in_global_inbox(
 
     await ensure_schema()
     sender_alias = aliased(Agent)
+    # fts_messages is a SQLite FTS5 virtual table created by db._setup_fts(). It is not part of SQLModel metadata,
+    # so we reference it via a lightweight Table construct for ORM-safe joins.
+    fts_messages = Table(
+        "fts_messages",
+        MetaData(),
+        Column("rowid", Integer),
+        Column("message_id", Integer),
+        Column("subject"),
+        Column("body"),
+    )
+    fts_query = f'"{agent_name}"'
 
     async with get_session() as session:
-        # Use FTS5 MATCH query for fast full-text search
-        # FTS5 query: agent_name will match complete tokens (words) due to tokenization
-        # This is similar to word boundary matching but faster
         stmt = (
             select(Message, MessageRecipient.kind, sender_alias.name)
             .join(MessageRecipient, MessageRecipient.message_id == Message.id)
             .join(sender_alias, Message.sender_id == sender_alias.id)
-            .join(
-                # Join with FTS5 virtual table
-                text("fts_messages ON messages.id = fts_messages.rowid")
-            )
             .where(
                 MessageRecipient.agent_id == global_inbox_agent.id,
-                # FTS5 MATCH query - searches subject and body for the agent name
                 text("fts_messages MATCH :agent_name"),
             )
             .order_by(desc(Message.created_ts))
@@ -2383,9 +2391,9 @@ async def _find_mentions_in_global_inbox(
         # Apply limit after all filters for clarity and maintainability
         stmt = stmt.limit(limit)
 
-        # Execute with agent name as parameter (escaped for FTS5)
-        # FTS5 tokenizes on word boundaries, so this effectively does word matching
-        result = await session.execute(stmt, {"agent_name": f'"{agent_name}"'})
+        stmt = stmt.join(fts_messages, Message.id == fts_messages.c.rowid)
+
+        result = await session.execute(stmt, {"agent_name": fts_query})
         rows = result.all()
 
     messages: list[dict[str, Any]] = []
@@ -2775,7 +2783,7 @@ async def _update_recipient_timestamp(
         current: Optional[datetime] = getattr(rec, field, None)
         if current is not None:
             # Already set; return existing value without updating
-            return current
+            return _ensure_utc(current)
         # Set only if null
         stmt = (
             update(MessageRecipient)
@@ -2798,7 +2806,7 @@ async def _get_recipient_timestamp(agent: Agent, message_id: int, field: str) ->
                 MessageRecipient.agent_id == agent.id,
             )
         )
-        return result.scalars().first()
+        return _ensure_utc(result.scalars().first())
 
 
 async def _validate_agent_is_recipient(agent: Agent, message_id: int) -> None:
@@ -2846,6 +2854,7 @@ EXTENDED_TOOLS = {
     "delete_agent",
     "acknowledge_message",
     "search_messages",
+    "create_file_reservation",
     "file_reservation_paths",
     "release_file_reservations",
     "force_release_file_reservation",
@@ -2880,6 +2889,10 @@ EXTENDED_TOOL_METADATA = {
     "file_reservation_paths": {
         "category": "file_reservations",
         "description": "Reserve file paths/globs for exclusive or shared access",
+    },
+    "create_file_reservation": {
+        "category": "file_reservations",
+        "description": "Create a single file reservation (path/glob)",
     },
     "release_file_reservations": {"category": "file_reservations", "description": "Release active file reservations"},
     "force_release_file_reservation": {
@@ -4727,6 +4740,7 @@ def build_mcp_server() -> FastMCP:
                             message_id=str(message.id),
                             agent_name=agent.name,
                             subject=message.subject,
+                            thread_id=message.thread_id,
                         )
 
                     task = asyncio.create_task(_send_ack_notification())
@@ -5681,6 +5695,123 @@ def build_mcp_server() -> FastMCP:
             await ctx.info(f"No pre-commit guard to remove at {repo_path / '.git/hooks/pre-commit'}.")
         return {"removed": removed}
 
+    @mcp.tool(name="create_file_reservation")
+    @_instrument_tool(
+        "create_file_reservation",
+        cluster=CLUSTER_FILE_RESERVATIONS,
+        capabilities={"file_reservations", "repository"},
+        project_arg="project_key",
+        agent_arg="agent_name",
+    )
+    async def create_file_reservation(
+        ctx: Context,
+        project_key: str,
+        agent_name: str,
+        path_pattern: str,
+        ttl_seconds: int = 3600,
+        exclusive: bool = True,
+        reason: str = "",
+    ) -> dict[str, Any]:
+        """
+        Create a single advisory file reservation (lease) for a project-relative path/glob.
+
+        This is the single-path convenience tool; for multiple paths use `file_reservation_paths`.
+        """
+        project = await _ensure_project(project_key)
+        settings = get_settings()
+        if get_settings().tools_log_enabled:
+            try:
+                import importlib as _imp
+
+                _rc = _imp.import_module("rich.console")
+                _rp = _imp.import_module("rich.panel")
+                Console = _rc.Console
+                Panel = _rp.Panel
+                Console().print(
+                    Panel.fit(
+                        f"path_pattern={path_pattern}",
+                        title=f"tool: create_file_reservation — agent={agent_name} ttl={ttl_seconds}s",
+                        border_style="green",
+                    )
+                )
+            except Exception:
+                pass
+
+        agent = await _get_agent_optional(project, agent_name)
+        if not agent:
+            agent = await _get_or_create_agent(
+                project,
+                agent_name,
+                program="mcp-agent-mail",
+                model="auto",
+                task_description="Auto-created for file reservations",
+                settings=settings,
+            )
+        if project.id is None:
+            raise ValueError("Project must have an id before creating file reservations.")
+        stale_auto_releases = await _expire_stale_file_reservations(project.id)
+        if stale_auto_releases:
+            summary = ", ".join(
+                f"{status.agent.name}:{status.reservation.path_pattern}" for status in stale_auto_releases[:5]
+            )
+            extra = f" ({summary})" if summary else ""
+            await ctx.info(f"Auto-released {len(stale_auto_releases)} stale file_reservation(s){extra}.")
+        project_id = project.id
+        async with get_session() as session:
+            existing_rows = await session.execute(
+                select(FileReservation, Agent.name)
+                .join(Agent, FileReservation.agent_id == Agent.id)
+                .where(
+                    FileReservation.project_id == project_id,
+                    cast(Any, FileReservation.released_ts).is_(None),
+                    FileReservation.expires_ts > datetime.now(timezone.utc),
+                )
+            )
+            existing_reservations = existing_rows.all()
+
+        conflicting_holders: list[dict[str, Any]] = []
+        for file_reservation_record, holder_name in existing_reservations:
+            if _file_reservations_conflict(file_reservation_record, path_pattern, exclusive, agent):
+                conflicting_holders.append(
+                    {
+                        "agent": holder_name,
+                        "path_pattern": file_reservation_record.path_pattern,
+                        "exclusive": file_reservation_record.exclusive,
+                        "expires_ts": _iso(file_reservation_record.expires_ts),
+                    }
+                )
+
+        file_reservation = await _create_file_reservation(project, agent, path_pattern, exclusive, reason, ttl_seconds)
+        file_reservation_payload = {
+            "id": file_reservation.id,
+            "project": project.human_key,
+            "agent": agent.name,
+            "path_pattern": file_reservation.path_pattern,
+            "exclusive": file_reservation.exclusive,
+            "reason": file_reservation.reason,
+            "created_ts": _iso(file_reservation.created_ts),
+            "expires_ts": _iso(file_reservation.expires_ts),
+            "released_ts": None,
+        }
+        await write_file_reservation_artifacts(
+            settings, project.slug, [cast(dict[str, object], file_reservation_payload)], project_key=project.human_key
+        )
+
+        granted = [
+            {
+                "id": file_reservation.id,
+                "path_pattern": file_reservation.path_pattern,
+                "exclusive": file_reservation.exclusive,
+                "reason": file_reservation.reason,
+                "expires_ts": _iso(file_reservation.expires_ts),
+            }
+        ]
+        conflicts: list[dict[str, Any]] = []
+        if conflicting_holders:
+            conflicts.append({"path": path_pattern, "holders": conflicting_holders})
+        await ctx.info(f"Issued 1 file_reservation for '{agent.name}'. Conflicts: {len(conflicts)}")
+        return {"granted": granted, "conflicts": conflicts}
+
     @mcp.tool(name="file_reservation_paths")
     @_instrument_tool(
         "file_reservation_paths",
@@ -5747,7 +5878,7 @@ def build_mcp_server() -> FastMCP:
         }}}
         ```
         """
-        project = await _get_project_by_identifier(project_key)
+        project = await _ensure_project(project_key)
         settings = get_settings()
         if settings.tools_log_enabled:
             try:
@@ -5767,7 +5898,16 @@ def build_mcp_server() -> FastMCP:
                 )
             except Exception:
                 pass
-        agent = await _get_agent(project, agent_name)
+        agent = await _get_agent_optional(project, agent_name)
+        if not agent:
+            agent = await _get_or_create_agent(
+                project,
+                agent_name,
+                program="mcp-agent-mail",
+                model="auto",
+                task_description="Auto-created for file reservations",
+                settings=settings,
+            )
         if project.id is None:
             raise ValueError("Project must have an id before reserving file paths.")
         stale_auto_releases = await _expire_stale_file_reservations(project.id)
@@ -5893,23 +6033,55 @@ def build_mcp_server() -> FastMCP:
                 raise ValueError("Project and agent must have ids before releasing file_reservations.")
             await ensure_schema()
             now = datetime.now(timezone.utc)
+            released_reservations: list[FileReservation] = []
             async with get_session() as session:
-                stmt = (
-                    update(FileReservation)
-                    .where(
-                        FileReservation.project_id == project.id,
-                        FileReservation.agent_id == agent.id,
-                        cast(Any, FileReservation.released_ts).is_(None),
-                    )
-                    .values(released_ts=now)
+                sel = select(FileReservation).where(
+                    FileReservation.project_id == project.id,
+                    FileReservation.agent_id == agent.id,
+                    cast(Any, FileReservation.released_ts).is_(None),
+                )
+                if file_reservation_ids:
+                    sel = sel.where(cast(Any, FileReservation.id).in_(file_reservation_ids))
+                if paths:
+                    sel = sel.where(cast(Any, FileReservation.path_pattern).in_(paths))
+                rows = await session.execute(sel)
+                released_reservations = list(rows.scalars().all())
+
+                stmt = update(FileReservation).where(
+                    FileReservation.project_id == project.id,
+                    FileReservation.agent_id == agent.id,
+                    cast(Any, FileReservation.released_ts).is_(None),
                 )
                 if file_reservation_ids:
                     stmt = stmt.where(cast(Any, FileReservation.id).in_(file_reservation_ids))
                 if paths:
                     stmt = stmt.where(cast(Any, FileReservation.path_pattern).in_(paths))
+                stmt = stmt.values(released_ts=now)
                 result = await session.execute(stmt)
                 await session.commit()
             affected = int(result.rowcount or 0)
+            if affected and released_reservations:
+                payloads: list[dict[str, object]] = []
+                for reservation in released_reservations:
+                    payloads.append(
+                        {
+                            "id": reservation.id,
+                            "project": project.human_key,
+                            "agent": agent.name,
+                            "path_pattern": reservation.path_pattern,
+                            "exclusive": reservation.exclusive,
+                            "reason": reservation.reason,
+                            "created_ts": _iso(reservation.created_ts),
+                            "expires_ts": _iso(reservation.expires_ts),
+                            "released_ts": _iso(now),
+                        }
+                    )
+                await write_file_reservation_artifacts(
+                    settings,
+                    project.slug,
+                    payloads,
+                    project_key=project.human_key,
+                )
             await ctx.info(f"Released {affected} file_reservations for '{agent.name}'.")
             return {"released": affected, "released_at": _iso(now)}
         except Exception as exc:
@@ -6040,6 +6212,16 @@ def build_mcp_server() -> FastMCP:
             else None,
             "last_git_activity_ts": _iso(target_status.last_git_activity) if target_status.last_git_activity else None,
         }
+
+        # Emit an updated artifact so hooks/guards can observe the released state.
+        artifact_payload = dict(summary)
+        artifact_payload["project"] = project.human_key
+        await write_file_reservation_artifacts(
+            settings,
+            project.slug,
+            [cast(dict[str, object], artifact_payload)],
+            project_key=project.human_key,
+        )
 
         await ctx.info(
             f"Force released reservation {file_reservation_id} held by '{holder.name}' on '{reservation.path_pattern}'."
@@ -6183,6 +6365,7 @@ def build_mcp_server() -> FastMCP:
             return {"renewed": 0, "file_reservations": []}
 
         updated: list[dict[str, Any]] = []
+        artifact_payloads: list[dict[str, object]] = []
         async with get_session() as session:
             for file_reservation in file_reservations:
                 old_exp = file_reservation.expires_ts
@@ -6199,6 +6382,19 @@ def build_mcp_server() -> FastMCP:
                         "path_pattern": file_reservation.path_pattern,
                         "old_expires_ts": _iso(old_exp),
                         "new_expires_ts": _iso(file_reservation.expires_ts),
+                    }
+                )
+                artifact_payloads.append(
+                    {
+                        "id": file_reservation.id,
+                        "project": project.human_key,
+                        "agent": agent.name,
+                        "path_pattern": file_reservation.path_pattern,
+                        "exclusive": file_reservation.exclusive,
+                        "reason": file_reservation.reason,
+                        "created_ts": _iso(file_reservation.created_ts),
+                        "expires_ts": _iso(file_reservation.expires_ts),
+                        "released_ts": None,
                     }
                 )
             await session.commit()
@@ -8522,6 +8718,7 @@ def build_mcp_server() -> FastMCP:
             "acknowledge_message": acknowledge_message,
             "acquire_build_slot": acquire_build_slot,
             "create_agent_identity": create_agent_identity,
+            "create_file_reservation": create_file_reservation,
             "delete_agent": delete_agent,
             "file_reservation_paths": file_reservation_paths,
             "force_release_file_reservation": force_release_file_reservation,

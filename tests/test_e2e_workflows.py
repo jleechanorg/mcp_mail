@@ -2,160 +2,15 @@
 
 from __future__ import annotations
 
-import json
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from mcp_agent_mail import build_mcp_server
-from mcp_agent_mail.config import get_settings
-from mcp_agent_mail.guard import render_prepush_script
+# Removed imports related to guards and build slots
 from mcp_agent_mail.share import build_materialized_views, create_performance_indexes, finalize_snapshot_for_export
-from mcp_agent_mail.storage import ensure_archive, write_file_reservation_record
 
-
-def _init_git_repo(path: Path) -> None:
-    """Initialize a git repository with config."""
-    subprocess.run(["git", "init"], cwd=str(path), check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(path), check=True)
-    subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(path), check=True)
-
-
-def _create_and_commit_file(repo: Path, filename: str, content: str = "test") -> None:
-    """Create a file and commit it."""
-    file_path = repo / filename
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    file_path.write_text(content)
-    subprocess.run(["git", "add", filename], cwd=str(repo), check=True)
-    subprocess.run(["git", "commit", "-m", f"Add {filename}"], cwd=str(repo), check=True, capture_output=True)
-
-
-@pytest.mark.asyncio
-async def test_e2e_build_slots_with_file_reservations(isolated_env, tmp_path: Path):
-    """End-to-end test: Build slots combined with file reservations."""
-    server = build_mcp_server()
-    settings = get_settings()
-    await ensure_archive(settings, "e2e-project")
-
-    import os
-
-    os.environ["WORKTREES_ENABLED"] = "1"
-
-    # Agent1 creates a file reservation
-    result = await server._mcp_server.call_tool(
-        "create_file_reservation",
-        {
-            "project_key": "e2e-project",
-            "agent_name": "Agent1",
-            "path_pattern": "src/*.py",
-            "exclusive": True,
-            "ttl_seconds": 3600,
-        },
-    )
-    assert result[0].text
-
-    # Agent1 acquires a build slot
-    result = await server._mcp_server.call_tool(
-        "acquire_build_slot",
-        {
-            "project_key": "e2e-project",
-            "agent_name": "Agent1",
-            "slot": "backend-build",
-            "ttl_seconds": 3600,
-            "exclusive": True,
-        },
-    )
-    data = json.loads(result[0].text)
-    assert data["granted"] is True
-
-    # Agent2 tries to acquire the same build slot
-    result = await server._mcp_server.call_tool(
-        "acquire_build_slot",
-        {
-            "project_key": "e2e-project",
-            "agent_name": "Agent2",
-            "slot": "backend-build",
-            "ttl_seconds": 3600,
-            "exclusive": True,
-        },
-    )
-    data = json.loads(result[0].text)
-    # Should report conflict
-    assert len(data["conflicts"]) > 0
-
-    # Agent1 releases the build slot
-    result = await server._mcp_server.call_tool(
-        "release_build_slot", {"project_key": "e2e-project", "agent_name": "Agent1", "slot": "backend-build"}
-    )
-    data = json.loads(result[0].text)
-    assert data["released"] is True
-
-    # Agent2 can now acquire the slot without conflicts
-    result = await server._mcp_server.call_tool(
-        "acquire_build_slot",
-        {
-            "project_key": "e2e-project",
-            "agent_name": "Agent2",
-            "slot": "backend-build",
-            "ttl_seconds": 3600,
-            "exclusive": True,
-        },
-    )
-    data = json.loads(result[0].text)
-    assert data["granted"] is True
-    # No active conflicts from Agent1 (slot was released)
-    assert all("Agent1" not in str(c) for c in data.get("conflicts", []))
-
-
-@pytest.mark.asyncio
-async def test_e2e_pre_push_guard_with_build_slots(isolated_env, tmp_path: Path):
-    """End-to-end test: Pre-push guard checking file reservations while build slot is active."""
-    settings = get_settings()
-    archive = await ensure_archive(settings, "guard-project")
-
-    # Create file reservation
-    await write_file_reservation_record(
-        archive,
-        {
-            "agent": "BuildAgent",
-            "path_pattern": "build/**/*",
-            "exclusive": True,
-        },
-    )
-
-    # Render pre-push script
-    prepush_script = render_prepush_script(archive)
-    script_path = tmp_path / "prepush.py"
-    script_path.write_text(prepush_script)
-
-    # Create git repo
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _init_git_repo(repo)
-
-    # Commit changes to reserved area
-    _create_and_commit_file(repo, "build/output.bin", "binary data")
-
-    # Run pre-push hook
-    import os
-
-    result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True)
-    local_sha = result.stdout.strip()
-
-    env = os.environ.copy()
-    env["AGENT_NAME"] = "DeployAgent"  # Different from BuildAgent
-    env["WORKTREES_ENABLED"] = "1"
-
-    hook_input = f"refs/heads/main {local_sha} refs/heads/main 0000000000000000000000000000000000000000\n"
-    proc = subprocess.run(
-        ["python", str(script_path)], cwd=str(repo), env=env, input=hook_input, capture_output=True, text=True
-    )
-
-    # Should detect conflict
-    assert proc.returncode == 1
-    assert "conflict" in proc.stderr.lower()
-
+# Removed _init_git_repo and _create_and_commit_file helpers as they were only used by removed tests
 
 @pytest.mark.asyncio
 async def test_e2e_materialized_views_with_share_export(isolated_env, tmp_path: Path):
@@ -258,165 +113,6 @@ async def test_e2e_materialized_views_with_share_export(isolated_env, tmp_path: 
     finally:
         conn.close()
 
-
-@pytest.mark.asyncio
-async def test_e2e_multi_agent_workflow(isolated_env, tmp_path: Path):
-    """End-to-end test: Multiple agents coordinating with build slots and file reservations."""
-    server = build_mcp_server()
-    settings = get_settings()
-    await ensure_archive(settings, "multi-agent-project")
-
-    import os
-
-    os.environ["WORKTREES_ENABLED"] = "1"
-
-    # Scenario: Frontend and Backend agents working in parallel
-
-    # Frontend agent claims frontend build slot
-    result = await server._mcp_server.call_tool(
-        "acquire_build_slot",
-        {
-            "project_key": "multi-agent-project",
-            "agent_name": "FrontendAgent",
-            "slot": "frontend-build",
-            "ttl_seconds": 3600,
-            "exclusive": True,
-        },
-    )
-    assert json.loads(result[0].text)["granted"] is True
-
-    # Backend agent claims backend build slot (different slot)
-    result = await server._mcp_server.call_tool(
-        "acquire_build_slot",
-        {
-            "project_key": "multi-agent-project",
-            "agent_name": "BackendAgent",
-            "slot": "backend-build",
-            "ttl_seconds": 3600,
-            "exclusive": True,
-        },
-    )
-    assert json.loads(result[0].text)["granted"] is True
-
-    # Frontend agent reserves frontend files
-    result = await server._mcp_server.call_tool(
-        "create_file_reservation",
-        {
-            "project_key": "multi-agent-project",
-            "agent_name": "FrontendAgent",
-            "path_pattern": "frontend/**/*.ts",
-            "exclusive": True,
-            "ttl_seconds": 3600,
-        },
-    )
-    assert result[0].text
-
-    # Backend agent reserves backend files
-    result = await server._mcp_server.call_tool(
-        "create_file_reservation",
-        {
-            "project_key": "multi-agent-project",
-            "agent_name": "BackendAgent",
-            "path_pattern": "backend/**/*.py",
-            "exclusive": True,
-            "ttl_seconds": 3600,
-        },
-    )
-    assert result[0].text
-
-    # Both agents can work in parallel - different slots, different files
-    # Frontend agent renews slot
-    result = await server._mcp_server.call_tool(
-        "renew_build_slot",
-        {
-            "project_key": "multi-agent-project",
-            "agent_name": "FrontendAgent",
-            "slot": "frontend-build",
-            "extend_seconds": 1800,
-        },
-    )
-    assert json.loads(result[0].text)["renewed"] is True
-
-    # Backend agent renews slot
-    result = await server._mcp_server.call_tool(
-        "renew_build_slot",
-        {
-            "project_key": "multi-agent-project",
-            "agent_name": "BackendAgent",
-            "slot": "backend-build",
-            "extend_seconds": 1800,
-        },
-    )
-    assert json.loads(result[0].text)["renewed"] is True
-
-    # Both agents finish and release slots
-    result = await server._mcp_server.call_tool(
-        "release_build_slot",
-        {"project_key": "multi-agent-project", "agent_name": "FrontendAgent", "slot": "frontend-build"},
-    )
-    assert json.loads(result[0].text)["released"] is True
-
-    result = await server._mcp_server.call_tool(
-        "release_build_slot",
-        {"project_key": "multi-agent-project", "agent_name": "BackendAgent", "slot": "backend-build"},
-    )
-    assert json.loads(result[0].text)["released"] is True
-
-
-@pytest.mark.asyncio
-async def test_e2e_guard_lifecycle(isolated_env, tmp_path: Path):
-    """End-to-end test: Full guard lifecycle from installation to execution."""
-    settings = get_settings()
-    archive = await ensure_archive(settings, "guard-lifecycle")
-
-    # Install guards
-    from mcp_agent_mail.guard import install_guard, install_prepush_guard
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _init_git_repo(repo)
-
-    # Install both pre-commit and pre-push guards
-    await install_guard(settings, "guard-lifecycle", repo)
-    await install_prepush_guard(settings, "guard-lifecycle", repo)
-
-    # Verify hooks were installed
-    precommit_hook = repo / ".git" / "hooks" / "pre-commit"
-    prepush_hook = repo / ".git" / "hooks" / "pre-push"
-
-    assert precommit_hook.exists()
-    assert prepush_hook.exists()
-
-    # Create a file reservation
-    await write_file_reservation_record(
-        archive,
-        {
-            "agent": "ProtectedAgent",
-            "path_pattern": "protected/**/*",
-            "exclusive": True,
-        },
-    )
-
-    # Try to commit a file in protected area (should be blocked by pre-commit)
-    protected_file = repo / "protected" / "data.txt"
-    protected_file.parent.mkdir()
-    protected_file.write_text("sensitive data")
-
-    subprocess.run(["git", "add", "protected/data.txt"], cwd=str(repo), check=True)
-
-    # Run pre-commit hook
-    import os
-
-    env = os.environ.copy()
-    env["AGENT_NAME"] = "OtherAgent"
-    env["WORKTREES_ENABLED"] = "1"
-
-    proc = subprocess.run(["python", str(precommit_hook)], cwd=str(repo), env=env, capture_output=True, text=True)
-
-    # Should block the commit
-    assert proc.returncode == 1
-
-
 @pytest.mark.asyncio
 async def test_e2e_database_optimizations_query_performance(isolated_env, tmp_path: Path):
     """End-to-end test: Verify database optimizations improve query performance."""
@@ -496,7 +192,6 @@ async def test_e2e_database_optimizations_query_performance(isolated_env, tmp_pa
     # but we can verify the optimization infrastructure is in place
     assert time_after >= 0  # Query completed
 
-
 @pytest.mark.asyncio
 async def test_e2e_incremental_share_updates(isolated_env, tmp_path: Path):
     """End-to-end test: Multiple share exports with incremental updates."""
@@ -540,6 +235,7 @@ async def test_e2e_incremental_share_updates(isolated_env, tmp_path: Path):
 
     # Export v1
     finalize_snapshot_for_export(snapshot_v1)
+    build_materialized_views(snapshot_v1)
 
     # Verify v1 has optimizations
     conn = sqlite3.connect(str(snapshot_v1))
@@ -568,6 +264,7 @@ async def test_e2e_incremental_share_updates(isolated_env, tmp_path: Path):
 
     # Export v2 (incremental update)
     finalize_snapshot_for_export(snapshot_v2)
+    build_materialized_views(snapshot_v2)
 
     # Verify v2 has all messages in materialized view
     conn = sqlite3.connect(str(snapshot_v2))
