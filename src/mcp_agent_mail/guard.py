@@ -21,26 +21,25 @@ __all__ = [
 ]
 
 
-def _resolve_file_reservations_dir(file_reservations_dir: Path | ProjectArchive) -> Path:
-    if isinstance(file_reservations_dir, ProjectArchive):
-        return file_reservations_dir.root / "file_reservations"
-    return file_reservations_dir
+def _guard_stub_script() -> str:
+    return "#!/usr/bin/env python3\n# Archive storage removed - guard disabled\nimport sys\nsys.exit(0)\n"
 
 
-def render_precommit_script(file_reservations_dir: Path | ProjectArchive) -> str:
+async def _write_guard_stub(hook_path: Path) -> None:
+    def _write() -> None:
+        hook_path.parent.mkdir(parents=True, exist_ok=True)
+        hook_path.write_text(_guard_stub_script(), encoding="utf-8")
+        hook_path.chmod(0o755)
+
+    await asyncio.to_thread(_write)
+
+
+def render_precommit_script(archive: ProjectArchive) -> str:
     """Return stub pre-commit script.
 
     NOTE: Archive storage has been removed. This keeps the legacy signature for compatibility.
     """
-    resolved_dir = _resolve_file_reservations_dir(file_reservations_dir)
-    return (
-        "#!/usr/bin/env python3\n"
-        "# Archive storage removed - guard disabled\n"
-        f"FILE_RESERVATIONS_DIR = {resolved_dir!r}\n"
-        "AGENT_NAME = None\n"
-        "import sys\n"
-        "sys.exit(0)\n"
-    )
+    return _guard_stub_script()
 
 
 def render_prepush_script(file_reservations_dir: Path | ProjectArchive) -> str:
@@ -48,40 +47,26 @@ def render_prepush_script(file_reservations_dir: Path | ProjectArchive) -> str:
 
     NOTE: Archive storage has been removed. This keeps the legacy signature for compatibility.
     """
-    resolved_dir = _resolve_file_reservations_dir(file_reservations_dir)
-    return (
-        "#!/usr/bin/env python3\n"
-        "# Archive storage removed - guard disabled\n"
-        f"FILE_RESERVATIONS_DIR = {resolved_dir!r}\n"
-        "AGENT_NAME = None\n"
-        "import sys\n"
-        "sys.exit(0)\n"
-    )
-
-
-def _write_guard_stub(hook_path: Path, content: str) -> None:
-    hook_path.parent.mkdir(parents=True, exist_ok=True)
-    hook_path.write_text(content, encoding="utf-8")
-    hook_path.chmod(0o755)
+    return _guard_stub_script()
 
 
 async def install_guard(settings: Settings, project_slug: str, repo_path: Path) -> Path:
     """Install the pre-commit guard for the given project into the repo.
 
-    NOTE: Archive storage has been removed. This writes a placeholder script for compatibility.
+    NOTE: Archive storage has been removed. Installs a no-op stub script.
     """
     hook_path = repo_path / ".git" / "hooks" / "pre-commit"
-    await asyncio.to_thread(_write_guard_stub, hook_path, render_precommit_script(hook_path.parent))
+    await _write_guard_stub(hook_path)
     return hook_path
 
 
 async def install_prepush_guard(settings: Settings, project_slug: str, repo_path: Path) -> Path:
     """Install the pre-push guard for the given project into the repo.
 
-    NOTE: Archive storage has been removed. This writes a placeholder script for compatibility.
+    NOTE: Archive storage has been removed. Installs a no-op stub script.
     """
     hook_path = repo_path / ".git" / "hooks" / "pre-push"
-    await asyncio.to_thread(_write_guard_stub, hook_path, render_prepush_script(hook_path.parent))
+    await _write_guard_stub(hook_path)
     return hook_path
 
 

@@ -21,12 +21,12 @@ async def test_install_and_uninstall_precommit_guard_tools(isolated_env, tmp_pat
         # Initialize git repo
         import subprocess
 
-        await asyncio.to_thread(subprocess.run, ["git", "init"], cwd=str(repo_dir), check=True)
+        await asyncio.to_thread(lambda: subprocess.run(["git", "init"], cwd=str(repo_dir), check=True))
         await asyncio.to_thread(
-            subprocess.run, ["git", "config", "user.email", "test@example.com"], cwd=str(repo_dir), check=True
+            lambda: subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(repo_dir), check=True)
         )
         await asyncio.to_thread(
-            subprocess.run, ["git", "config", "user.name", "Test User"], cwd=str(repo_dir), check=True
+            lambda: subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(repo_dir), check=True)
         )
 
         res = await client.call_tool(

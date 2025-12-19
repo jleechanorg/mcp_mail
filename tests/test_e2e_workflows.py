@@ -12,6 +12,7 @@ from mcp_agent_mail.share import build_materialized_views, create_performance_in
 
 # Removed _init_git_repo and _create_and_commit_file helpers as they were only used by removed tests
 
+
 @pytest.mark.asyncio
 async def test_e2e_materialized_views_with_share_export(isolated_env, tmp_path: Path):
     """End-to-end test: Create messages, export with materialized views and indexes."""
@@ -113,6 +114,7 @@ async def test_e2e_materialized_views_with_share_export(isolated_env, tmp_path: 
     finally:
         conn.close()
 
+
 @pytest.mark.asyncio
 async def test_e2e_database_optimizations_query_performance(isolated_env, tmp_path: Path):
     """End-to-end test: Verify database optimizations improve query performance."""
@@ -191,6 +193,7 @@ async def test_e2e_database_optimizations_query_performance(isolated_env, tmp_pa
     # With such a small dataset, timing may not be significantly different,
     # but we can verify the optimization infrastructure is in place
     assert time_after >= 0  # Query completed
+
 
 @pytest.mark.asyncio
 async def test_e2e_incremental_share_updates(isolated_env, tmp_path: Path):

@@ -2092,7 +2092,7 @@ def am_run(
             branch = "unknown"
     settings = get_settings()
     guard_mode = (os.environ.get("AGENT_MAIL_GUARD_MODE", "block") or "block").strip().lower()
-    worktrees_enabled = bool(settings.worktrees_enabled)
+    worktrees_enabled = bool(settings.worktrees_enabled) and is_archive_enabled(settings)
 
     async def _ensure_slot_paths() -> Path:
         if is_archive_enabled(settings):
