@@ -259,10 +259,14 @@ def _bridge_provider_env() -> None:
     try:
         cfg = DecoupleConfig(RepositoryEnv(".env"))
     except FileNotFoundError:
+        _logger.debug("llm.env.missing_dotenv_file")
+
         # No .env file, rely solely on os.environ
         def cfg(key: str, default: Any = "") -> Any:
             return default
     except Exception:
+        _logger.debug("llm.env.dotenv_load_failed")
+
         # Fallback for other errors
         def cfg(key: str, default: Any = "") -> Any:
             return default

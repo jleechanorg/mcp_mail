@@ -67,11 +67,8 @@ def retry_on_db_lock(max_retries: int = 5, base_delay: float = 0.1, max_delay: f
                     jitter = delay * 0.25 * (2 * random.random() - 1)  # ±25% jitter
                     total_delay = delay + jitter
 
-                    # Log the retry (if logging is available)
-                    import logging
-
                     func_name = getattr(func, "__name__", getattr(func, "__qualname__", "<callable>"))
-                    logging.warning(
+                    logger.warning(
                         f"Database locked, retrying {func_name} "
                         f"(attempt {attempt + 1}/{max_retries}) after {total_delay:.2f}s"
                     )
@@ -242,10 +239,6 @@ def _check_and_fix_duplicate_agent_names(connection) -> None:
     This handles migration from the old schema (per-project uniqueness) to the new schema
     (global uniqueness). Any duplicate names are automatically renamed by appending a number.
     """
-    import logging
-
-    logger = logging.getLogger(__name__)
-
     # Find all duplicate names (case-insensitive)
     cursor = connection.exec_driver_sql(
         """
@@ -405,10 +398,6 @@ def _migrate_project_id_nullable(connection) -> None:
 
     Existing data retains its project_id values; new records can have NULL.
     """
-    import logging
-
-    logger = logging.getLogger(__name__)
-
     # Check if agents.project_id is NOT NULL
     agents_info = connection.exec_driver_sql("PRAGMA table_info('agents')").fetchall()
     agents_project_id_notnull = False

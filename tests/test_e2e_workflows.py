@@ -31,6 +31,21 @@ def _create_and_commit_file(repo: Path, filename: str, content: str = "test") ->
     subprocess.run(["git", "commit", "-m", f"Add {filename}"], cwd=str(repo), check=True, capture_output=True)
 
 
+def _tool_text(result) -> str:
+    assert result.content, "Expected non-empty result content"
+    text = result.content[0].text
+    assert text, "Expected text content"
+    return text
+
+
+def _tool_json(result) -> dict:
+    text = _tool_text(result)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:  # pragma: no cover - defensive assertion helper
+        pytest.fail(f"Failed to parse tool result JSON: {exc}")
+
+
 @pytest.mark.asyncio
 async def test_e2e_build_slots_with_file_reservations(isolated_env, tmp_path: Path):
     """End-to-end test: Build slots combined with file reservations."""
@@ -56,7 +71,7 @@ async def test_e2e_build_slots_with_file_reservations(isolated_env, tmp_path: Pa
                 "ttl_seconds": 3600,
             },
         )
-        assert result.content[0].text
+        assert _tool_text(result)
 
         # Agent1 acquires a build slot
         result = await client.call_tool(
@@ -69,7 +84,7 @@ async def test_e2e_build_slots_with_file_reservations(isolated_env, tmp_path: Pa
                 "exclusive": True,
             },
         )
-        data = json.loads(result.content[0].text)
+        data = _tool_json(result)
         assert data["granted"] is True
 
         # Agent2 tries to acquire the same build slot
@@ -83,7 +98,7 @@ async def test_e2e_build_slots_with_file_reservations(isolated_env, tmp_path: Pa
                 "exclusive": True,
             },
         )
-        data = json.loads(result.content[0].text)
+        data = _tool_json(result)
         # Should report conflict
         assert len(data["conflicts"]) > 0
 
@@ -92,7 +107,7 @@ async def test_e2e_build_slots_with_file_reservations(isolated_env, tmp_path: Pa
             "release_build_slot",
             arguments={"project_key": "e2e-project", "agent_name": "Agent1", "slot": "backend-build"},
         )
-        data = json.loads(result.content[0].text)
+        data = _tool_json(result)
         assert data["released"] is True
 
         # Agent2 can now acquire the slot without conflicts
@@ -106,7 +121,7 @@ async def test_e2e_build_slots_with_file_reservations(isolated_env, tmp_path: Pa
                 "exclusive": True,
             },
         )
-        data = json.loads(result.content[0].text)
+        data = _tool_json(result)
         assert data["granted"] is True
         # No active conflicts from Agent1 (slot was released)
         assert all("Agent1" not in str(c) for c in data.get("conflicts", []))
@@ -238,9 +253,9 @@ async def test_e2e_materialized_views_with_share_export(isolated_env, tmp_path: 
         conn.close()
 
     # Run full export finalization
-    finalize_snapshot_for_export(snapshot)
     build_materialized_views(snapshot)
     create_performance_indexes(snapshot)
+    finalize_snapshot_for_export(snapshot)
 
     # Verify all optimizations were applied
     conn = sqlite3.connect(str(snapshot))
@@ -293,7 +308,7 @@ async def test_e2e_multi_agent_workflow(isolated_env, tmp_path: Path):
                 "exclusive": True,
             },
         )
-        assert json.loads(result.content[0].text)["granted"] is True
+        assert _tool_json(result)["granted"] is True
 
         # Backend agent claims backend build slot (different slot)
         result = await client.call_tool(
@@ -306,7 +321,7 @@ async def test_e2e_multi_agent_workflow(isolated_env, tmp_path: Path):
                 "exclusive": True,
             },
         )
-        assert json.loads(result.content[0].text)["granted"] is True
+        assert _tool_json(result)["granted"] is True
 
         # Frontend agent reserves frontend files
         result = await client.call_tool(
@@ -319,7 +334,7 @@ async def test_e2e_multi_agent_workflow(isolated_env, tmp_path: Path):
                 "ttl_seconds": 3600,
             },
         )
-        assert result.content[0].text
+        assert _tool_text(result)
 
         # Backend agent reserves backend files
         result = await client.call_tool(
@@ -332,7 +347,7 @@ async def test_e2e_multi_agent_workflow(isolated_env, tmp_path: Path):
                 "ttl_seconds": 3600,
             },
         )
-        assert result.content[0].text
+        assert _tool_text(result)
 
         # Both agents can work in parallel - different slots, different files
         # Frontend agent renews slot
@@ -345,7 +360,7 @@ async def test_e2e_multi_agent_workflow(isolated_env, tmp_path: Path):
                 "extend_seconds": 1800,
             },
         )
-        assert json.loads(result.content[0].text)["renewed"] is True
+        assert _tool_json(result)["renewed"] is True
 
         # Backend agent renews slot
         result = await client.call_tool(
@@ -357,20 +372,20 @@ async def test_e2e_multi_agent_workflow(isolated_env, tmp_path: Path):
                 "extend_seconds": 1800,
             },
         )
-        assert json.loads(result.content[0].text)["renewed"] is True
+        assert _tool_json(result)["renewed"] is True
 
         # Both agents finish and release slots
         result = await client.call_tool(
             "release_build_slot",
             arguments={"project_key": "multi-agent-project", "agent_name": "FrontendAgent", "slot": "frontend-build"},
         )
-        assert json.loads(result.content[0].text)["released"] is True
+        assert _tool_json(result)["released"] is True
 
         result = await client.call_tool(
             "release_build_slot",
             arguments={"project_key": "multi-agent-project", "agent_name": "BackendAgent", "slot": "backend-build"},
         )
-        assert json.loads(result.content[0].text)["released"] is True
+        assert _tool_json(result)["released"] is True
 
 
 @pytest.mark.asyncio
@@ -552,8 +567,9 @@ async def test_e2e_incremental_share_updates(isolated_env, tmp_path: Path):
         conn.close()
 
     # Export v1
-    finalize_snapshot_for_export(snapshot_v1)
     build_materialized_views(snapshot_v1)
+    create_performance_indexes(snapshot_v1)
+    finalize_snapshot_for_export(snapshot_v1)
 
     # Verify v1 has optimizations
     conn = sqlite3.connect(str(snapshot_v1))
@@ -581,8 +597,9 @@ async def test_e2e_incremental_share_updates(isolated_env, tmp_path: Path):
         conn.close()
 
     # Export v2 (incremental update)
-    finalize_snapshot_for_export(snapshot_v2)
     build_materialized_views(snapshot_v2)
+    create_performance_indexes(snapshot_v2)
+    finalize_snapshot_for_export(snapshot_v2)
 
     # Verify v2 has all messages in materialized view
     conn = sqlite3.connect(str(snapshot_v2))
