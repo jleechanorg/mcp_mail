@@ -1288,6 +1288,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     cache_key = (slack_channel, slack_ts) if slack_ts and slack_channel else None
 
                     # Check for duplicate events before processing
+                    cache_key_added = False
                     if cache_key:
                         async with _slack_event_cache_lock:
                             if cache_key in _slack_event_cache:
@@ -1304,6 +1305,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                 _slack_event_cache.discard(old)
                             _slack_event_cache.add(cache_key)
                             _slack_event_cache_order.append(cache_key)
+                            cache_key_added = True
 
                     # Create MCP message from Slack event
                     try:
@@ -1462,6 +1464,12 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         return JSONResponse({"ok": True, "message_id": str(message.id)})
 
                     except Exception as e:
+                        # Clean up cache on failure to allow Slack retries
+                        if cache_key and cache_key_added:
+                            async with _slack_event_cache_lock:
+                                _slack_event_cache.discard(cache_key)
+                                with contextlib.suppress(ValueError):
+                                    _slack_event_cache_order.remove(cache_key)
                         logger.error("slack_message_creation_failed", error=str(e))
                         raise HTTPException(
                             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to create message: {e}"
