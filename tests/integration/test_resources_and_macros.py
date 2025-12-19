@@ -287,20 +287,14 @@ async def test_git_commit_verification(mcp_client, tmp_path):
     # Find the project archive directory
     project_archive = storage_root / "projects" / project_slug
 
-    # Git commit verification - ensure persistence is working
-    assert project_archive.exists(), f"Project archive {project_archive} should exist"
+    # Archive storage has been removed; ensure no on-disk project archive is created.
+    assert not project_archive.exists(), f"Project archive {project_archive} should not exist"
 
-    result = subprocess.run(
-        ["git", "log", "--oneline"],
-        cwd=project_archive,
-        capture_output=True,
-        text=True,
-        check=False,  # Don't raise on error, we'll check returncode
+    inbox = await mcp_client.call_tool(
+        "fetch_inbox",
+        {"project_key": str(project_path), "agent_name": agent2, "limit": 10, "include_bodies": True},
     )
-
-    # Should have at least one commit (message or agent registration)
-    assert result.returncode == 0, f"git log failed with: {result.stderr}"
-    assert len(result.stdout.strip()) > 0, "Git history should not be empty"
+    assert any(item.get("subject") == "Git Test Message" for item in inbox.structured_content.get("result", []))
 
 
 @pytest.mark.asyncio

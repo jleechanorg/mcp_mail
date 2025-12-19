@@ -7,18 +7,14 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Final, Literal, cast
 
-from decouple import Config as DecoupleConfig, RepositoryEnv
+from decouple import Config as DecoupleConfig
+from decouple import RepositoryEmpty, RepositoryEnv
 
 _DOTENV_PATH: Final[Path] = Path(".env")
-
-# Create config that gracefully handles missing .env file
-if _DOTENV_PATH.exists():
-    _decouple_config: Final[DecoupleConfig] = DecoupleConfig(RepositoryEnv(str(_DOTENV_PATH)))
-else:
-    # Fall back to environment variables only when .env doesn't exist (e.g., in CI)
-    from decouple import config as _env_config
-
-    _decouple_config: Final[DecoupleConfig] = _env_config  # type: ignore[assignment]
+_DOTENV_REPO: Final[RepositoryEnv | RepositoryEmpty] = (
+    RepositoryEnv(str(_DOTENV_PATH)) if _DOTENV_PATH.exists() else RepositoryEmpty()
+)
+_decouple_config: Final[DecoupleConfig] = DecoupleConfig(_DOTENV_REPO)
 
 
 @dataclass(slots=True, frozen=True)
