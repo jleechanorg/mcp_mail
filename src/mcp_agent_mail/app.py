@@ -3077,9 +3077,13 @@ def build_mcp_server() -> FastMCP:
         # Body processing - attachments tracked as metadata only (archive storage removed)
         processed_body = body_md
         attachments_meta: list[dict[str, object]] = []
-        # Detect inline data URI images in body
+        
+        # Detect inline data URI images in body (these are embedded in the markdown)
         if "data:image" in body_md:
             attachments_meta.append({"type": "inline", "media_type": "image/webp"})
+        
+        # Record any explicit attachment paths as metadata
+        # NOTE: Files are NOT copied or stored - only paths are recorded in metadata
         if attachment_paths:
             for attachment_path in attachment_paths:
                 try:
@@ -5695,7 +5699,7 @@ def build_mcp_server() -> FastMCP:
             except Exception:
                 pass
         repo_path = Path(code_repo_path).expanduser().resolve()
-        removed = await uninstall_guard_script(repo_path)
+        removed = uninstall_guard_script(repo_path)
         if removed:
             await ctx.info(f"Removed pre-commit guard at {repo_path / '.git/hooks/pre-commit'}.")
         else:

@@ -34,46 +34,81 @@ async def _write_guard_stub(hook_path: Path) -> None:
     await asyncio.to_thread(_write)
 
 
-def render_precommit_script(archive: ProjectArchive) -> str:
+def render_precommit_script(archive: ProjectArchive | None = None) -> str:
     """Return stub pre-commit script.
 
-    NOTE: Archive storage has been removed. This keeps the legacy signature for compatibility.
+    NOTE: Archive storage has been removed. Parameter is ignored but kept for backward compatibility.
+    
+    Args:
+        archive: Ignored. Kept for backward compatibility.
+        
+    Returns:
+        A stub pre-commit script that exits successfully.
     """
     return _guard_stub_script()
 
 
-def render_prepush_script(file_reservations_dir: Path | ProjectArchive) -> str:
+def render_prepush_script(file_reservations_dir: Path | ProjectArchive | None = None) -> str:
     """Return stub pre-push script.
 
-    NOTE: Archive storage has been removed. This keeps the legacy signature for compatibility.
+    NOTE: Archive storage has been removed. Parameter is ignored but kept for backward compatibility.
+    
+    Args:
+        file_reservations_dir: Ignored. Kept for backward compatibility.
+        
+    Returns:
+        A stub pre-push script that exits successfully.
     """
     return _guard_stub_script()
 
 
-async def install_guard(settings: Settings, project_slug: str, repo_path: Path) -> Path:
+async def install_guard(settings: Settings | None, project_slug: str | None, repo_path: Path) -> Path:
     """Install the pre-commit guard for the given project into the repo.
 
     NOTE: Archive storage has been removed. Installs a no-op stub script.
+    
+    Args:
+        settings: Ignored. Kept for backward compatibility.
+        project_slug: Ignored. Kept for backward compatibility.
+        repo_path: Path to the repository root.
+        
+    Returns:
+        Path to the installed hook file.
     """
     hook_path = repo_path / ".git" / "hooks" / "pre-commit"
     await _write_guard_stub(hook_path)
     return hook_path
 
 
-async def install_prepush_guard(settings: Settings, project_slug: str, repo_path: Path) -> Path:
+async def install_prepush_guard(settings: Settings | None, project_slug: str | None, repo_path: Path) -> Path:
     """Install the pre-push guard for the given project into the repo.
 
     NOTE: Archive storage has been removed. Installs a no-op stub script.
+    
+    Args:
+        settings: Ignored. Kept for backward compatibility.
+        project_slug: Ignored. Kept for backward compatibility.
+        repo_path: Path to the repository root.
+        
+    Returns:
+        Path to the installed hook file.
     """
     hook_path = repo_path / ".git" / "hooks" / "pre-push"
     await _write_guard_stub(hook_path)
     return hook_path
 
 
-async def uninstall_guard(repo_path: Path) -> bool:
-    """Remove the pre-commit guard from repo, returning True if removed."""
+def uninstall_guard(repo_path: Path) -> bool:
+    """Remove the pre-commit guard from repo, returning True if removed.
+    
+    Args:
+        repo_path: Path to the repository root.
+        
+    Returns:
+        True if the hook was removed, False if it didn't exist.
+    """
     hook_path = repo_path / ".git" / "hooks" / "pre-commit"
     if hook_path.exists():
-        await asyncio.to_thread(hook_path.unlink)
+        hook_path.unlink()
         return True
     return False
