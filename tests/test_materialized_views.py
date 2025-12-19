@@ -57,7 +57,7 @@ def _create_test_snapshot(snapshot_path: Path) -> None:
                 )
                 VALUES (?, 1, ?, ?, ?, ?, 'normal', 0, ?, '[]')
                 """,
-                (i, (i % 2) + 1, f"thread-{i}", f"Subject {i}", f"Body {i}", f"2025-01-{i:02d}T00:00:00Z"),
+                (i, ((i + 1) % 2) + 1, f"thread-{i}", f"Subject {i}", f"Body {i}", f"2025-01-{i:02d}T00:00:00Z"),
             )
 
         # Insert message recipients

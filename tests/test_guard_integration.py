@@ -43,7 +43,7 @@ async def test_precommit_no_conflict(isolated_env, tmp_path: Path):
     settings = get_settings()
     # Prepare project archive and render guard script
     archive = await ensure_archive(settings, "backend")
-    script_text = render_precommit_script(archive)
+    script_text = render_precommit_script(archive.root / "file_reservations")
     script_path = tmp_path / "precommit.py"
     script_path.write_text(script_text, encoding="utf-8")
 
@@ -63,7 +63,7 @@ async def test_precommit_conflict_detected(isolated_env, tmp_path: Path):
     settings = get_settings()
     # Prepare project archive and render guard script
     archive = await ensure_archive(settings, "backend")
-    script_text = render_precommit_script(archive)
+    script_text = render_precommit_script(archive.root / "file_reservations")
     script_path = tmp_path / "precommit.py"
     script_path.write_text(script_text, encoding="utf-8")
 

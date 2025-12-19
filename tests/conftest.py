@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from mcp_agent_mail.app import RECENT_TOOL_USAGE
 from mcp_agent_mail.config import clear_settings_cache
 from mcp_agent_mail.db import reset_database_state
 
@@ -26,6 +27,7 @@ def isolated_env(tmp_path, monkeypatch):
     monkeypatch.setenv("INLINE_IMAGE_MAX_BYTES", "128")
     clear_settings_cache()
     reset_database_state()
+    RECENT_TOOL_USAGE.clear()
     try:
         yield
     finally:
@@ -73,6 +75,7 @@ def isolated_env(tmp_path, monkeypatch):
 
         clear_settings_cache()
         reset_database_state()
+        RECENT_TOOL_USAGE.clear()
 
         if db_path.exists():
             db_path.unlink()

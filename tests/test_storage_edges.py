@@ -11,8 +11,8 @@ import pytest
 from fastmcp import Client
 
 from mcp_agent_mail.app import build_mcp_server
-from mcp_agent_mail.config import get_settings
-from mcp_agent_mail.storage import AsyncFileLock
+from mcp_agent_mail.config import clear_settings_cache, get_settings
+from mcp_agent_mail.storage import AsyncFileLock, write_file_reservation_artifacts
 
 
 @pytest.mark.asyncio
@@ -125,3 +125,50 @@ async def test_async_file_lock_recovers_stale(tmp_path, monkeypatch):
     # Metadata should be cleaned up after release
     assert not metadata_path.exists()
     assert not lock_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_write_file_reservation_artifacts_archive_enabled(isolated_env):
+    """When archive is enabled, artifacts go under STORAGE_ROOT/projects/<slug>/file_reservations."""
+    settings = get_settings()
+    payload = {
+        "project": "/backend",
+        "agent": "TestAgent",
+        "path_pattern": "src/**",
+        "exclusive": True,
+        "reason": "test",
+        "created_ts": "2999-01-01T00:00:00+00:00",
+        "expires_ts": "2999-01-01T01:00:00+00:00",
+        "released_ts": None,
+    }
+    paths = await write_file_reservation_artifacts(settings, "backend", [payload], project_key="/backend")
+    assert len(paths) == 1
+    assert paths[0].exists()
+    assert "projects" in paths[0].parts
+    assert "file_reservations" in paths[0].parts
+
+
+@pytest.mark.asyncio
+async def test_write_file_reservation_artifacts_archive_disabled(isolated_env, monkeypatch, tmp_path: Path):
+    """When archive is disabled, artifacts go under MCP_AGENT_MAIL_RUNTIME_ROOT/projects/<slug>/file_reservations."""
+    monkeypatch.setenv("STORAGE_LOCAL_ARCHIVE_ENABLED", "false")
+    monkeypatch.setenv("STORAGE_PROJECT_KEY_ENABLED", "false")
+    monkeypatch.setenv("MCP_AGENT_MAIL_RUNTIME_ROOT", str(tmp_path / "runtime"))
+    clear_settings_cache()
+    settings = get_settings()
+    payload = {
+        "project": "/backend",
+        "agent": "TestAgent",
+        "path_pattern": "src/**",
+        "exclusive": True,
+        "reason": "test",
+        "created_ts": "2999-01-01T00:00:00+00:00",
+        "expires_ts": "2999-01-01T01:00:00+00:00",
+        "released_ts": None,
+    }
+    paths = await write_file_reservation_artifacts(settings, "backend", [payload], project_key="/backend")
+    assert len(paths) == 1
+    assert paths[0].exists()
+    assert str(tmp_path / "runtime") in str(paths[0])
+    assert "projects" in paths[0].parts
+    assert "file_reservations" in paths[0].parts
