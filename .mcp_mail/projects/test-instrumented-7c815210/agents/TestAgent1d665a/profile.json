@@ -1,0 +1,15 @@
+{
+  "attachments_policy": "auto",
+  "contact_policy": "auto",
+  "deleted_ts": null,
+  "id": 18,
+  "inception_ts": "2025-12-19T05:06:28.139904+00:00",
+  "is_active": true,
+  "is_placeholder": false,
+  "last_active_ts": "2025-12-19T05:06:28.139914+00:00",
+  "model": "test-model",
+  "name": "TestAgent1d665a",
+  "program": "test-cli",
+  "project_id": 7,
+  "task_description": ""
+}

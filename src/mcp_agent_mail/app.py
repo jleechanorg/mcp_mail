@@ -54,16 +54,9 @@ from .slots import (
 from .storage import (
     ProjectArchive,
     ProjectStorageResolutionError,
-    archive_write_lock,
     collect_lock_status,
-    ensure_archive,
     heal_archive_locks,
-    is_archive_enabled,
-    process_attachments,
-    write_agent_deletion_marker,
-    write_agent_profile,
     write_file_reservation_artifacts,
-    write_message_bundle,
 )
 from .utils import generate_agent_name, sanitize_agent_name, slugify
 
@@ -94,10 +87,11 @@ DEFAULT_PROJECT_KEY = "global"
 
 
 async def _ensure_archive_if_enabled(settings: Settings, project: Project) -> ProjectArchive | None:
-    """Initialize and return the project archive when archive storage is enabled."""
-    if not is_archive_enabled(settings):
-        return None
-    return await ensure_archive(settings, project.slug, project_key=project.human_key)
+    """Initialize and return the project archive when archive storage is enabled.
+
+    NOTE: Archive storage has been removed. This always returns None.
+    """
+    return None
 
 
 def _resolve_project_identity(target_path: str) -> dict[str, Any]:
@@ -514,12 +508,15 @@ def _iso(dt: Any) -> str:
         if isinstance(dt, str):
             try:
                 parsed = datetime.fromisoformat(dt)
-                return _ensure_utc(parsed).isoformat()
+                parsed_utc = _ensure_utc(parsed)
+                return parsed_utc.isoformat() if parsed_utc else dt
             except Exception:
                 return dt
         if isinstance(dt, datetime):
-            normalized = _ensure_utc(dt)
-            return normalized.isoformat() if normalized is not None else str(dt)
+            ensured = _ensure_utc(dt)
+            return ensured.isoformat() if ensured else str(dt)
+        if hasattr(dt, "astimezone"):
+            return dt.astimezone(timezone.utc).isoformat()  # type: ignore[no-any-return]
         return str(dt)
     except Exception:
         return str(dt)
@@ -966,28 +963,6 @@ def _canonical_project_pair(a_id: int, b_id: int) -> tuple[int, int]:
     if a_id == b_id:
         raise ValueError("Project pair must reference distinct projects.")
     return (a_id, b_id) if a_id < b_id else (b_id, a_id)
-
-
-@asynccontextmanager
-async def _archive_write_lock(archive: ProjectArchive, *, timeout_seconds: float = 120.0):
-    try:
-        async with archive_write_lock(archive, timeout_seconds=timeout_seconds):
-            yield
-    except TimeoutError as exc:
-        raise ToolExecutionError(
-            "ARCHIVE_LOCK_TIMEOUT",
-            (
-                f"Archive lock busy for project '{archive.slug}' at '{archive.lock_path}'. "
-                f"Timed out after {timeout_seconds:.1f}s. "
-                "Inspect running agents or call collect_lock_status to clear stale locks."
-            ),
-            recoverable=True,
-            data={
-                "project_slug": archive.slug,
-                "lock_path": str(archive.lock_path),
-                "timeout_seconds": timeout_seconds,
-            },
-        ) from exc
 
 
 async def _read_file_preview(path: Path, *, max_chars: int) -> str:
@@ -1533,11 +1508,6 @@ async def _get_or_create_agent(
                             session.add(agent)
                             await session.commit()
                             await session.refresh(agent)
-                            # Write updated profile to archive (only if archive is enabled)
-                            if is_archive_enabled(settings):
-                                archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-                                async with _archive_write_lock(archive):
-                                    await write_agent_profile(archive, _agent_to_dict(agent))
                             return agent
                 # If we couldn't find the agent, fall through to regular logic
             # Check if the user-provided name is globally unique
@@ -1661,11 +1631,6 @@ async def _get_or_create_agent(
                         "hint": "Retry the operation; if it persists, call register_agent with force_reclaim=True",
                     },
                 ) from exc
-    # Write agent profile to archive (only if archive is enabled)
-    if is_archive_enabled(settings):
-        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-        async with _archive_write_lock(archive):
-            await write_agent_profile(archive, _agent_to_dict(agent))
     return agent
 
 
@@ -1741,11 +1706,6 @@ async def _create_placeholder_agent(
                 return existing
             raise ValueError(f"Failed to create placeholder agent: {sanitized}") from exc
 
-    # Write placeholder profile to archive (only if archive is enabled)
-    if is_archive_enabled(settings):
-        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-        async with _archive_write_lock(archive):
-            await write_agent_profile(archive, _agent_to_dict(agent))
     return agent
 
 
@@ -1812,12 +1772,6 @@ async def _delete_agent(project: Project, name: str, settings: Settings) -> dict
         # 5) Finally, delete the agent itself
         await session.execute(delete(Agent).where(Agent.id == agent_id))
 
-    # Write deletion marker to Git archive (only if archive is enabled)
-    if is_archive_enabled(settings):
-        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-        async with _archive_write_lock(archive):
-            await write_agent_deletion_marker(archive, agent_name, stats)
-
     return stats
 
 
@@ -1866,11 +1820,6 @@ async def _retire_agent(agent: Agent, project: Project, settings: Settings) -> A
         await session.refresh(db_agent)
         agent = db_agent
 
-    # Write updated profile to archive (only if archive is enabled)
-    if is_archive_enabled(settings):
-        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-        async with _archive_write_lock(archive):
-            await write_agent_profile(archive, _agent_to_dict(agent))
     return agent
 
 
@@ -2607,95 +2556,19 @@ async def _list_outbox(
 def _canonical_relpath_for_message(project: Project, message: Message, archive) -> str | None:
     """Resolve the canonical repo-relative path for a message markdown file.
 
-    Supports both legacy filenames ("<id>.md") and the new descriptive pattern
-    ("<ISO>__<subject-slug>__<id>.md"). Returns a path relative to the archive
-    Git repo root, or None if no matching file is found.
+    NOTE: Archive storage has been removed. This always returns None.
+    Deprecated: parameters are retained for backwards compatibility.
     """
-    ts = message.created_ts.astimezone(timezone.utc)
-    y = ts.strftime("%Y")
-    m = ts.strftime("%m")
-    project_root = archive.root
-    base_dir = project_root / "messages" / y / m
-    id_str = str(message.id)
-
-    candidates: list[Path] = []
-    try:
-        if base_dir.is_dir():
-            # New filename pattern with ISO + subject slug + id suffix
-            candidates.extend(base_dir.glob(f"*__*__{id_str}.md"))
-            # Legacy filename pattern (id only)
-            legacy = base_dir / f"{id_str}.md"
-            if legacy.exists():
-                candidates.append(legacy)
-    except Exception:
-        return None
-
-    if not candidates:
-        return None
-    # Prefer lexicographically last (ISO prefix sorts ascending)
-    selected = sorted(candidates)[-1]
-    try:
-        return selected.relative_to(archive.repo_root).as_posix()
-    except Exception:
-        return None
+    return None
 
 
 async def _commit_info_for_message(settings: Settings, project: Project, message: Message) -> dict[str, Any] | None:
-    """Fetch commit metadata for the canonical message file (hexsha, summary, authored_ts, stats)."""
-    if not is_archive_enabled(settings):
-        return None
-    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-    relpath = _canonical_relpath_for_message(project, message, archive)
-    if not relpath:
-        return None
+    """Fetch commit metadata for the canonical message file.
 
-    def _lookup():
-        try:
-            commit = next(archive.repo.iter_commits(paths=[relpath], max_count=1))
-        except StopIteration:
-            return None
-        data: dict[str, Any] = {
-            "hexsha": commit.hexsha[:12],
-            "summary": commit.summary,
-            "authored_ts": _iso(datetime.fromtimestamp(commit.authored_date, tz=timezone.utc)),
-        }
-        try:
-            stats = commit.stats.files.get(relpath, None)
-            if stats:
-                data["insertions"] = int(stats.get("insertions", 0))
-                data["deletions"] = int(stats.get("deletions", 0))
-        except Exception:
-            pass
-        # Attach concise diff summary (hunks count + first N +/- lines)
-        try:
-            parent = commit.parents[0] if commit.parents else None
-            hunks = 0
-            excerpt: list[str] = []
-            if parent is not None:
-                diffs = parent.diff(commit, paths=[relpath], create_patch=True)
-                for d in diffs:
-                    try:
-                        patch = d.diff.decode("utf-8", "ignore")
-                    except Exception:
-                        patch = ""
-                    for line in patch.splitlines():
-                        if line.startswith("@@"):
-                            hunks += 1
-                        if line.startswith("+") or line.startswith("-"):
-                            # skip file header lines like +++/---
-                            if line.startswith("+++") or line.startswith("---"):
-                                continue
-                            excerpt.append(line[:200])
-                            if len(excerpt) >= 12:
-                                break
-                    if len(excerpt) >= 12:
-                        break
-            data["diff_summary"] = {"hunks": hunks, "excerpt": excerpt}
-        except Exception:
-            pass
-        return data
-
-    return await asyncio.to_thread(_lookup)
+    NOTE: Archive storage has been removed. This always returns None.
+    Deprecated: parameters are retained for backwards compatibility.
+    """
+    return None
 
 
 def _summarize_messages(messages: Sequence[tuple[Message, str]]) -> dict[str, Any]:
@@ -3188,229 +3061,122 @@ def build_mcp_server() -> FastMCP:
         recipient_records.extend((agent, "bcc") for agent in bcc_agents)
         recipient_lookup_elapsed = time.perf_counter() - recipient_lookup_start
 
-        archive_elapsed = 0.0
-        convert_markdown = (
-            convert_images_override if convert_images_override is not None else settings.storage.convert_images
-        )
-        # Respect agent-level attachments policy override if set
-        embed_policy: str = "auto"
-        if getattr(sender, "attachments_policy", None) in {"inline", "file"}:
-            convert_markdown = True
-            embed_policy = sender.attachments_policy
+        # Server-side file_reservations enforcement: block if conflicting active exclusive file_reservation exists
+        if settings.file_reservations_enforcement_enabled:
+            await _expire_stale_file_reservations(project.id or 0)
+            now_ts = datetime.now(timezone.utc)
+            y_dir = now_ts.strftime("%Y")
+            m_dir = now_ts.strftime("%m")
+            candidate_surfaces: list[str] = []
+            candidate_surfaces.append(f"agents/{sender.name}/outbox/{y_dir}/{m_dir}/*.md")
+            for r in to_agents + cc_agents + bcc_agents:
+                candidate_surfaces.append(f"agents/{r.name}/inbox/{y_dir}/{m_dir}/*.md")
 
-        payload: dict[str, Any] | None = None
-        message: Message | None = None
-        frontmatter: dict[str, Any] = {}
-        recipients_for_archive: list[str] = [agent.name for agent in to_agents + cc_agents + bcc_agents]
-        lock_wait_elapsed = 0.0
-        attachments_elapsed = 0.0
-        db_write_elapsed = 0.0
-        git_write_elapsed = 0.0
+            async with get_session() as session:
+                rows = await session.execute(
+                    select(FileReservation, Agent.name)
+                    .join(Agent, FileReservation.agent_id == Agent.id)
+                    .where(
+                        FileReservation.project_id == project.id,
+                        cast(Any, FileReservation.released_ts).is_(None),
+                        FileReservation.expires_ts > now_ts,
+                    )
+                )
+                active_file_reservations = rows.all()
 
-        if is_archive_enabled(settings):
-            archive_start = time.perf_counter()
-            archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-            archive_elapsed = time.perf_counter() - archive_start
-            lock_acquire_start = time.perf_counter()
-
-            async with _archive_write_lock(archive):
-                lock_wait_elapsed = time.perf_counter() - lock_acquire_start
-                # Server-side file_reservations enforcement: block if conflicting active exclusive file_reservation exists
-                if settings.file_reservations_enforcement_enabled:
-                    await _expire_stale_file_reservations(project.id or 0)
-                    now_ts = datetime.now(timezone.utc)
-                    y_dir = now_ts.strftime("%Y")
-                    m_dir = now_ts.strftime("%m")
-                    candidate_surfaces: list[str] = []
-                    candidate_surfaces.append(f"agents/{sender.name}/outbox/{y_dir}/{m_dir}/*.md")
-                    for r in to_agents + cc_agents + bcc_agents:
-                        candidate_surfaces.append(f"agents/{r.name}/inbox/{y_dir}/{m_dir}/*.md")
-
-                    async with get_session() as session:
-                        rows = await session.execute(
-                            select(FileReservation, Agent.name)
-                            .join(Agent, FileReservation.agent_id == Agent.id)
-                            .where(
-                                FileReservation.project_id == project.id,
-                                cast(Any, FileReservation.released_ts).is_(None),
-                                FileReservation.expires_ts > now_ts,
-                            )
-                        )
-                        active_file_reservations = rows.all()
-
-                    conflicts: list[dict[str, Any]] = []
-                    for surface in candidate_surfaces:
-                        for file_reservation_record, holder_name in active_file_reservations:
-                            if _file_reservations_conflict(file_reservation_record, surface, True, sender):
-                                conflicts.append(
-                                    {
-                                        "surface": surface,
-                                        "holder": holder_name,
-                                        "path_pattern": file_reservation_record.path_pattern,
-                                        "exclusive": file_reservation_record.exclusive,
-                                        "expires_ts": _iso(file_reservation_record.expires_ts),
-                                    }
-                                )
-                    if conflicts:
-                        # Return a structured error payload that clients can surface directly
-                        return {
-                            "error": {
-                                "type": "FILE_RESERVATION_CONFLICT",
-                                "message": "Conflicting active file_reservations prevent message write.",
-                                "conflicts": conflicts,
+            conflicts: list[dict[str, Any]] = []
+            for surface in candidate_surfaces:
+                for file_reservation_record, holder_name in active_file_reservations:
+                    if _file_reservations_conflict(file_reservation_record, surface, True, sender):
+                        conflicts.append(
+                            {
+                                "surface": surface,
+                                "holder": holder_name,
+                                "path_pattern": file_reservation_record.path_pattern,
+                                "exclusive": file_reservation_record.exclusive,
+                                "expires_ts": _iso(file_reservation_record.expires_ts),
                             }
-                        }
-
-                attachments_start = time.perf_counter()
-                processed_body, attachments_meta, attachment_files = await process_attachments(
-                    archive,
-                    body_md,
-                    attachment_paths or [],
-                    convert_markdown,
-                    embed_policy=embed_policy,
-                )
-                attachments_elapsed = time.perf_counter() - attachments_start
-                # Fallback: if body contains inline data URI, reflect that in attachments meta for API parity
-                if not attachments_meta and ("data:image" in body_md):
-                    attachments_meta.append({"type": "inline", "media_type": "image/webp"})
-                db_write_start = time.perf_counter()
-                message = await _create_message(
-                    project,
-                    sender,
-                    subject,
-                    processed_body,
-                    recipient_records,
-                    importance,
-                    ack_required,
-                    thread_id,
-                    attachments_meta,
-                )
-                db_write_elapsed = time.perf_counter() - db_write_start
-                frontmatter = _message_frontmatter(
-                    message,
-                    project,
-                    sender,
-                    to_agents,
-                    cc_agents,
-                    bcc_agents,
-                    attachments_meta,
-                )
-                recipients_for_archive = [agent.name for agent in to_agents + cc_agents + bcc_agents]
-                payload = _message_to_dict(message)
-                payload.update(
-                    {
-                        "from": sender.name,
-                        "to": [agent.name for agent in to_agents],
-                        "cc": [agent.name for agent in cc_agents_for_outbox],
-                        "bcc": [agent.name for agent in bcc_agents],
-                        "attachments": attachments_meta,
+                        )
+            if conflicts:
+                # Return a structured error payload that clients can surface directly
+                return {
+                    "error": {
+                        "type": "FILE_RESERVATION_CONFLICT",
+                        "message": "Conflicting active file_reservations prevent message write.",
+                        "conflicts": conflicts,
                     }
-                )
-                result_snapshot: dict[str, Any] = {
-                    "deliveries": [
-                        {
-                            "project": project.human_key,
-                            "payload": payload,
-                        }
-                    ],
-                    "count": 1,
                 }
-                panel_end = time.perf_counter()
-                commit_panel_text = _render_commit_panel(
-                    tool_name,
-                    project.human_key,
-                    sender.name,
-                    call_start,
-                    panel_end,
-                    result_snapshot,
-                    frontmatter.get("created"),
-                )
-                git_write_start = time.perf_counter()
-                await write_message_bundle(
-                    archive,
-                    frontmatter,
-                    processed_body,
-                    sender.name,
-                    recipients_for_archive,
-                    attachment_files,
-                    commit_panel_text,
-                )
-                git_write_elapsed = time.perf_counter() - git_write_start
-        else:
-            if attachment_paths:
-                raise ToolExecutionError(
-                    "ARCHIVE_DISABLED",
-                    "Attachment file persistence requires archive storage; start the server with archive enabled "
-                    "(or embed images inline as data URIs).",
-                    recoverable=True,
-                    data={"attachment_paths": list(attachment_paths)},
-                )
-            if settings.file_reservations_enforcement_enabled:
-                await ctx.info("File reservation enforcement skipped (archive storage disabled).")
-            attachments_start = time.perf_counter()
-            processed_body = body_md
-            attachments_meta: list[dict[str, Any]] = []
-            attachment_files = []
-            attachments_elapsed = time.perf_counter() - attachments_start
-            if not attachments_meta and ("data:image" in body_md):
-                attachments_meta.append({"type": "inline", "media_type": "image/webp"})
-            db_write_start = time.perf_counter()
-            message = await _create_message(
-                project,
-                sender,
-                subject,
-                processed_body,
-                recipient_records,
-                importance,
-                ack_required,
-                thread_id,
-                attachments_meta,
+
+        # Body processing - attachments tracked as metadata only (archive storage removed)
+        processed_body = body_md
+        attachments_meta: list[dict[str, object]] = []
+        # Detect inline data URI images in body
+        if "data:image" in body_md:
+            attachments_meta.append({"type": "inline", "media_type": "image/webp"})
+        if attachment_paths:
+            for attachment_path in attachment_paths:
+                try:
+                    path_str = str(Path(attachment_path))
+                except TypeError:
+                    continue
+                attachments_meta.append({"type": "file", "path": path_str})
+            await ctx.warning(
+                "Attachment paths are recorded as metadata only; files are no longer copied into storage."
             )
-            db_write_elapsed = time.perf_counter() - db_write_start
-            frontmatter = _message_frontmatter(
-                message,
-                project,
-                sender,
-                to_agents,
-                cc_agents,
-                bcc_agents,
-                attachments_meta,
-            )
-            payload = _message_to_dict(message)
-            payload.update(
-                {
-                    "from": sender.name,
-                    "to": [agent.name for agent in to_agents],
-                    "cc": [agent.name for agent in cc_agents_for_outbox],
-                    "bcc": [agent.name for agent in bcc_agents],
-                    "attachments": attachments_meta,
-                }
-            )
+        if convert_images_override is not None:
+            await ctx.warning("convert_images override is deprecated; images are no longer converted or copied.")
+
+        db_write_start = time.perf_counter()
+        message = await _create_message(
+            project,
+            sender,
+            subject,
+            processed_body,
+            recipient_records,
+            importance,
+            ack_required,
+            thread_id,
+            attachments_meta,
+        )
+        db_write_elapsed = time.perf_counter() - db_write_start
+        frontmatter = _message_frontmatter(
+            message,
+            project,
+            sender,
+            to_agents,
+            cc_agents,
+            bcc_agents,
+            attachments_meta,
+        )
+        recipients_list = [agent.name for agent in to_agents + cc_agents + bcc_agents]
+        payload: dict[str, Any] = _message_to_dict(message)
+        payload.update(
+            {
+                "from": sender.name,
+                "to": [agent.name for agent in to_agents],
+                "cc": [agent.name for agent in cc_agents_for_outbox],
+                "bcc": [agent.name for agent in bcc_agents],
+                "attachments": attachments_meta,
+            }
+        )
 
         # Optional Slack mirror via incoming webhook (env-driven)
         try:
             from .slack_integration import mirror_message_to_slack
 
-            if frontmatter:
-                mirror_message_to_slack(frontmatter, body_md)
+            mirror_message_to_slack(frontmatter, body_md)
         except Exception:
             logger.exception("Slack mirror failed (non-blocking)")
+
         total_elapsed = time.perf_counter() - call_start
         logger.info(
-            "[LATENCY] _deliver_message: total=%.3fs recipients=%.3fs archive_init=%.3fs "
-            "lock_wait=%.3fs attachments=%.3fs db_write=%.3fs git_write=%.3fs msg_id=%s",
+            "[LATENCY] _deliver_message: total=%.3fs recipients=%.3fs db_write=%.3fs msg_id=%s",
             total_elapsed,
             recipient_lookup_elapsed,
-            archive_elapsed,
-            lock_wait_elapsed,
-            attachments_elapsed,
             db_write_elapsed,
-            git_write_elapsed,
-            message.id if message is not None else None,
+            message.id,
         )
-        if message is None:
-            raise RuntimeError("Message was not created.")
-        await ctx.info(f"Message {message.id} created by {sender.name} (to {', '.join(recipients_for_archive)})")
+        await ctx.info(f"Message {message.id} created by {sender.name} (to {', '.join(recipients_list)})")
 
         # Send Slack notification if enabled (fire-and-forget, non-blocking)
         # Capture client reference before async boundary to avoid race condition during shutdown
@@ -3437,7 +3203,7 @@ def build_mcp_server() -> FastMCP:
                         subject=subject,
                         body_md=body_md,
                         sender_name=sender.name,
-                        recipients=recipients_for_archive,
+                        recipients=recipients_list,
                         importance=importance,
                         thread_id=thread_id,
                     )
@@ -3453,7 +3219,7 @@ def build_mcp_server() -> FastMCP:
                         subject=subject,
                         body_md=body_md,
                         sender_name=sender.name,
-                        recipients=recipients_for_archive,
+                        recipients=recipients_list,
                         message_id=str(message.id),
                         importance=importance,
                         use_blocks=settings.slack.use_blocks,
@@ -3463,8 +3229,6 @@ def build_mcp_server() -> FastMCP:
                 task = asyncio.create_task(_post_webhook())
                 task.add_done_callback(_slack_done_cb)
 
-        if payload is None:
-            raise RuntimeError("Message payload was not generated.")
         return payload
 
     @mcp.tool(name="health_check", description="Return basic readiness information for the Agent Mail server.")
@@ -3693,7 +3457,6 @@ def build_mcp_server() -> FastMCP:
         """
         await ctx.info(f"Ensuring project for key '{human_key}'.")
         project = await _ensure_project(human_key)
-        await _ensure_archive_if_enabled(settings, project)
         return _project_to_dict(project)
 
     @mcp.tool(name="register_agent")
@@ -3819,7 +3582,6 @@ def build_mcp_server() -> FastMCP:
             project = await _get_default_project()
         else:
             project = await _ensure_project(project_key)
-        await _ensure_archive_if_enabled(settings, project)
 
         if settings.tools_log_enabled:
             try:
@@ -3961,7 +3723,7 @@ def build_mcp_server() -> FastMCP:
         commit_limit: int = 5,
     ) -> dict[str, Any]:
         """
-        Return enriched profile details for an agent, optionally including recent archive commits.
+        Return enriched profile details for an agent.
 
         IMPORTANT: Global Namespace
         ---------------------------
@@ -3983,15 +3745,19 @@ def build_mcp_server() -> FastMCP:
         agent_name : str
             Agent name to look up (use resource://agents to discover names globally).
         include_recent_commits : bool
-            If true, include latest commits touching the project archive authored by the configured git author.
+            Deprecated. Retained for compatibility; recent commits are no longer available.
         commit_limit : int
-            Maximum number of recent commits to include.
+            Deprecated. Retained for compatibility; recent commits are no longer available.
 
         Returns
         -------
         dict
-            Agent profile augmented with { recent_commits: [{hexsha, summary, authored_ts}] } when requested.
-            If agent not found, returns { "error": "...", "suggestions": [...] }.
+            Agent profile augmented with { recent_commits: [] }.
+
+        Raises
+        ------
+        ToolExecutionError
+            If the agent cannot be found. The error payload includes suggestions.
         """
         project = await _get_project_by_identifier(project_key)
 
@@ -4011,13 +3777,12 @@ def build_mcp_server() -> FastMCP:
             error_msg = f"Agent '{agent_name}' not found.{suggestion_text}"
             await ctx.warning(error_msg)
             raise ToolExecutionError(
-                "AGENT_NOT_FOUND",
+                "NOT_FOUND",
                 f"Agent '{agent_name}' not registered for project '{project.human_key}'.{suggestion_text}",
-                recoverable=True,
                 data={
                     "agent_name": agent_name,
                     "suggestions": suggestions,
-                    "_tip": "Use resource://agents to see all registered agents globally.",
+                    "tip": "Use resource://agents to see all registered agents globally.",
                 },
             )
 
@@ -4028,25 +3793,9 @@ def build_mcp_server() -> FastMCP:
             agent_project = await _get_default_project()
 
         profile = _agent_to_dict(agent)
-        recent: list[dict[str, Any]] = []
-        if include_recent_commits:
-            archive = await ensure_archive(settings, agent_project.slug, project_key=agent_project.human_key)
-            repo: Repo = archive.repo
-            try:
-                # Limit to archive path; extract last commits
-                count = max(1, min(50, commit_limit))
-                for commit in repo.iter_commits(paths=["."], max_count=count):
-                    recent.append(
-                        {
-                            "hexsha": commit.hexsha[:12],
-                            "summary": commit.summary,
-                            "authored_ts": _iso(datetime.fromtimestamp(commit.authored_date, tz=timezone.utc)),
-                        }
-                    )
-            except Exception:
-                pass
-        profile["recent_commits"] = recent
-        await ctx.info(f"whois for '{agent_name}' in '{agent_project.human_key}' returned {len(recent)} commits")
+        # NOTE: Archive storage has been removed. recent_commits is always empty.
+        profile["recent_commits"] = []
+        await ctx.info(f"whois for '{agent_name}' in '{agent_project.human_key}'")
         return profile
 
     @mcp.tool(name="create_agent_identity")
@@ -4131,10 +3880,6 @@ def build_mcp_server() -> FastMCP:
                 await session.commit()
                 await session.refresh(db_agent)
                 agent = db_agent
-        if is_archive_enabled(settings):
-            archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-            async with _archive_write_lock(archive):
-                await write_agent_profile(archive, _agent_to_dict(agent))
         await ctx.info(f"Created new agent identity '{agent.name}' for project '{project.human_key}'.")
         return _agent_to_dict(agent)
 
@@ -4163,7 +3908,7 @@ def build_mcp_server() -> FastMCP:
         auto_contact_if_blocked: bool = False,
     ) -> dict[str, Any]:
         """
-        Send a Markdown message to one or more recipients and persist canonical and mailbox copies to Git.
+        Send a Markdown message to one or more recipients and persist it to SQLite.
 
         IMPORTANT: Global Namespace
         ---------------------------
@@ -4183,10 +3928,8 @@ def build_mcp_server() -> FastMCP:
         What this does
         --------------
         - Stores message (and recipients) in the database; updates sender's activity
-        - Writes a canonical `.md` under `messages/YYYY/MM/`
-        - Writes sender outbox and per-recipient inbox copies
-        - Optionally converts referenced images to WebP and embeds small images inline
-        - Supports explicit attachments via `attachment_paths` in addition to inline references
+        - Records attachment metadata for inline data URIs and explicit attachment paths
+        - Does not copy files or convert images (archive storage is removed)
 
         Parameters
         ----------
@@ -4204,9 +3947,9 @@ def build_mcp_server() -> FastMCP:
         cc, bcc : Optional[list[str]]
             Additional recipients by name. At least one of to/cc/bcc must be provided.
         attachment_paths : Optional[list[str]]
-            Extra file paths to include as attachments; will be converted to WebP and stored.
+            Extra file paths to include as attachment metadata (files are not copied).
         convert_images : Optional[bool]
-            Overrides server default for image conversion/inlining. If None, server settings apply.
+            Deprecated. Retained for compatibility; images are not converted or copied.
         importance : str
             One of {"low","normal","high","urgent"} (free form tolerated; used by filters).
         ack_required : bool
@@ -4226,7 +3969,7 @@ def build_mcp_server() -> FastMCP:
         ----------
         - If no recipients are given, the call fails.
         - Unknown recipient names fail fast; register them first.
-        - Non-absolute attachment paths are resolved relative to the project archive root.
+        - Non-absolute attachment paths are preserved as provided; clients resolve them.
 
         Do / Don't
         ----------
@@ -4235,7 +3978,7 @@ def build_mcp_server() -> FastMCP:
         - Use `thread_id` (or `reply_message`) to keep related discussion in a single thread.
         - Address only relevant recipients; use CC/BCC sparingly and intentionally.
         - Prefer Markdown links; attach images only when they materially aid understanding. The server
-          auto-converts images to WebP and may inline small images depending on policy.
+          records attachment metadata but does not copy or convert files.
 
         Don't:
         - Send large, repeated binaries—reuse prior attachments via `attachment_paths` when possible.
@@ -4252,11 +3995,11 @@ def build_mcp_server() -> FastMCP:
         }}}
         ```
 
-        2) Inline image (auto-convert to WebP and inline if small):
+        2) Inline image (data URI auto-detected; file paths must be listed in attachment_paths):
         ```json
         {"jsonrpc":"2.0","id":"6a","method":"tools/call","params":{"name":"send_message","arguments":{
           "project_key":"/abs/path/backend","sender_name":"GreenCastle","to":["BlueLake"],
-          "subject":"Diagram","body_md":"![diagram](docs/flow.png)","convert_images":true
+          "subject":"Diagram","body_md":"![diagram](docs/flow.png)","attachment_paths":["docs/flow.png"]
         }}}
         ```
 
@@ -6208,7 +5951,7 @@ def build_mcp_server() -> FastMCP:
         ---------
         - Conflicts are reported if an overlapping active exclusive reservation exists held by another agent
         - Glob matching is symmetric (`fnmatchcase(a,b)` or `fnmatchcase(b,a)`), including exact matches
-        - When granted, a JSON artifact is written under `file_reservations/<sha1(path)>.json` and the DB is updated
+        - The database is the source of truth; archive artifacts are disabled when archive storage is removed
         - TTL must be >= 60 seconds (enforced by the server settings/policy)
 
         Do / Don't
@@ -6252,7 +5995,7 @@ def build_mcp_server() -> FastMCP:
         """
         project = await _ensure_project(project_key)
         settings = get_settings()
-        if get_settings().tools_log_enabled:
+        if settings.tools_log_enabled:
             try:
                 import importlib as _imp
 
@@ -6304,9 +6047,8 @@ def build_mcp_server() -> FastMCP:
 
         granted: list[dict[str, Any]] = []
         conflicts: list[dict[str, Any]] = []
-        artifact_payloads: list[dict[str, object]] = []
         for path in paths:
-            conflicting_holders = []
+            conflicting_holders: list[dict[str, Any]] = []
             for file_reservation_record, holder_name in existing_reservations:
                 if _file_reservations_conflict(file_reservation_record, path, exclusive, agent):
                     conflicting_holders.append(
@@ -6321,18 +6063,6 @@ def build_mcp_server() -> FastMCP:
                 # Advisory model: still grant the file_reservation but surface conflicts
                 conflicts.append({"path": path, "holders": conflicting_holders})
             file_reservation = await _create_file_reservation(project, agent, path, exclusive, reason, ttl_seconds)
-            file_reservation_payload = {
-                "id": file_reservation.id,
-                "project": project.human_key,
-                "agent": agent.name,
-                "path_pattern": file_reservation.path_pattern,
-                "exclusive": file_reservation.exclusive,
-                "reason": file_reservation.reason,
-                "created_ts": _iso(file_reservation.created_ts),
-                "expires_ts": _iso(file_reservation.expires_ts),
-                "released_ts": None,
-            }
-            artifact_payloads.append(cast(dict[str, object], file_reservation_payload))
             granted.append(
                 {
                     "id": file_reservation.id,
@@ -6343,7 +6073,6 @@ def build_mcp_server() -> FastMCP:
                 }
             )
             existing_reservations.append((file_reservation, agent.name))
-        await write_file_reservation_artifacts(settings, project.slug, artifact_payloads, project_key=project.human_key)
         await ctx.info(f"Issued {len(granted)} file_reservations for '{agent.name}'. Conflicts: {len(conflicts)}")
         return {"granted": granted, "conflicts": conflicts}
 
@@ -6785,13 +6514,6 @@ def build_mcp_server() -> FastMCP:
                 )
             await session.commit()
 
-        # Update artifacts for the renewed file_reservations (Git archive if enabled; otherwise runtime JSON)
-        await write_file_reservation_artifacts(
-            settings,
-            project.slug,
-            artifact_payloads,
-            project_key=project.human_key,
-        )
         await ctx.info(f"Renewed {len(updated)} file_reservation(s) for '{agent.name}'.")
         return {"renewed": len(updated), "file_reservations": updated}
 
@@ -8430,8 +8152,6 @@ def build_mcp_server() -> FastMCP:
         # Filter unread (no read_ts recorded)
         unread: list[dict[str, Any]] = []
         async with get_session() as session:
-            from .models import MessageRecipient  # local import to avoid cycle at top
-
             for item in items:
                 result = await session.execute(
                     select(MessageRecipient.read_ts).where(
@@ -8690,12 +8410,12 @@ def build_mcp_server() -> FastMCP:
     @mcp.resource("resource://mailbox/{agent}", mime_type="application/json")
     async def mailbox_resource(agent: str, project: Optional[str] = None, limit: int = 20) -> dict[str, Any]:
         """
-        List recent messages in an agent's mailbox with lightweight Git commit context.
+        List recent messages in an agent's mailbox.
 
         Returns
         -------
         dict
-            { project, agent, count, messages: [{ id, subject, from, created_ts, importance, ack_required, kind, commit: {hexsha, summary} | null }] }
+            { project, agent, count, messages: [{ id, subject, from, created_ts, importance, ack_required, kind, commit: null }] }
         """
         # Parse query embedded in agent path if present
         if "?" in agent:
@@ -8731,32 +8451,11 @@ def build_mcp_server() -> FastMCP:
         agent_obj = await _get_agent(project_obj, agent)
         items = await _list_inbox(project_obj, agent_obj, limit, urgent_only=False, include_bodies=False, since_ts=None)
 
-        # Attach recent commit summaries touching the archive (best-effort)
-        commits_index: dict[str, dict[str, str]] = {}
-        if is_archive_enabled(settings):
-            try:
-                archive = await ensure_archive(settings, project_obj.slug, project_key=project_obj.human_key)
-                repo: Repo = archive.repo
-                for commit in repo.iter_commits(paths=["."], max_count=200):
-                    # Heuristic: extract message id from commit summary when present in canonical subject format
-                    # Expected: "mail: <from> -> ... | <subject>"
-                    summary = str(commit.summary)
-                    hexsha = commit.hexsha[:12]
-                    if hexsha not in commits_index:
-                        commits_index[hexsha] = {"hexsha": hexsha, "summary": summary}
-            except Exception:
-                pass
-
-        # Map messages to nearest commit (best-effort: none if not determinable)
+        # NOTE: Archive storage has been removed. commit metadata is no longer available.
         out: list[dict[str, Any]] = []
         for item in items:
-            commit_meta = None
-            # We cannot cheaply know exact commit per message without parsing message ids from log; keep null
-            # but preserve structure for clients
-            if commits_index:
-                commit_meta = next(iter(commits_index.values()))  # provide at least one recent reference
             payload = dict(item)
-            payload["commit"] = commit_meta
+            payload["commit"] = None
             out.append(payload)
         return {"project": project_obj.human_key, "agent": agent_obj.name, "count": len(out), "messages": out}
 
@@ -8767,7 +8466,7 @@ def build_mcp_server() -> FastMCP:
     async def mailbox_with_commits_resource(
         agent: str, project: Optional[str] = None, limit: int = 20
     ) -> dict[str, Any]:
-        """List recent messages in an agent's mailbox with commit metadata including diff summaries."""
+        """List recent messages in an agent's mailbox (commit metadata unavailable)."""
         # Parse query embedded in agent path if present
         if "?" in agent:
             name_part, _, qs = agent.partition("?")
@@ -8801,17 +8500,12 @@ def build_mcp_server() -> FastMCP:
         agent_obj = await _get_agent(project_obj, agent)
         items = await _list_inbox(project_obj, agent_obj, limit, urgent_only=False, include_bodies=False, since_ts=None)
 
-        enriched: list[dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for item in items:
-            try:
-                msg_obj = await _get_message(project_obj, int(item["id"]))
-                commit_info = await _commit_info_for_message(settings, project_obj, msg_obj)
-                if commit_info:
-                    item["commit"] = commit_info
-            except Exception:
-                pass
-            enriched.append(item)
-        return {"project": project_obj.human_key, "agent": agent_obj.name, "count": len(enriched), "messages": enriched}
+            payload = dict(item)
+            payload["commit"] = None
+            out.append(payload)
+        return {"project": project_obj.human_key, "agent": agent_obj.name, "count": len(out), "messages": out}
 
     @mcp.resource("resource://outbox/{agent}", mime_type="application/json")
     async def outbox_resource(
@@ -8821,7 +8515,7 @@ def build_mcp_server() -> FastMCP:
         include_bodies: bool = False,
         since_ts: Optional[str] = None,
     ) -> dict[str, Any]:
-        """List messages sent by the agent, enriched with commit metadata for canonical files."""
+        """List messages sent by the agent (commit metadata unavailable)."""
         # Support toolkits that incorrectly pass query in the template segment
         if "?" in agent:
             name_part, _, qs = agent.partition("?")
@@ -8843,23 +8537,17 @@ def build_mcp_server() -> FastMCP:
                     since_ts = parsed["since_ts"][0]
             except Exception:
                 pass
-        """List messages sent by the agent, enriched with commit metadata for canonical files."""
         if project is None:
             raise ValueError("project parameter is required for outbox resource")
         project_obj = await _get_project_by_identifier(project)
         agent_obj = await _get_agent(project_obj, agent)
         items = await _list_outbox(project_obj, agent_obj, limit, include_bodies, since_ts)
-        enriched: list[dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for item in items:
-            try:
-                msg_obj = await _get_message(project_obj, int(item["id"]))
-                commit_info = await _commit_info_for_message(settings, project_obj, msg_obj)
-                if commit_info:
-                    item["commit"] = commit_info
-            except Exception:
-                pass
-            enriched.append(item)
-        return {"project": project_obj.human_key, "agent": agent_obj.name, "count": len(enriched), "messages": enriched}
+            payload = dict(item)
+            payload["commit"] = None
+            out.append(payload)
+        return {"project": project_obj.human_key, "agent": agent_obj.name, "count": len(out), "messages": out}
 
     # No explicit output-schema transform; the tool returns ToolResult with {"result": ...}
 

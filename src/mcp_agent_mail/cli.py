@@ -1937,7 +1937,7 @@ def guard_install(
 
     try:
         hook_path = asyncio.run(_run())
-    except ValueError as exc:  # convert to CLI-friendly error
+    except (ValueError, NotImplementedError) as exc:  # convert to CLI-friendly error
         raise typer.BadParameter(str(exc)) from exc
     console.print(f"[green]Installed guard for [bold]{project}[/] at {hook_path}.")
 
@@ -2092,7 +2092,7 @@ def am_run(
             branch = "unknown"
     settings = get_settings()
     guard_mode = (os.environ.get("AGENT_MAIL_GUARD_MODE", "block") or "block").strip().lower()
-    worktrees_enabled = bool(settings.worktrees_enabled)
+    worktrees_enabled = bool(settings.worktrees_enabled) and is_archive_enabled(settings)
 
     async def _ensure_slot_paths() -> Path:
         if is_archive_enabled(settings):
@@ -2386,15 +2386,8 @@ def projects_adopt(
         console.print("[red]Refusing to adopt: projects do not appear to belong to the same repository.[/]")
         return
 
-    # Describe filesystem moves (archive layout)
-    settings = get_settings()
-    from .storage import ensure_archive as _ensure_archive
-
-    src_archive = asyncio.run(_ensure_archive(settings, src.slug, project_key=src.human_key))
-    dst_archive = asyncio.run(_ensure_archive(settings, dst.slug, project_key=dst.human_key))
-    plan.append(f"Move Git artifacts: {src_archive.root} -> {dst_archive.root}")
+    plan.append("Archive migration skipped (archive storage removed).")
     plan.append("Re-key DB rows: source project_id -> target project_id (messages, agents, file_reservations, etc.)")
-    plan.append("Write aliases.json under target 'projects/<slug>/' with former_slugs")
 
     console.print("[bold]Projects adopt plan (dry-run)[/bold]")
     for line in plan:
@@ -2419,33 +2412,6 @@ def projects_adopt(
             dup = sorted(set(src_agents).intersection(set(dst_agents)))
             if dup:
                 raise typer.BadParameter(f"Agent name conflicts in target project: {', '.join(dup)}")
-        # Move Git artifacts
-        settings = get_settings()
-        # local import to minimize top-level churn and keep ordering stable
-        from .storage import (
-            AsyncFileLock as _AsyncFileLock,  # type: ignore
-            ensure_archive as _ensure_archive,
-        )
-
-        src_archive = asyncio.run(_ensure_archive(settings, src.slug, project_key=src.human_key))
-        dst_archive = asyncio.run(_ensure_archive(settings, dst.slug, project_key=dst.human_key))
-        moved_relpaths: list[str] = []
-        for path in sorted(src_archive.root.rglob("*"), key=str):
-            if not path.is_file():
-                continue
-            if path.name.endswith(".lock") or path.name.endswith(".lock.owner.json"):
-                continue
-            rel_from_root = path.relative_to(src_archive.root)
-            dest_path = dst_archive.root / rel_from_root
-            await asyncio.to_thread(dest_path.parent.mkdir, parents=True, exist_ok=True)
-            if dest_path.exists():
-                continue
-            await asyncio.to_thread(path.replace, dest_path)
-            moved_relpaths.append(dest_path.relative_to(dst_archive.repo_root).as_posix())
-        from .storage import _commit as _archive_commit  # type: ignore
-
-        async with _AsyncFileLock(dst_archive.lock_path):
-            await _archive_commit(dst_archive.repo, settings, f"adopt: move {src.slug} into {dst.slug}", moved_relpaths)
         # Re-key database rows (agents, messages, file_reservations)
         async with get_session() as session:
             from sqlalchemy import update as _update  # local import to avoid top-of-file churn
@@ -2456,20 +2422,6 @@ def projects_adopt(
                 _update(FileReservation).where(FileReservation.project_id == src.id).values(project_id=dst.id)
             )
             await session.commit()
-        # Write aliases.json under target
-        aliases_path = dst_archive.root / "aliases.json"
-        try:
-            existing = {}
-            if aliases_path.exists():
-                existing = json.loads(aliases_path.read_text(encoding="utf-8"))
-            former = set(existing.get("former_slugs", []))
-            former.add(src.slug)
-            existing["former_slugs"] = sorted(former)
-            await asyncio.to_thread(aliases_path.write_text, json.dumps(existing, indent=2), "utf-8")
-            rel_alias = aliases_path.relative_to(dst_archive.repo_root).as_posix()
-            await _archive_commit(dst_archive.repo, settings, f"adopt: record alias for {src.slug}", [rel_alias])
-        except Exception as exc:
-            console.print(f"[yellow]Warning: failed to write aliases.json: {exc}[/]")
 
     try:
         asyncio.run(_apply())

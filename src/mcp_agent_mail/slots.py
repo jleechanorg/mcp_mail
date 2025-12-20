@@ -1,44 +1,12 @@
-"""Build slot management tools for coordinating parallel build operations."""
+"""Build slot management tools for coordinating parallel build operations.
+
+NOTE: Archive storage has been removed. Build slots functionality is now disabled
+since it previously depended on the archive's filesystem structure.
+"""
 
 from __future__ import annotations
 
-import json
-import os
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
-
-from mcp_agent_mail.config import Settings, get_settings
-from mcp_agent_mail.storage import AsyncFileLock, ensure_archive, ensure_runtime_project_root, is_archive_enabled
-from mcp_agent_mail.utils import safe_filesystem_component, slugify
-
-
-def _normalize_branch(value: str | None) -> str:
-    branch = (value or "main").strip()
-    return branch or "main"
-
-
-async def _resolve_project_root(settings: Settings, project_key: str) -> Path:
-    """Return the filesystem root where build slot artifacts should be stored.
-
-    Prefer the Git-backed project archive when enabled; fall back to a runtime
-    root when archive storage is disabled.
-    """
-    if is_archive_enabled(settings):
-        archive = await ensure_archive(settings, project_key)
-        return archive.root
-    slug = slugify(project_key)
-    return await ensure_runtime_project_root(settings, slug)
-
-
-def _slot_dir(archive_root: Path, slot: str) -> Path:
-    directory = archive_root / "build_slots" / safe_filesystem_component(slot)
-    directory.mkdir(parents=True, exist_ok=True)
-    return directory
-
-
-def _slot_lock(slot_dir: Path) -> AsyncFileLock:
-    return AsyncFileLock(slot_dir / ".lock", timeout_seconds=30.0)
 
 
 async def acquire_build_slot(
@@ -51,109 +19,14 @@ async def acquire_build_slot(
     """
     Acquire a build slot for coordinating parallel build operations.
 
-    Parameters
-    ----------
-    project_key : str
-        Project identifier
-    agent_name : str
-        Agent requesting the slot
-    slot : str
-        Slot name (e.g., "frontend-build", "test-runner")
-    ttl_seconds : int
-        Time-to-live in seconds (minimum 60)
-    exclusive : bool
-        Whether this is an exclusive lock
+    NOTE: Build slots are disabled since archive storage has been removed.
 
     Returns
     -------
     dict
-        {
-            "granted": bool,
-            "slot": str,
-            "agent": str,
-            "acquired_ts": str (ISO8601),
-            "expires_ts": str (ISO8601),
-            "conflicts": list[dict],
-            "disabled": bool (if WORKTREES_ENABLED=0)
-        }
+        {"disabled": True}
     """
-    settings = get_settings()
-
-    # Check if build slots are enabled via settings (backed by python-decouple)
-    if not _worktrees_enabled(settings):
-        return {"disabled": True}
-
-    # Enforce minimum TTL
-    ttl_seconds = max(60, ttl_seconds)
-
-    project_root = await _resolve_project_root(settings, project_key)
-
-    # Create slot directory
-    slot_dir = _slot_dir(project_root, slot)
-    branch = _normalize_branch(os.environ.get("BRANCH"))
-    holder = safe_filesystem_component(f"{agent_name}__{branch}")
-    lease_path = slot_dir / f"{holder}.json"
-
-    async with _slot_lock(slot_dir):
-        now = datetime.now(timezone.utc)
-        conflicts: list[dict[str, Any]] = []
-        existing_payload: dict[str, Any] | None = None
-
-        for candidate in slot_dir.glob("*.json"):
-            if candidate.name.startswith(".lock"):
-                continue
-            try:
-                data = json.loads(candidate.read_text(encoding="utf-8"))
-            except Exception:
-                continue
-
-            exp = data.get("expires_ts")
-            if exp:
-                try:
-                    if datetime.fromisoformat(exp) <= now:
-                        continue
-                except Exception:
-                    continue
-
-            if data.get("released_ts"):
-                continue
-
-            same_holder = data.get("agent") == agent_name and _normalize_branch(data.get("branch")) == branch
-            if same_holder:
-                existing_payload = data
-                continue
-
-            if exclusive or data.get("exclusive", True):
-                conflicts.append(data)
-
-        granted = not conflicts
-        acquired_ts: str | None = None
-        expires_ts: str | None = None
-
-        if granted:
-            acquired_ts = now.isoformat()
-            expires_ts = (now + timedelta(seconds=ttl_seconds)).isoformat()
-            payload = existing_payload or {}
-            payload.update(
-                {
-                    "slot": slot,
-                    "agent": agent_name,
-                    "branch": branch,
-                    "exclusive": exclusive,
-                    "acquired_ts": acquired_ts,
-                    "expires_ts": expires_ts,
-                }
-            )
-            lease_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
-        return {
-            "granted": granted,
-            "slot": slot,
-            "agent": agent_name,
-            "acquired_ts": acquired_ts,
-            "expires_ts": expires_ts,
-            "conflicts": conflicts,
-        }
+    return {"disabled": True, "reason": "Archive storage has been removed"}
 
 
 async def renew_build_slot(
@@ -165,66 +38,14 @@ async def renew_build_slot(
     """
     Renew an existing build slot by extending its expiration.
 
-    Parameters
-    ----------
-    project_key : str
-        Project identifier
-    agent_name : str
-        Agent name
-    slot : str
-        Slot name
-    extend_seconds : int
-        Seconds to extend the expiration
+    NOTE: Build slots are disabled since archive storage has been removed.
 
     Returns
     -------
-        dict
-            {
-                "renewed": bool,
-                "expires_ts": str (ISO8601),
-                "disabled": bool (if WORKTREES_ENABLED=0),
-            }
+    dict
+        {"disabled": True}
     """
-    settings = get_settings()
-    if not _worktrees_enabled(settings):
-        return {"disabled": True}
-
-    project_root = await _resolve_project_root(settings, project_key)
-
-    slot_dir = project_root / "build_slots" / safe_filesystem_component(slot)
-    if not slot_dir.exists():
-        return {"renewed": False, "error": "Slot not found"}
-
-    branch = _normalize_branch(os.environ.get("BRANCH"))
-    holder = safe_filesystem_component(f"{agent_name}__{branch}")
-    lease_path = slot_dir / f"{holder}.json"
-    if not lease_path.exists():
-        return {"renewed": False, "error": "Lease not found"}
-
-    async with _slot_lock(slot_dir):
-        if not lease_path.exists():
-            return {"renewed": False, "error": "Lease not found"}
-        try:
-            data = json.loads(lease_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            return {"renewed": False, "error": str(exc)}
-
-        if data.get("agent") != agent_name or _normalize_branch(data.get("branch")) != branch:
-            return {"renewed": False, "error": "Lease owned by another agent"}
-
-        now = datetime.now(timezone.utc)
-        new_expires = now + timedelta(seconds=extend_seconds)
-        data["expires_ts"] = new_expires.isoformat()
-
-        try:
-            lease_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        except Exception as exc:
-            return {"renewed": False, "error": str(exc)}
-
-        return {
-            "renewed": True,
-            "expires_ts": new_expires.isoformat(),
-        }
+    return {"disabled": True, "reason": "Archive storage has been removed"}
 
 
 async def release_build_slot(
@@ -235,73 +56,19 @@ async def release_build_slot(
     """
     Release a build slot.
 
-    Parameters
-    ----------
-    project_key : str
-        Project identifier
-    agent_name : str
-        Agent name
-    slot : str
-        Slot name
+    NOTE: Build slots are disabled since archive storage has been removed.
 
     Returns
     -------
-        dict
-            {
-                "released": bool,
-                "released_ts": str (ISO8601),
-                "disabled": bool (if WORKTREES_ENABLED=0),
-            }
+    dict
+        {"disabled": True}
     """
-    settings = get_settings()
-    if not _worktrees_enabled(settings):
-        return {"disabled": True}
-
-    project_root = await _resolve_project_root(settings, project_key)
-
-    slot_dir = project_root / "build_slots" / safe_filesystem_component(slot)
-    if not slot_dir.exists():
-        return {"released": False, "error": "Slot not found"}
-
-    branch = _normalize_branch(os.environ.get("BRANCH"))
-    holder = safe_filesystem_component(f"{agent_name}__{branch}")
-    lease_path = slot_dir / f"{holder}.json"
-    if not lease_path.exists():
-        return {"released": False, "error": "Lease not found"}
-
-    async with _slot_lock(slot_dir):
-        if not lease_path.exists():
-            return {"released": False, "error": "Lease not found"}
-        try:
-            data = json.loads(lease_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            return {"released": False, "error": str(exc)}
-
-        if data.get("agent") != agent_name or _normalize_branch(data.get("branch")) != branch:
-            return {"released": False, "error": "Lease owned by another agent"}
-
-        released_ts = datetime.now(timezone.utc).isoformat()
-        data["released_ts"] = released_ts
-
-        try:
-            lease_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        except Exception as exc:
-            return {"released": False, "error": str(exc)}
-
-        return {
-            "released": True,
-            "released_ts": released_ts,
-        }
+    return {"disabled": True, "reason": "Archive storage has been removed"}
 
 
-def _worktrees_enabled(settings: Settings | None = None) -> bool:
-    """Return True when worktree-aware coordination is enabled."""
-    env_value = os.environ.get("WORKTREES_ENABLED")
-    if env_value is not None:
-        normalized = env_value.strip().lower()
-        return normalized in {"1", "true", "yes", "on"}
-    try:
-        config = settings or get_settings()
-    except Exception:
-        return False
-    return bool(getattr(config, "worktrees_enabled", False))
+def _worktrees_enabled() -> bool:
+    """Return True when worktree-aware coordination is enabled.
+
+    NOTE: Always returns False since archive storage has been removed.
+    """
+    return False

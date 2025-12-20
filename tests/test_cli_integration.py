@@ -244,7 +244,7 @@ exit 0
 
 
 def test_am_run_gate_respects_settings(monkeypatch, isolated_env, tmp_path: Path):
-    """am-run should acquire slots when settings enable the gate even if env vars are unset."""
+    """am-run should skip slot creation when archive storage is removed."""
     real_settings = get_settings()
 
     monkeypatch.setenv("AGENT_NAME", "SettingsAgent")
@@ -257,8 +257,6 @@ def test_am_run_gate_respects_settings(monkeypatch, isolated_env, tmp_path: Path
     repo_path.mkdir()
     _init_test_git_repo(repo_path)
     slug = slugify(str(repo_path))
-    archive = asyncio.run(ensure_archive(real_settings, slug))
-
     script_path = tmp_path / "settings_script.sh"
     script_path.write_text("#!/bin/bash\nexit 0\n")
     script_path.chmod(0o755)
@@ -266,9 +264,8 @@ def test_am_run_gate_respects_settings(monkeypatch, isolated_env, tmp_path: Path
     result = runner.invoke(app, ["am-run", "settings-slot", "--path", str(repo_path), "--", str(script_path)])
     assert result.exit_code == 0, result.stdout
 
-    slot_dir = archive.root / "build_slots" / "settings-slot"
-    assert slot_dir.exists()
-    assert list(slot_dir.glob("*.json")), "slot lease created when gate enabled via settings"
+    slot_dir = Path(real_settings.storage.root) / "projects" / slug / "build_slots" / "settings-slot"
+    assert not slot_dir.exists(), "build slots are disabled when archive storage is removed"
 
 
 @pytest.mark.asyncio

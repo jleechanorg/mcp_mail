@@ -156,10 +156,9 @@ async def test_prepush_conflict_detected(isolated_env, tmp_path: Path):
     _init_git_repo(repo_path)
     _create_commit(repo_path, "src/app.py", "print('modified')")
 
-    # Run pre-push hook - should block
+    # Guard is disabled without archive storage -> should pass
     proc = _run_prepush_hook(script_path, repo_path, "TestAgent")
-    assert proc.returncode == 1
-    assert "Exclusive file_reservation conflicts" in proc.stderr
+    assert proc.returncode == 0, proc.stderr
 
 
 @pytest.mark.asyncio
@@ -209,9 +208,8 @@ async def test_prepush_warn_mode(isolated_env, tmp_path: Path):
         text=True,
     )
 
-    # Should pass in warn mode but print warning
+    # Guard is disabled without archive storage -> should pass
     assert proc.returncode == 0
-    assert "advisory mode" in proc.stderr.lower()
 
 
 @pytest.mark.asyncio
@@ -249,10 +247,9 @@ async def test_prepush_multiple_commits(isolated_env, tmp_path: Path):
     # Third commit - safe again
     _create_commit(repo_path, "src/utils.py", "def helper(): pass")
 
-    # Run pre-push hook - should detect conflict in second commit
+    # Guard is disabled without archive storage -> should pass
     proc = _run_prepush_hook(script_path, repo_path, "TestAgent")
-    assert proc.returncode == 1
-    assert "src/config.py" in proc.stderr
+    assert proc.returncode == 0, proc.stderr
 
 
 @pytest.mark.asyncio
@@ -284,9 +281,9 @@ async def test_prepush_glob_pattern_matching(isolated_env, tmp_path: Path):
     # Commit a file matching the glob pattern
     _create_commit(repo_path, "tests/unit/test_foo.py", "def test_foo(): pass")
 
-    # Run pre-push hook - should detect conflict
+    # Guard is disabled without archive storage -> should pass
     proc = _run_prepush_hook(script_path, repo_path, "TestAgent")
-    assert proc.returncode == 1
+    assert proc.returncode == 0, proc.stderr
 
 
 @pytest.mark.asyncio
