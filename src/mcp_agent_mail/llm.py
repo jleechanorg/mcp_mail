@@ -12,12 +12,13 @@ import contextlib
 import os
 import socket
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Optional, cast
 from urllib.parse import urlparse
 
 import litellm
 import structlog
-from decouple import Config as DecoupleConfig, RepositoryEnv
+from decouple import Config as DecoupleConfig, RepositoryEmpty, RepositoryEnv
 from litellm.types.caching import LiteLLMCacheType
 
 from .config import get_settings
@@ -256,20 +257,9 @@ def _bridge_provider_env() -> None:
     Also map common synonyms to LiteLLM's canonical env names, e.g. GEMINI_API_KEY -> GOOGLE_API_KEY,
     GROK_API_KEY -> XAI_API_KEY.
     """
-    try:
-        cfg = DecoupleConfig(RepositoryEnv(".env"))
-    except FileNotFoundError:
-        _logger.debug("llm.env.missing_dotenv_file")
-
-        # No .env file, rely solely on os.environ
-        def cfg(key: str, default: Any = "") -> Any:
-            return default
-    except Exception:
-        _logger.debug("llm.env.dotenv_load_failed")
-
-        # Fallback for other errors
-        def cfg(key: str, default: Any = "") -> Any:
-            return default
+    dotenv_path = Path(".env")
+    repo = RepositoryEnv(str(dotenv_path)) if dotenv_path.exists() else RepositoryEmpty()
+    cfg = DecoupleConfig(repo)
 
     def _get_from_any(*keys: str) -> str:
         for k in keys:
