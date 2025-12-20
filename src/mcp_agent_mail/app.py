@@ -3995,11 +3995,11 @@ def build_mcp_server() -> FastMCP:
         }}}
         ```
 
-        2) Inline image (referenced via path or data URI; recorded as metadata only):
+        2) Inline image (data URI auto-detected; file paths must be listed in attachment_paths):
         ```json
         {"jsonrpc":"2.0","id":"6a","method":"tools/call","params":{"name":"send_message","arguments":{
           "project_key":"/abs/path/backend","sender_name":"GreenCastle","to":["BlueLake"],
-          "subject":"Diagram","body_md":"![diagram](docs/flow.png)"
+          "subject":"Diagram","body_md":"![diagram](docs/flow.png)","attachment_paths":["docs/flow.png"]
         }}}
         ```
 

@@ -677,10 +677,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                                     hid2 = hid_row2.scalar_one_or_none()
                                                     if isinstance(hid2, int):
                                                         holder_agent_id = hid2
-                                                        (
-                                                            _project_slug,
-                                                            _project_human_key,
-                                                        ) = await _project_identifiers_from_id(project_id)
                                                         # Archive storage has been removed; no profile artifacts are written.
                                         async with get_session() as s2:
                                             await s2.execute(
@@ -1644,8 +1640,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             from bleach.css_sanitizer import CSSSanitizer  # type: ignore
         except Exception:  # tinycss2 may be missing; degrade gracefully
             CSSSanitizer = None  # type: ignore
-        from jinja2 import FileSystemLoader  # type: ignore  # noqa: I001
-        from jinja2 import Environment, select_autoescape
+        from jinja2 import Environment, FileSystemLoader, select_autoescape  # type: ignore
 
         templates_root = Path(__file__).resolve().parent / "templates"
         env = Environment(
