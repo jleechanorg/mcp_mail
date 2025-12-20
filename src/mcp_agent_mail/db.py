@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -16,6 +17,8 @@ from sqlmodel import SQLModel
 from .config import DatabaseSettings, Settings, get_settings
 
 T = TypeVar("T")
+
+logger = logging.getLogger(__name__)
 
 _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
@@ -64,11 +67,8 @@ def retry_on_db_lock(max_retries: int = 5, base_delay: float = 0.1, max_delay: f
                     jitter = delay * 0.25 * (2 * random.random() - 1)  # ±25% jitter
                     total_delay = delay + jitter
 
-                    # Log the retry (if logging is available)
-                    import logging
-
                     func_name = getattr(func, "__name__", getattr(func, "__qualname__", "<callable>"))
-                    logging.warning(
+                    logger.warning(
                         f"Database locked, retrying {func_name} "
                         f"(attempt {attempt + 1}/{max_retries}) after {total_delay:.2f}s"
                     )
@@ -146,7 +146,7 @@ def _build_engine(settings: DatabaseSettings) -> AsyncEngine:
     if is_sqlite:
 
         @event.listens_for(engine.sync_engine, "connect")
-        def set_sqlite_pragma(dbapi_conn, connection_record):
+        def set_sqlite_pragma(dbapi_conn: Any, connection_record: Any) -> None:  # pragma: no cover - db hook
             """Set SQLite PRAGMAs for better concurrent performance on each connection."""
             cursor = dbapi_conn.cursor()
             # Enable WAL mode for concurrent reads/writes
@@ -155,6 +155,8 @@ def _build_engine(settings: DatabaseSettings) -> AsyncEngine:
             cursor.execute("PRAGMA synchronous=NORMAL")
             # Set busy timeout (wait up to 60 seconds for locks, increased from 30)
             cursor.execute("PRAGMA busy_timeout=60000")
+            # Enforce foreign key constraints (SQLite defaults to OFF)
+            cursor.execute("PRAGMA foreign_keys=ON")
             cursor.close()
 
     return engine
@@ -237,10 +239,6 @@ def _check_and_fix_duplicate_agent_names(connection) -> None:
     This handles migration from the old schema (per-project uniqueness) to the new schema
     (global uniqueness). Any duplicate names are automatically renamed by appending a number.
     """
-    import logging
-
-    logger = logging.getLogger(__name__)
-
     # Find all duplicate names (case-insensitive)
     cursor = connection.exec_driver_sql(
         """
@@ -382,3 +380,239 @@ def _ensure_agent_active_columns(connection) -> None:
         connection.exec_driver_sql("ALTER TABLE agents ADD COLUMN is_placeholder INTEGER NOT NULL DEFAULT 0")
     connection.exec_driver_sql("UPDATE agents SET is_active = 1 WHERE is_active IS NULL")
     connection.exec_driver_sql("UPDATE agents SET contact_policy = 'auto' WHERE contact_policy IS NULL")
+
+    # MIGRATION v0.2.0: Make project_id nullable on agents and messages tables
+    # This allows agents and messages to exist without project context
+    _migrate_project_id_nullable(connection)
+
+
+def _migrate_project_id_nullable(connection) -> None:
+    """Migrate agents and messages tables to make project_id nullable.
+
+    SQLite doesn't support ALTER COLUMN, so we need to recreate tables.
+    This migration:
+    1. Checks if project_id is NOT NULL (needs migration)
+    2. Recreates table with nullable project_id
+    3. Copies all data
+    4. Drops old table and renames new one
+
+    Existing data retains its project_id values; new records can have NULL.
+    """
+    # Check if agents.project_id is NOT NULL
+    agents_info = connection.exec_driver_sql("PRAGMA table_info('agents')").fetchall()
+    agents_project_id_notnull = False
+    for col in agents_info:
+        # col format: (cid, name, type, notnull, dflt_value, pk)
+        if col[1] == "project_id" and col[3] == 1:  # notnull == 1
+            agents_project_id_notnull = True
+            break
+
+    if agents_project_id_notnull:
+        logger.info("Migrating agents table: making project_id nullable...")
+        _recreate_agents_table_nullable_project_id(connection)
+        logger.info("agents table migration complete")
+
+    # Check if messages.project_id is NOT NULL
+    messages_info = connection.exec_driver_sql("PRAGMA table_info('messages')").fetchall()
+    messages_project_id_notnull = False
+    for col in messages_info:
+        if col[1] == "project_id" and col[3] == 1:
+            messages_project_id_notnull = True
+            break
+
+    if messages_project_id_notnull:
+        logger.info("Migrating messages table: making project_id nullable...")
+        _recreate_messages_table_nullable_project_id(connection)
+        logger.info("messages table migration complete")
+
+
+def _recreate_agents_table_nullable_project_id(connection) -> None:
+    """Recreate agents table with nullable project_id."""
+    # Clean up orphaned project references so FK enforcement does not break migration
+    orphaned_projects_result = connection.exec_driver_sql(
+        """
+        SELECT COUNT(*)
+        FROM agents a
+        LEFT JOIN projects p ON p.id = a.project_id
+        WHERE a.project_id IS NOT NULL
+          AND p.id IS NULL
+        """
+    )
+    orphaned_projects = orphaned_projects_result.scalar_one()
+    if orphaned_projects:
+        logger.warning(
+            "Found %s agent(s) with orphaned project_id; setting project_id to NULL before migration",
+            orphaned_projects,
+        )
+        connection.exec_driver_sql(
+            """
+            UPDATE agents
+            SET project_id = NULL
+            WHERE project_id IS NOT NULL
+              AND project_id NOT IN (SELECT id FROM projects)
+            """
+        )
+
+    invalid_count_result = connection.exec_driver_sql(
+        """
+        SELECT COUNT(*)
+        FROM agents
+        WHERE name IS NULL OR program IS NULL OR model IS NULL
+        """
+    )
+    invalid_count = invalid_count_result.scalar_one()
+    if invalid_count > 0:
+        raise RuntimeError("Cannot migrate agents table: rows contain NULL in required columns (name/program/model).")
+    # Create new table with nullable project_id
+    connection.exec_driver_sql(
+        """
+        CREATE TABLE agents_new (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER REFERENCES projects(id),
+            name VARCHAR(128) NOT NULL,
+            program VARCHAR(128) NOT NULL,
+            model VARCHAR(128) NOT NULL,
+            task_description VARCHAR(2048) DEFAULT '',
+            inception_ts TIMESTAMP,
+            last_active_ts TIMESTAMP,
+            attachments_policy VARCHAR(16) DEFAULT 'auto',
+            contact_policy VARCHAR(16) DEFAULT 'auto',
+            is_active INTEGER DEFAULT 1,
+            deleted_ts TIMESTAMP,
+            is_placeholder INTEGER DEFAULT 0
+        )
+        """
+    )
+
+    # Copy data from old table
+    try:
+        connection.exec_driver_sql(
+            """
+            INSERT INTO agents_new (
+                id, project_id, name, program, model, task_description,
+                inception_ts, last_active_ts, attachments_policy, contact_policy,
+                is_active, deleted_ts, is_placeholder
+            )
+            SELECT
+                id, project_id, name, program, model, task_description,
+                inception_ts, last_active_ts, attachments_policy, contact_policy,
+                is_active, deleted_ts, is_placeholder
+            FROM agents
+            """
+        )
+    except Exception as exc:  # pragma: no cover - defensive logging
+        raise RuntimeError("Failed to migrate data from agents to agents_new") from exc
+
+    # Drop old table and rename new one
+    connection.exec_driver_sql("DROP TABLE agents")
+    connection.exec_driver_sql("ALTER TABLE agents_new RENAME TO agents")
+
+    # Recreate indexes
+    connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_agents_project_id ON agents(project_id)")
+    connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_agents_name ON agents(name)")
+    connection.exec_driver_sql(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_agents_name_ci ON agents(lower(name)) WHERE is_active = 1"
+    )
+
+
+def _recreate_messages_table_nullable_project_id(connection) -> None:
+    """Recreate messages table with nullable project_id."""
+    # Clean up orphaned project references so FK enforcement does not break migration
+    orphaned_projects_result = connection.exec_driver_sql(
+        """
+        SELECT COUNT(*)
+        FROM messages m
+        LEFT JOIN projects p ON p.id = m.project_id
+        WHERE m.project_id IS NOT NULL
+          AND p.id IS NULL
+        """
+    )
+    orphaned_projects = orphaned_projects_result.scalar_one()
+    if orphaned_projects:
+        logger.warning(
+            "Found %s message(s) with orphaned project_id; setting project_id to NULL before migration",
+            orphaned_projects,
+        )
+        connection.exec_driver_sql(
+            """
+            UPDATE messages
+            SET project_id = NULL
+            WHERE project_id IS NOT NULL
+              AND project_id NOT IN (SELECT id FROM projects)
+            """
+        )
+
+    # Validate sender references remain resolvable once FK enforcement is applied
+    orphaned_senders_result = connection.exec_driver_sql(
+        """
+        SELECT COUNT(*)
+        FROM messages m
+        LEFT JOIN agents a ON a.id = m.sender_id
+        WHERE a.id IS NULL
+        """
+    )
+    orphaned_senders = orphaned_senders_result.scalar_one()
+    if orphaned_senders:
+        raise RuntimeError(
+            "Cannot migrate messages table: sender_id references missing agents "
+            f"({orphaned_senders} orphaned row(s)). Please recreate the referenced agents "
+            "or remove the invalid rows before retrying."
+        )
+
+    invalid_count_result = connection.exec_driver_sql(
+        """
+        SELECT COUNT(*)
+        FROM messages
+        WHERE sender_id IS NULL
+           OR subject IS NULL
+           OR body_md IS NULL
+        """
+    )
+    invalid_count = invalid_count_result.scalar_one()
+    if invalid_count > 0:
+        raise RuntimeError(
+            "Cannot migrate messages table: NULL values found in required columns (sender_id/subject/body_md)."
+        )
+    # Create new table with nullable project_id
+    connection.exec_driver_sql(
+        """
+        CREATE TABLE messages_new (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER REFERENCES projects(id),
+            sender_id INTEGER NOT NULL REFERENCES agents(id),
+            thread_id VARCHAR(128),
+            subject VARCHAR(512) NOT NULL,
+            body_md TEXT NOT NULL,
+            importance VARCHAR(16) DEFAULT 'normal',
+            ack_required INTEGER DEFAULT 0,
+            created_ts TIMESTAMP,
+            attachments JSON DEFAULT '[]'
+        )
+        """
+    )
+
+    # Copy data from old table
+    try:
+        connection.exec_driver_sql(
+            """
+            INSERT INTO messages_new (
+                id, project_id, sender_id, thread_id, subject, body_md,
+                importance, ack_required, created_ts, attachments
+            )
+            SELECT
+                id, project_id, sender_id, thread_id, subject, body_md,
+                importance, ack_required, created_ts, attachments
+            FROM messages
+            """
+        )
+    except Exception as exc:  # pragma: no cover - defensive logging
+        raise RuntimeError("Failed to migrate data from messages to messages_new") from exc
+
+    # Drop old table and rename new one
+    connection.exec_driver_sql("DROP TABLE messages")
+    connection.exec_driver_sql("ALTER TABLE messages_new RENAME TO messages")
+
+    # Recreate indexes
+    connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_messages_project_id ON messages(project_id)")
+    connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_messages_sender_id ON messages(sender_id)")
+    connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_messages_thread_id ON messages(thread_id)")

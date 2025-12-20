@@ -31,9 +31,26 @@ def _create_and_commit_file(repo: Path, filename: str, content: str = "test") ->
     subprocess.run(["git", "commit", "-m", f"Add {filename}"], cwd=str(repo), check=True, capture_output=True)
 
 
+def _tool_text(result) -> str:
+    assert result.content, "Expected non-empty result content"
+    text = result.content[0].text
+    assert text, "Expected text content"
+    return text
+
+
+def _tool_json(result) -> dict:
+    text = _tool_text(result)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:  # pragma: no cover - defensive assertion helper
+        pytest.fail(f"Failed to parse tool result JSON: {exc}")
+
+
 @pytest.mark.asyncio
 async def test_e2e_build_slots_with_file_reservations(isolated_env, tmp_path: Path):
     """End-to-end test: Build slots combined with file reservations."""
+    from fastmcp import Client
+
     server = build_mcp_server()
     settings = get_settings()
     await ensure_archive(settings, "e2e-project")
@@ -42,70 +59,72 @@ async def test_e2e_build_slots_with_file_reservations(isolated_env, tmp_path: Pa
 
     os.environ["WORKTREES_ENABLED"] = "1"
 
-    # Agent1 creates a file reservation
-    result = await server._mcp_server.call_tool(
-        "create_file_reservation",
-        {
-            "project_key": "e2e-project",
-            "agent_name": "Agent1",
-            "path_pattern": "src/*.py",
-            "exclusive": True,
-            "ttl_seconds": 3600,
-        },
-    )
-    assert result[0].text
+    async with Client(server) as client:
+        # Agent1 creates a file reservation
+        result = await client.call_tool(
+            "create_file_reservation",
+            arguments={
+                "project_key": "e2e-project",
+                "agent_name": "Agent1",
+                "path_pattern": "src/*.py",
+                "exclusive": True,
+                "ttl_seconds": 3600,
+            },
+        )
+        assert _tool_text(result)
 
-    # Agent1 acquires a build slot
-    result = await server._mcp_server.call_tool(
-        "acquire_build_slot",
-        {
-            "project_key": "e2e-project",
-            "agent_name": "Agent1",
-            "slot": "backend-build",
-            "ttl_seconds": 3600,
-            "exclusive": True,
-        },
-    )
-    data = json.loads(result[0].text)
-    assert data["granted"] is True
+        # Agent1 acquires a build slot
+        result = await client.call_tool(
+            "acquire_build_slot",
+            arguments={
+                "project_key": "e2e-project",
+                "agent_name": "Agent1",
+                "slot": "backend-build",
+                "ttl_seconds": 3600,
+                "exclusive": True,
+            },
+        )
+        data = _tool_json(result)
+        assert data["granted"] is True
 
-    # Agent2 tries to acquire the same build slot
-    result = await server._mcp_server.call_tool(
-        "acquire_build_slot",
-        {
-            "project_key": "e2e-project",
-            "agent_name": "Agent2",
-            "slot": "backend-build",
-            "ttl_seconds": 3600,
-            "exclusive": True,
-        },
-    )
-    data = json.loads(result[0].text)
-    # Should report conflict
-    assert len(data["conflicts"]) > 0
+        # Agent2 tries to acquire the same build slot
+        result = await client.call_tool(
+            "acquire_build_slot",
+            arguments={
+                "project_key": "e2e-project",
+                "agent_name": "Agent2",
+                "slot": "backend-build",
+                "ttl_seconds": 3600,
+                "exclusive": True,
+            },
+        )
+        data = _tool_json(result)
+        # Should report conflict
+        assert len(data["conflicts"]) > 0
 
-    # Agent1 releases the build slot
-    result = await server._mcp_server.call_tool(
-        "release_build_slot", {"project_key": "e2e-project", "agent_name": "Agent1", "slot": "backend-build"}
-    )
-    data = json.loads(result[0].text)
-    assert data["released"] is True
+        # Agent1 releases the build slot
+        result = await client.call_tool(
+            "release_build_slot",
+            arguments={"project_key": "e2e-project", "agent_name": "Agent1", "slot": "backend-build"},
+        )
+        data = _tool_json(result)
+        assert data["released"] is True
 
-    # Agent2 can now acquire the slot without conflicts
-    result = await server._mcp_server.call_tool(
-        "acquire_build_slot",
-        {
-            "project_key": "e2e-project",
-            "agent_name": "Agent2",
-            "slot": "backend-build",
-            "ttl_seconds": 3600,
-            "exclusive": True,
-        },
-    )
-    data = json.loads(result[0].text)
-    assert data["granted"] is True
-    # No active conflicts from Agent1 (slot was released)
-    assert all("Agent1" not in str(c) for c in data.get("conflicts", []))
+        # Agent2 can now acquire the slot without conflicts
+        result = await client.call_tool(
+            "acquire_build_slot",
+            arguments={
+                "project_key": "e2e-project",
+                "agent_name": "Agent2",
+                "slot": "backend-build",
+                "ttl_seconds": 3600,
+                "exclusive": True,
+            },
+        )
+        data = _tool_json(result)
+        assert data["granted"] is True
+        # No active conflicts from Agent1 (slot was released)
+        assert all("Agent1" not in str(c) for c in data.get("conflicts", []))
 
 
 @pytest.mark.asyncio
@@ -125,7 +144,7 @@ async def test_e2e_pre_push_guard_with_build_slots(isolated_env, tmp_path: Path)
     )
 
     # Render pre-push script
-    prepush_script = render_prepush_script(archive)
+    prepush_script = render_prepush_script(archive.root / "file_reservations")
     script_path = tmp_path / "prepush.py"
     script_path.write_text(prepush_script)
 
@@ -153,6 +172,9 @@ async def test_e2e_pre_push_guard_with_build_slots(isolated_env, tmp_path: Path)
     )
 
     # Should detect conflict
+    if proc.returncode != 1:
+        print(f"STDOUT: {proc.stdout}")
+        print(f"STDERR: {proc.stderr}")
     assert proc.returncode == 1
     assert "conflict" in proc.stderr.lower()
 
@@ -231,9 +253,9 @@ async def test_e2e_materialized_views_with_share_export(isolated_env, tmp_path: 
         conn.close()
 
     # Run full export finalization
-    finalize_snapshot_for_export(snapshot)
     build_materialized_views(snapshot)
     create_performance_indexes(snapshot)
+    finalize_snapshot_for_export(snapshot)
 
     # Verify all optimizations were applied
     conn = sqlite3.connect(str(snapshot))
@@ -262,6 +284,8 @@ async def test_e2e_materialized_views_with_share_export(isolated_env, tmp_path: 
 @pytest.mark.asyncio
 async def test_e2e_multi_agent_workflow(isolated_env, tmp_path: Path):
     """End-to-end test: Multiple agents coordinating with build slots and file reservations."""
+    from fastmcp import Client
+
     server = build_mcp_server()
     settings = get_settings()
     await ensure_archive(settings, "multi-agent-project")
@@ -272,95 +296,96 @@ async def test_e2e_multi_agent_workflow(isolated_env, tmp_path: Path):
 
     # Scenario: Frontend and Backend agents working in parallel
 
-    # Frontend agent claims frontend build slot
-    result = await server._mcp_server.call_tool(
-        "acquire_build_slot",
-        {
-            "project_key": "multi-agent-project",
-            "agent_name": "FrontendAgent",
-            "slot": "frontend-build",
-            "ttl_seconds": 3600,
-            "exclusive": True,
-        },
-    )
-    assert json.loads(result[0].text)["granted"] is True
+    async with Client(server) as client:
+        # Frontend agent claims frontend build slot
+        result = await client.call_tool(
+            "acquire_build_slot",
+            arguments={
+                "project_key": "multi-agent-project",
+                "agent_name": "FrontendAgent",
+                "slot": "frontend-build",
+                "ttl_seconds": 3600,
+                "exclusive": True,
+            },
+        )
+        assert _tool_json(result)["granted"] is True
 
-    # Backend agent claims backend build slot (different slot)
-    result = await server._mcp_server.call_tool(
-        "acquire_build_slot",
-        {
-            "project_key": "multi-agent-project",
-            "agent_name": "BackendAgent",
-            "slot": "backend-build",
-            "ttl_seconds": 3600,
-            "exclusive": True,
-        },
-    )
-    assert json.loads(result[0].text)["granted"] is True
+        # Backend agent claims backend build slot (different slot)
+        result = await client.call_tool(
+            "acquire_build_slot",
+            arguments={
+                "project_key": "multi-agent-project",
+                "agent_name": "BackendAgent",
+                "slot": "backend-build",
+                "ttl_seconds": 3600,
+                "exclusive": True,
+            },
+        )
+        assert _tool_json(result)["granted"] is True
 
-    # Frontend agent reserves frontend files
-    result = await server._mcp_server.call_tool(
-        "create_file_reservation",
-        {
-            "project_key": "multi-agent-project",
-            "agent_name": "FrontendAgent",
-            "path_pattern": "frontend/**/*.ts",
-            "exclusive": True,
-            "ttl_seconds": 3600,
-        },
-    )
-    assert result[0].text
+        # Frontend agent reserves frontend files
+        result = await client.call_tool(
+            "create_file_reservation",
+            arguments={
+                "project_key": "multi-agent-project",
+                "agent_name": "FrontendAgent",
+                "path_pattern": "frontend/**/*.ts",
+                "exclusive": True,
+                "ttl_seconds": 3600,
+            },
+        )
+        assert _tool_text(result)
 
-    # Backend agent reserves backend files
-    result = await server._mcp_server.call_tool(
-        "create_file_reservation",
-        {
-            "project_key": "multi-agent-project",
-            "agent_name": "BackendAgent",
-            "path_pattern": "backend/**/*.py",
-            "exclusive": True,
-            "ttl_seconds": 3600,
-        },
-    )
-    assert result[0].text
+        # Backend agent reserves backend files
+        result = await client.call_tool(
+            "create_file_reservation",
+            arguments={
+                "project_key": "multi-agent-project",
+                "agent_name": "BackendAgent",
+                "path_pattern": "backend/**/*.py",
+                "exclusive": True,
+                "ttl_seconds": 3600,
+            },
+        )
+        assert _tool_text(result)
 
-    # Both agents can work in parallel - different slots, different files
-    # Frontend agent renews slot
-    result = await server._mcp_server.call_tool(
-        "renew_build_slot",
-        {
-            "project_key": "multi-agent-project",
-            "agent_name": "FrontendAgent",
-            "slot": "frontend-build",
-            "extend_seconds": 1800,
-        },
-    )
-    assert json.loads(result[0].text)["renewed"] is True
+        # Both agents can work in parallel - different slots, different files
+        # Frontend agent renews slot
+        result = await client.call_tool(
+            "renew_build_slot",
+            arguments={
+                "project_key": "multi-agent-project",
+                "agent_name": "FrontendAgent",
+                "slot": "frontend-build",
+                "extend_seconds": 1800,
+            },
+        )
+        assert _tool_json(result)["renewed"] is True
 
-    # Backend agent renews slot
-    result = await server._mcp_server.call_tool(
-        "renew_build_slot",
-        {
-            "project_key": "multi-agent-project",
-            "agent_name": "BackendAgent",
-            "slot": "backend-build",
-            "extend_seconds": 1800,
-        },
-    )
-    assert json.loads(result[0].text)["renewed"] is True
+        # Backend agent renews slot
+        result = await client.call_tool(
+            "renew_build_slot",
+            arguments={
+                "project_key": "multi-agent-project",
+                "agent_name": "BackendAgent",
+                "slot": "backend-build",
+                "extend_seconds": 1800,
+            },
+        )
+        assert _tool_json(result)["renewed"] is True
 
-    # Both agents finish and release slots
-    result = await server._mcp_server.call_tool(
-        "release_build_slot",
-        {"project_key": "multi-agent-project", "agent_name": "FrontendAgent", "slot": "frontend-build"},
-    )
-    assert json.loads(result[0].text)["released"] is True
+        # Both agents finish and release slots
+        result = await client.call_tool(
+            "release_build_slot",
+            arguments={"project_key": "multi-agent-project", "agent_name": "FrontendAgent", "slot": "frontend-build"},
+        )
+        assert _tool_json(result)["released"] is True
 
-    result = await server._mcp_server.call_tool(
-        "release_build_slot",
-        {"project_key": "multi-agent-project", "agent_name": "BackendAgent", "slot": "backend-build"},
-    )
-    assert json.loads(result[0].text)["released"] is True
+        result = await client.call_tool(
+            "release_build_slot",
+            arguments={"project_key": "multi-agent-project", "agent_name": "BackendAgent", "slot": "backend-build"},
+        )
+        assert _tool_json(result)["released"] is True
 
 
 @pytest.mark.asyncio
@@ -414,6 +439,9 @@ async def test_e2e_guard_lifecycle(isolated_env, tmp_path: Path):
     proc = subprocess.run(["python", str(precommit_hook)], cwd=str(repo), env=env, capture_output=True, text=True)
 
     # Should block the commit
+    if proc.returncode != 1:
+        print(f"STDOUT: {proc.stdout}")
+        print(f"STDERR: {proc.stderr}")
     assert proc.returncode == 1
 
 
@@ -539,6 +567,8 @@ async def test_e2e_incremental_share_updates(isolated_env, tmp_path: Path):
         conn.close()
 
     # Export v1
+    build_materialized_views(snapshot_v1)
+    create_performance_indexes(snapshot_v1)
     finalize_snapshot_for_export(snapshot_v1)
 
     # Verify v1 has optimizations
@@ -567,6 +597,8 @@ async def test_e2e_incremental_share_updates(isolated_env, tmp_path: Path):
         conn.close()
 
     # Export v2 (incremental update)
+    build_materialized_views(snapshot_v2)
+    create_performance_indexes(snapshot_v2)
     finalize_snapshot_for_export(snapshot_v2)
 
     # Verify v2 has all messages in materialized view
