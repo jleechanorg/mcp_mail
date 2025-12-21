@@ -137,7 +137,6 @@ async def test_http_path_mount_trailing_and_no_slash(isolated_env):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             base = settings.http.path.rstrip("/")
-            print(f"DEBUG: base={base} settings.http.path={settings.http.path}")
             r1 = await client.post(base, json=_rpc("tools/call", {"name": "health_check", "arguments": {}}))
             assert r1.status_code in (200, 401, 403)
             r2 = await client.post(base + "/", json=_rpc("tools/call", {"name": "health_check", "arguments": {}}))

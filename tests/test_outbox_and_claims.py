@@ -33,7 +33,7 @@ async def test_outbox_resource_lists_sent_messages(isolated_env):
 
 
 @pytest.mark.asyncio
-async def test_renew_file_reservations_extends_expiry_and_updates_artifact(isolated_env):
+async def test_renew_file_reservations_extends_expiry(isolated_env):
     server = build_mcp_server()
     async with Client(server) as client:
         await client.call_tool("ensure_project", {"human_key": "/backend"})

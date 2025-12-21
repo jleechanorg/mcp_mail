@@ -1543,6 +1543,13 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
     # Add a direct route at the base path to handle POST /mcp without redirect (307)
     # and support streaming (by using ASGI app directly instead of buffering).
     class RootPathForceASGIApp:
+        """ASGI adapter that rewrites requests to the root path ("/").
+
+        Used to handle POST requests at the mount base path (e.g., /mcp) without
+        FastAPI's automatic redirect (307) to the trailing-slash variant. This
+        enables streaming responses at the exact base path by rewriting the
+        incoming scope path to "/".
+        """
         def __init__(self, app) -> None:
             self.app = app
 
