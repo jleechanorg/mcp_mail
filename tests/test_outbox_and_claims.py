@@ -72,22 +72,6 @@ async def test_renew_file_reservations_extends_expiry_and_updates_artifact(isola
         after = renewed.get("new_expires_ts")
         assert isinstance(after, str) and after > before
 
-        # Also confirm JSON artifact on disk reflects updated expires_ts
-        # The artifact is stored by sha1(path_pattern).json under file_reservations/
-        import hashlib
-        import json
-        from pathlib import Path
+        # Archive storage removed - artifact verification skipped
+        # (Previously verified JSON at storage/projects/backend/file_reservations/...)
 
-        settings = get_settings()
-        storage_root = Path(settings.storage.root).expanduser().resolve() / "projects" / "backend" / "file_reservations"
-        digest = hashlib.sha1("docs/*.md".encode("utf-8")).hexdigest()
-        artifact = storage_root / f"{digest}.json"
-        data = json.loads(artifact.read_text(encoding="utf-8"))
-        # Compare datetimes as strings
-        assert isinstance(data.get("expires_ts"), str)
-
-        # New expiry should be >= renewed["expires_ts"] parsed
-        def _parse(ts: str) -> datetime:
-            return datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(timezone.utc)
-
-        assert _parse(data["expires_ts"]) >= _parse(after)

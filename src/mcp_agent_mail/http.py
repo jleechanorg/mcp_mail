@@ -810,7 +810,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         for task in tasks:
             task.cancel()
         for task in tasks:
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(Exception, asyncio.CancelledError):
                 await task
 
     from contextlib import asynccontextmanager
@@ -1520,6 +1520,10 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             new_scope = dict(scope)
             new_scope["headers"] = headers
 
+            # Ensure path is not empty (fix for mount point root handling)
+            if not new_scope.get("path"):
+                new_scope["path"] = "/"
+
             await self._app(new_scope, receive, send)
 
     # Mount at both '/base' and '/base/' to tolerate either form from clients/tests
@@ -1537,46 +1541,18 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
     # Expose composed lifespan via router
     fastapi_app.router.lifespan_context = lifespan_context
 
-    # Add a direct route at the base path without redirect to tolerate clients omitting trailing slash
-    @fastapi_app.post(base_no_slash)
-    async def _base_passthrough(request: Request) -> JSONResponse:
-        # Re-dispatch to mounted stateless app by calling it directly
-        response_body = {}
-        status_code = 200
-        headers: dict[str, str] = {}
+    # Add a direct route at the base path to handle POST /mcp without redirect (307)
+    # and support streaming (by using ASGI app directly instead of buffering).
+    class RootPathForceASGIApp:
+        def __init__(self, app) -> None:
+            self.app = app
 
-        async def _send(message: Mapping[str, Any]) -> None:
-            nonlocal response_body, status_code, headers
-            if message.get("type") == "http.response.start":
-                status_code = int(message.get("status", 200))
-                hdrs = message.get("headers") or []
-                for k, v in hdrs:
-                    headers[k.decode("latin1")] = v.decode("latin1")
-            elif message.get("type") == "http.response.body":
-                body = message.get("body") or b""
-                try:
-                    response_body = json.loads(body.decode("utf-8")) if body else {}
-                except Exception:
-                    response_body = {}
+        async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+            new_scope = dict(scope)
+            new_scope["path"] = "/"
+            await self.app(new_scope, receive, send)
 
-        # If localhost and allow_localhost_unauthenticated, synthesize Authorization header automatically
-        scope = dict(request.scope)
-        try:
-            client_host = request.client.host if request.client else ""
-        except Exception:
-            client_host = ""
-        if settings.http.allow_localhost_unauthenticated and client_host in {"127.0.0.1", "::1", "localhost"}:
-            scope_headers = list(scope.get("headers") or [])
-            has_auth = any(k.lower() == b"authorization" for k, _ in scope_headers)
-            if not has_auth and settings.http.bearer_token:
-                scope_headers.append((b"authorization", f"Bearer {settings.http.bearer_token}".encode("latin1")))
-            scope["headers"] = scope_headers
-        await stateless_app(
-            {**scope, "path": base_with_slash},  # ensure mounted path
-            request.receive,
-            _send,
-        )
-        return JSONResponse(response_body, status_code=status_code, headers=headers)
+    fastapi_app.router.add_route(base_no_slash, RootPathForceASGIApp(stateless_app), methods=["POST"])
 
     # ----- Simple SSR Mail UI -----
     def _register_mail_ui() -> None:
