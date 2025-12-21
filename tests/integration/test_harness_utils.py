@@ -42,6 +42,8 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
 
+from decouple import Config as DecoupleConfig, RepositoryEnv
+
 # Orchestration framework (optional dependency for real CLI tests)
 # Install with: uv tool install jleechanorg-orchestration
 try:
@@ -76,6 +78,40 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 MCP_CONFIG_PATH = PROJECT_ROOT / ".mcp.json"
 MCP_AGENT_MAIL_SERVER = "mcp-agent-mail"
 MCP_EXPECTED_TOOLS = {"register_agent", "send_message", "fetch_inbox"}
+ENV_PATH = PROJECT_ROOT / ".env"
+
+
+def _load_env_value(key: str) -> Optional[str]:
+    """Load a value from the repo .env using python-decouple."""
+    if not ENV_PATH.exists():
+        return None
+    decouple_config = DecoupleConfig(RepositoryEnv(str(ENV_PATH)))
+    try:
+        value = decouple_config(key)
+    except Exception:  # pragma: no cover - best-effort for optional env values
+        return None
+    return value.strip() or None
+
+
+def _load_bearer_token() -> Optional[str]:
+    """Best-effort bearer token lookup for MCP HTTP auth."""
+    token = _load_env_value("HTTP_BEARER_TOKEN")
+    if token:
+        return token
+    try:
+        if MCP_CONFIG_PATH.exists():
+            config = json.loads(MCP_CONFIG_PATH.read_text())
+            headers = (
+                config.get("mcpServers", {})
+                .get(MCP_AGENT_MAIL_SERVER, {})
+                .get("headers", {})
+            )
+            auth_header = headers.get("Authorization", "")
+            if auth_header.lower().startswith("bearer "):
+                return auth_header.split(" ", 1)[1].strip()
+    except Exception:  # pragma: no cover - best-effort parsing
+        return None
+    return None
 
 
 @dataclass
@@ -167,27 +203,46 @@ class BaseCLITest:
         timeout: int = 90,
     ) -> tuple[bool, str, dict[str, Any]]:
         """Prompt the CLI to list available MCP Agent Mail tools."""
-        prompt = (
-            "Connect to the configured mcp-agent-mail MCP server and list the tool "
-            "names available to you. Respond exactly as 'TOOLS: <comma-separated tool names>'. "
-            f"The server URL should be {server_url}."
-        )
+        prompts = [
+            (
+                "Connect to the configured mcp-agent-mail MCP server and list the tool "
+                "names available to you. Respond exactly as 'TOOLS: <comma-separated tool names>'. "
+                f"The server URL should be {server_url}.",
+                timeout,
+            ),
+            (
+                "Important: respond with exactly one line in this format and nothing else:\n"
+                "TOOLS: <comma-separated tool names>\n"
+                f"Use the MCP server at {server_url} and do not explain your answer.",
+                max(timeout, 180),
+            ),
+        ]
 
-        success, output = self.run_cli(prompt, timeout=timeout)
-        if not success:
-            return False, f"MCP tool prompt failed: {output[:200]}", {"output": output[:500]}
+        last_details: dict[str, Any] = {}
+        for attempt, (prompt, attempt_timeout) in enumerate(prompts, start=1):
+            success, output = self.run_cli(prompt, timeout=attempt_timeout)
+            if not success:
+                last_details = {"output": output[:500], "attempt": attempt}
+                message = f"MCP tool prompt failed: {output[:200]}"
+                if attempt < len(prompts):
+                    print(f"  WARN: {message} (attempt {attempt}); retrying...")
+                    continue
+                return False, message, last_details
 
-        tool_names = self._parse_tool_names_from_output(output)
-        missing_tools = expected_tools - tool_names
+            tool_names = self._parse_tool_names_from_output(output)
+            missing_tools = expected_tools - tool_names
+            last_details = {"tools": sorted(tool_names), "attempt": attempt, "output": output[:500]}
 
-        if missing_tools:
-            return (
-                False,
-                f"Missing expected tools: {', '.join(sorted(missing_tools))}",
-                {"tools": sorted(tool_names)},
-            )
+            if not missing_tools:
+                return True, "MCP Agent Mail tools available", last_details
 
-        return True, "MCP Agent Mail tools available", {"tools": sorted(tool_names)}
+            message = f"Missing expected tools: {', '.join(sorted(missing_tools))}"
+            if attempt < len(prompts):
+                print(f"  WARN: {message} (attempt {attempt}); retrying...")
+                continue
+            return False, message, last_details
+
+        return False, "Unable to validate MCP Agent Mail tools", last_details
 
     def validate_mcp_mail_access(self, timeout: int = 90) -> bool:
         """Validate MCP Agent Mail configuration and tool availability via CLI."""
@@ -358,6 +413,12 @@ class BaseCLITest:
                     stdin_path = Path(stdin_template.format(prompt_file=str(prompt_file)))
                     stdin_file = stack.enter_context(stdin_path.open())
 
+                env = {**os.environ, "NO_COLOR": "1"}
+                if self.CLI_NAME == "codex":
+                    bearer_token = _load_bearer_token()
+                    if bearer_token:
+                        env["HTTP_BEARER_TOKEN"] = bearer_token
+
                 result = subprocess.run(
                     cli_command,
                     shell=False,  # Security: avoid shell injection
@@ -365,7 +426,7 @@ class BaseCLITest:
                     text=True,
                     timeout=timeout,
                     stdin=stdin_file,
-                    env={**os.environ, "NO_COLOR": "1"},
+                    env=env,
                 )
 
             return result.returncode == 0, result.stdout + result.stderr
