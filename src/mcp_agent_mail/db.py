@@ -504,8 +504,11 @@ def _recreate_agents_table_nullable_project_id(connection) -> None:
         raise RuntimeError("Failed to migrate data from agents to agents_new") from exc
 
     # Drop old table and rename new one
+    # Disable FK enforcement temporarily to allow DROP (other tables reference agents)
+    connection.exec_driver_sql("PRAGMA foreign_keys = OFF")
     connection.exec_driver_sql("DROP TABLE agents")
     connection.exec_driver_sql("ALTER TABLE agents_new RENAME TO agents")
+    connection.exec_driver_sql("PRAGMA foreign_keys = ON")
 
     # Recreate indexes
     connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_agents_project_id ON agents(project_id)")
@@ -609,8 +612,11 @@ def _recreate_messages_table_nullable_project_id(connection) -> None:
         raise RuntimeError("Failed to migrate data from messages to messages_new") from exc
 
     # Drop old table and rename new one
+    # Disable FK enforcement temporarily to allow DROP (message_recipients references messages)
+    connection.exec_driver_sql("PRAGMA foreign_keys = OFF")
     connection.exec_driver_sql("DROP TABLE messages")
     connection.exec_driver_sql("ALTER TABLE messages_new RENAME TO messages")
+    connection.exec_driver_sql("PRAGMA foreign_keys = ON")
 
     # Recreate indexes
     connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_messages_project_id ON messages(project_id)")
