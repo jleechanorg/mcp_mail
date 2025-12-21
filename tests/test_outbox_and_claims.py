@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 
 import pytest
 from fastmcp import Client
 
 from mcp_agent_mail.app import build_mcp_server
-from mcp_agent_mail.config import get_settings
 
 
 @pytest.mark.asyncio

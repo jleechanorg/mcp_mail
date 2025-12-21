@@ -12,7 +12,6 @@ import json
 import logging
 import re
 from collections import deque
-from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
