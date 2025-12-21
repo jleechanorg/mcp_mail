@@ -1550,6 +1550,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         enables streaming responses at the exact base path by rewriting the
         incoming scope path to "/".
         """
+
         def __init__(self, app) -> None:
             self.app = app
 
