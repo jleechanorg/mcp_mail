@@ -42,7 +42,12 @@ async def test_http_ack_ttl_worker_log_mode(isolated_env, monkeypatch):
                     "tools/call",
                     {
                         "name": "register_agent",
-                        "arguments": {"project_key": "Backend", "program": "codex", "model": "gpt-5", "name": "BlueLake"},
+                        "arguments": {
+                            "project_key": "Backend",
+                            "program": "codex",
+                            "model": "gpt-5",
+                            "name": "BlueLake",
+                        },
                     },
                 ),
             )
@@ -67,7 +72,9 @@ async def test_http_ack_ttl_worker_log_mode(isolated_env, monkeypatch):
             # Allow at least one scan tick
             await asyncio.sleep(1.2)
             # Health call to keep app active; nothing to assert other than no crash
-            r = await client.post(settings.http.path, json=_rpc("tools/call", {"name": "health_check", "arguments": {}}))
+            r = await client.post(
+                settings.http.path, json=_rpc("tools/call", {"name": "health_check", "arguments": {}})
+            )
             assert r.status_code in (200, 401, 403)
 
 
@@ -99,7 +106,12 @@ async def test_http_ack_ttl_worker_file_reservation_escalation(isolated_env, mon
                     "tools/call",
                     {
                         "name": "register_agent",
-                        "arguments": {"project_key": "Backend", "program": "codex", "model": "gpt-5", "name": "BlueLake"},
+                        "arguments": {
+                            "project_key": "Backend",
+                            "program": "codex",
+                            "model": "gpt-5",
+                            "name": "BlueLake",
+                        },
                     },
                 ),
             )
@@ -148,5 +160,7 @@ async def test_http_request_logging_and_cors_headers(isolated_env, monkeypatch):
                 settings.http.path, headers={"Origin": "http://example.com", "Access-Control-Request-Method": "POST"}
             )
             assert r0.status_code in (200, 204)
-            r = await client.post(settings.http.path, json=_rpc("tools/call", {"name": "health_check", "arguments": {}}))
+            r = await client.post(
+                settings.http.path, json=_rpc("tools/call", {"name": "health_check", "arguments": {}})
+            )
             assert r.status_code in (200, 401, 403)

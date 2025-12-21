@@ -72,4 +72,3 @@ async def test_renew_file_reservations_extends_expiry_and_updates_artifact(isola
 
         # Archive storage removed - artifact verification skipped
         # (Previously verified JSON at storage/projects/backend/file_reservations/...)
-

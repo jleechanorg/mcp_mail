@@ -101,11 +101,7 @@ def _load_bearer_token() -> Optional[str]:
     try:
         if MCP_CONFIG_PATH.exists():
             config = json.loads(MCP_CONFIG_PATH.read_text())
-            headers = (
-                config.get("mcpServers", {})
-                .get(MCP_AGENT_MAIL_SERVER, {})
-                .get("headers", {})
-            )
+            headers = config.get("mcpServers", {}).get(MCP_AGENT_MAIL_SERVER, {}).get("headers", {})
             auth_header = headers.get("Authorization", "")
             if auth_header.lower().startswith("bearer "):
                 return auth_header.split(" ", 1)[1].strip()

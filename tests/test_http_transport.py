@@ -46,7 +46,9 @@ async def test_http_bearer_and_cors_preflight(isolated_env, monkeypatch):
             )
             assert r0.status_code in (200, 204)
             # No bearer -> 401
-            r1 = await client.post(settings.http.path, json=_rpc("tools/call", {"name": "health_check", "arguments": {}}))
+            r1 = await client.post(
+                settings.http.path, json=_rpc("tools/call", {"name": "health_check", "arguments": {}})
+            )
             assert r1.status_code == 401
             # With bearer
             r2 = await client.post(
@@ -140,6 +142,7 @@ async def test_http_path_mount_trailing_and_no_slash(isolated_env):
             assert r1.status_code in (200, 401, 403)
             r2 = await client.post(base + "/", json=_rpc("tools/call", {"name": "health_check", "arguments": {}}))
             assert r2.status_code in (200, 401, 403)
+
 
 @pytest.mark.asyncio
 async def test_http_readiness_endpoint(isolated_env):

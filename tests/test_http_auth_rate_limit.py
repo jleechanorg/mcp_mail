@@ -35,7 +35,9 @@ async def test_http_jwt_rbac_and_rate_limit(monkeypatch):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             # Without auth => 401
-            r = await client.post(settings.http.path, json=_rpc("tools/call", {"name": "health_check", "arguments": {}}))
+            r = await client.post(
+                settings.http.path, json=_rpc("tools/call", {"name": "health_check", "arguments": {}})
+            )
             assert r.status_code == 401
 
             headers = {"Authorization": "Bearer token123"}
