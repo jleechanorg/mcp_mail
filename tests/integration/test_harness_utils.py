@@ -467,8 +467,6 @@ class BaseCLITest:
         Returns:
             Path to saved results file
         """
-        import json
-
         output_dir = output_dir or RESULTS_DIR
         output_dir.mkdir(parents=True, exist_ok=True)
 
