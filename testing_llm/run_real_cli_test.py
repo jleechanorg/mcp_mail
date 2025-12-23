@@ -35,6 +35,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from rich.console import Console
+
 # Orchestration framework for CLI profiles
 try:
     orchestration_module = importlib.import_module("orchestration.task_dispatcher")
@@ -46,6 +48,8 @@ except ImportError:
 
 
 # CLI configuration mapping (extends orchestration profiles with MCP-specific settings)
+# NOTE: These extra_args bypass safety prompts for automated testing only.
+# Do not use these flags in production or user-facing scripts.
 MCP_CLI_CONFIG = {
     "claude": {
         "mcp_config_env": "MCP_CONFIG",
@@ -64,6 +68,8 @@ MCP_CLI_CONFIG = {
     },
 }
 
+console = Console()
+
 
 def get_timestamp() -> str:
     """Get timestamp for unique identifiers."""
@@ -78,7 +84,7 @@ def setup_test_directory() -> Path:
     for subdir in ["prompts", "outputs", "evidence"]:
         (test_dir / subdir).mkdir(parents=True, exist_ok=True)
 
-    print(f"Test directory: {test_dir}")
+    console.print(f"[blue]Test directory:[/blue] {test_dir}")
     return test_dir
 
 
@@ -211,8 +217,8 @@ def run_cli_agent(
         env[config_env] = config_file
     env["NO_COLOR"] = "1"  # Disable color output for cleaner logs
 
-    print(f"  Command: {' '.join(command)}")
-    print(f"  Output: {output_file}")
+    console.print(f"[blue]Command:[/blue] {' '.join(command)}")
+    console.print(f"[blue]Output:[/blue] {output_file}")
 
     if dry_run:
         return True, "Dry run - command not executed", None, None
@@ -344,10 +350,10 @@ def run_multi_agent_test(
     Returns:
         Test results dictionary
     """
-    print("=" * 70)
-    print("Real CLI Multi-Agent Coordination Test")
-    print(f"CLI: {cli_name}")
-    print("=" * 70)
+    console.print("=" * 70)
+    console.print("[bold]Real CLI Multi-Agent Coordination Test[/bold]")
+    console.print(f"[bold]CLI:[/bold] {cli_name}")
+    console.print("=" * 70)
 
     agents: list[dict[str, Any]] = []
     results: dict[str, Any] = {
@@ -358,23 +364,23 @@ def run_multi_agent_test(
     }
 
     # Check prerequisites
-    print("\n[CHECK] Prerequisites...")
+    console.print("\n[bold][CHECK][/bold] Prerequisites...")
 
     if not ORCHESTRATION_AVAILABLE:
-        print("  FAIL: Orchestration framework not installed")
-        print("  Run: uv tool install jleechanorg-orchestration")
+        console.print("[red]FAIL:[/red] Orchestration framework not installed")
+        console.print("[dim]Run:[/dim] uv tool install jleechanorg-orchestration")
         results["status"] = "failed"
         results["error"] = "Orchestration framework not installed"
         return results
-    print("  PASS: Orchestration framework available")
+    console.print("[green]PASS:[/green] Orchestration framework available")
 
     available, msg = check_cli_available(cli_name)
     if not available:
-        print(f"  FAIL: {msg}")
+        console.print(f"[red]FAIL:[/red] {msg}")
         results["status"] = "failed"
         results["error"] = msg
         return results
-    print(f"  PASS: {cli_name} CLI available at {msg}")
+    console.print(f"[green]PASS:[/green] {cli_name} CLI available at {msg}")
 
     # Setup test directory
     test_dir = setup_test_directory()
@@ -391,16 +397,16 @@ def run_multi_agent_test(
     prompts = create_agent_prompts(run_id, project_key)
 
     # Start agents
-    print("\n[RUN] Starting agents...")
+    console.print("\n[bold][RUN][/bold] Starting agents...")
     processes: list[tuple[dict[str, Any], subprocess.Popen[str], Optional[contextlib.ExitStack]]] = []
 
     for i, (agent_name, prompt) in enumerate(prompts.items()):
-        print(f"\n  Starting {agent_name}...")
+        console.print(f"\n[bold]Starting {agent_name}...[/bold]")
 
         # Stagger agent starts
         if i > 0:
             delay = 2 * i
-            print(f"  Waiting {delay}s before starting...")
+            console.print(f"[dim]Waiting {delay}s before starting...[/dim]")
             if not dry_run:
                 time.sleep(delay)
 
@@ -430,13 +436,13 @@ def run_multi_agent_test(
             output_stack.close()
 
         if success:
-            print(f"  PASS: {msg}")
+            console.print(f"[green]PASS:[/green] {msg}")
         else:
-            print(f"  FAIL: {msg}")
+            console.print(f"[red]FAIL:[/red] {msg}")
 
     # Wait for completion
     if not dry_run and processes:
-        print("\n[WAIT] Waiting for agents to complete...")
+        console.print("\n[bold][WAIT][/bold] Waiting for agents to complete...")
         for agent_record, process, output_stack in processes:
             try:
                 process.wait(timeout=timeout)
@@ -445,23 +451,31 @@ def run_multi_agent_test(
                 status_label = "DONE" if process.returncode == 0 else "FAIL"
                 if process.returncode != 0:
                     agent_record["message"] = f"Exited with code {process.returncode}"
-                print(f"  {status_label}: {agent_record['name']} (exit code: {process.returncode})")
+                color = "green" if process.returncode == 0 else "red"
+                console.print(
+                    f"  [{color}]{status_label}[/{color}]: {agent_record['name']} "
+                    f"(exit code: {process.returncode})"
+                )
             except subprocess.TimeoutExpired:
                 agent_record["timed_out"] = True
                 agent_record["message"] = f"Timed out after {timeout}s"
-                print(f"  TIMEOUT: {agent_record['name']} - killing process")
+                console.print(f"[yellow]TIMEOUT:[/yellow] {agent_record['name']} - killing process")
                 process.kill()
                 try:
-                    process.wait(timeout=5)
+                    process.wait(timeout=10)
+                    agent_record["exit_code"] = process.returncode
                 except subprocess.TimeoutExpired:
-                    process.wait()
-                agent_record["exit_code"] = process.returncode
+                    agent_record["exit_code"] = process.poll()
+                    console.print(
+                        "[yellow]WARN:[/yellow] Process did not terminate after SIGKILL; "
+                        "continuing without blocking."
+                    )
             finally:
                 if output_stack:
                     output_stack.close()
 
     # Collect evidence
-    print("\n[EVIDENCE] Collecting results...")
+    console.print("\n[bold][EVIDENCE][/bold] Collecting results...")
 
     # Save test summary
     summary_file = test_dir / "TEST_SUMMARY.txt"
@@ -499,7 +513,7 @@ Evidence Files:
 """
 
     summary_file.write_text(summary_text)
-    print(f"  Summary: {summary_file}")
+    console.print(f"[blue]Summary:[/blue] {summary_file}")
 
     # Determine overall status
     all_started = all(a["started"] for a in agents)
@@ -509,10 +523,12 @@ Evidence Files:
     all_success = all_started and no_timeouts and exit_codes_ok
     results["status"] = "success" if all_success else "failed"
 
-    print("\n" + "=" * 70)
-    print(f"Test {'PASSED' if results['status'] == 'success' else 'FAILED'}")
-    print(f"Evidence: {test_dir}")
-    print("=" * 70)
+    console.print("\n" + "=" * 70)
+    status_label = "PASSED" if results["status"] == "success" else "FAILED"
+    status_color = "green" if results["status"] == "success" else "red"
+    console.print(f"Test [{status_color}]{status_label}[/{status_color}]")
+    console.print(f"[bold]Evidence:[/bold] {test_dir}")
+    console.print("=" * 70)
 
     return results
 

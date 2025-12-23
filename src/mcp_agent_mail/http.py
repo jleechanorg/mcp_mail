@@ -498,8 +498,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
     # Build MCP HTTP sub-app with stateless mode for ASGI test transports
     mcp_http_app = server.http_app(path="/", stateless_http=True, json_response=True)
 
-    # Normalize Accept/Content-Type headers on inbound MCP HTTP calls.
-
     # Background workers lifecycle
     async def _startup() -> None:  # pragma: no cover - service lifecycle
         if not (
@@ -1495,13 +1493,14 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
     # A minimal stateless ASGI adapter that does not rely on ASGI lifespan management
     # and runs a fresh StreamableHTTP transport per request.
     class MCPHeaderNormalizeASGIApp:
+        """Normalize Accept/Content-Type headers on inbound MCP HTTP calls."""
+
         def __init__(self, app) -> None:
             self._app = app
 
         async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
             if scope.get("type") != "http":
-                res = JSONResponse({"detail": "Not Found"}, status_code=404)
-                await res(scope, receive, send)
+                await self._app(scope, receive, send)
                 return
 
             # Ensure Accept and Content-Type headers are present per StreamableHTTP expectations

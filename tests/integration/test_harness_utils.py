@@ -34,6 +34,7 @@ import re
 import shlex
 import shutil
 import socket
+import subprocess
 import tempfile
 import uuid
 from dataclasses import dataclass, field
@@ -43,6 +44,7 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 
 from decouple import Config as DecoupleConfig, RepositoryEnv
+from rich.console import Console
 
 # Orchestration framework (optional dependency for real CLI tests)
 # Install with: uv tool install jleechanorg-orchestration
@@ -58,8 +60,6 @@ except ImportError:
 def _get_branch_name() -> str:
     """Get current git branch name for results directory."""
     try:
-        import subprocess
-
         result = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             capture_output=True,
@@ -69,7 +69,7 @@ def _get_branch_name() -> str:
         if result.returncode == 0:
             return result.stdout.strip().replace("/", "-")
     except Exception as exc:  # pragma: no cover - best-effort branch detection
-        print(f"  WARN: Failed to read git branch name: {exc}")
+        console.print(f"[yellow]WARN:[/yellow] Failed to read git branch name: {exc}")
     return "unknown-branch"
 
 
@@ -79,6 +79,7 @@ MCP_CONFIG_PATH = PROJECT_ROOT / ".mcp.json"
 MCP_AGENT_MAIL_SERVER = "mcp-agent-mail"
 MCP_EXPECTED_TOOLS = {"register_agent", "send_message", "fetch_inbox"}
 ENV_PATH = PROJECT_ROOT / ".env"
+console = Console()
 
 
 def _load_env_value(key: str) -> Optional[str]:
@@ -193,8 +194,11 @@ class BaseCLITest:
 
     def _parse_tool_names_from_output(self, output: str) -> set[str]:
         """Parse tool names from CLI output."""
-        tokens = set(re.findall(r"[A-Za-z_]+", output.lower()))
-        return tokens
+        match = re.search(r"^\\s*TOOLS:\\s*(?P<tools>.+)$", output, re.IGNORECASE | re.MULTILINE)
+        if match:
+            tools = match.group("tools")
+            return {tool.strip().lower() for tool in tools.split(",") if tool.strip()}
+        return set(re.findall(r"\\b[a-z][a-z0-9_-]*[a-z0-9]\\b", output.lower()))
 
     def _exercise_mcp_mail_tools(
         self,
@@ -225,7 +229,7 @@ class BaseCLITest:
                 last_details = {"output": output[:500], "attempt": attempt}
                 message = f"MCP tool prompt failed: {output[:200]}"
                 if attempt < len(prompts):
-                    print(f"  WARN: {message} (attempt {attempt}); retrying...")
+                    console.print(f"[yellow]WARN:[/yellow] {message} (attempt {attempt}); retrying...")
                     continue
                 return False, message, last_details
 
@@ -238,7 +242,7 @@ class BaseCLITest:
 
             message = f"Missing expected tools: {', '.join(sorted(missing_tools))}"
             if attempt < len(prompts):
-                print(f"  WARN: {message} (attempt {attempt}); retrying...")
+                console.print(f"[yellow]WARN:[/yellow] {message} (attempt {attempt}); retrying...")
                 continue
             return False, message, last_details
 
@@ -302,11 +306,11 @@ class BaseCLITest:
         self.results.append(result)
 
         if skip:
-            print(f"  SKIP {name}: {message}")
+            console.print(f"[cyan]SKIP[/cyan] {name}: {message}")
         elif passed:
-            print(f"  PASS {name}: {message}")
+            console.print(f"[green]PASS[/green] {name}: {message}")
         else:
-            print(f"  FAIL {name}: {message}")
+            console.print(f"[red]FAIL[/red] {name}: {message}")
 
     def check_cli_available(self) -> bool:
         """Check if CLI is available using orchestration CLI_PROFILES.
@@ -329,8 +333,6 @@ class BaseCLITest:
             return False
 
         try:
-            import subprocess
-
             result = subprocess.run(
                 [cli_path, "--version"],
                 capture_output=True,
@@ -339,10 +341,10 @@ class BaseCLITest:
             )
             if result.returncode == 0:
                 display_name = self.cli_profile.get("display_name", cli_binary)
-                print(f"  {display_name} version: {result.stdout.strip()}")
+                console.print(f"[green]{display_name} version:[/green] {result.stdout.strip()}")
                 return True
         except Exception as exc:  # pragma: no cover - CLI availability best-effort
-            print(f"  WARN: Failed to check CLI availability: {exc}")
+            console.print(f"[yellow]WARN:[/yellow] Failed to check CLI availability: {exc}")
         return False
 
     def run_cli(
@@ -364,9 +366,6 @@ class BaseCLITest:
         Returns:
             Tuple of (success: bool, output: str)
         """
-        import subprocess
-        from contextlib import suppress
-
         if not self.cli_profile:
             raise ValueError(f"CLI_NAME '{self.CLI_NAME}' not found in CLI_PROFILES")
 
@@ -402,7 +401,7 @@ class BaseCLITest:
             if extra_args:
                 cli_command.extend(extra_args)
 
-            print(f"  Command: {' '.join(cli_command)}")
+            console.print(f"[blue]Command:[/blue] {' '.join(cli_command)}")
 
             # Handle stdin redirection from profile
             stdin_template = self.cli_profile.get("stdin_template", "/dev/null")
@@ -439,7 +438,7 @@ class BaseCLITest:
             return False, str(e)
         finally:
             # Clean up temp file
-            with suppress(OSError):
+            with contextlib.suppress(OSError):
                 if prompt_file:
                     prompt_file.unlink()
 
@@ -449,18 +448,18 @@ class BaseCLITest:
         failed = sum(1 for r in self.results if not r.passed and not r.skipped)
         skipped = sum(1 for r in self.results if r.skipped)
 
-        print("\n" + "=" * 70)
-        print("RESULTS SUMMARY")
-        print("=" * 70)
-        print(f"  Passed:  {passed}")
-        print(f"  Failed:  {failed}")
-        print(f"  Skipped: {skipped}")
+        console.print("\n" + "=" * 70)
+        console.print("[bold]RESULTS SUMMARY[/bold]")
+        console.print("=" * 70)
+        console.print(f"[green]Passed:[/green]  {passed}")
+        console.print(f"[red]Failed:[/red]  {failed}")
+        console.print(f"[cyan]Skipped:[/cyan] {skipped}")
 
         if failed > 0:
-            print("\nFailed tests:")
+            console.print("\n[red]Failed tests:[/red]")
             for r in self.results:
                 if not r.passed and not r.skipped:
-                    print(f"  - {r.name}: {r.message}")
+                    console.print(f"  - {r.name}: {r.message}")
 
     def save_results(self, output_dir: Optional[Path] = None) -> Path:
         """Save test results to JSON file.
@@ -471,8 +470,6 @@ class BaseCLITest:
         Returns:
             Path to saved results file
         """
-        import json
-
         output_dir = output_dir or RESULTS_DIR
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -502,7 +499,7 @@ class BaseCLITest:
         }
 
         output_path.write_text(json.dumps(data, indent=2))
-        print(f"\nResults saved to: {output_path}")
+        console.print(f"\n[green]Results saved to:[/green] {output_path}")
         return output_path
 
     def run_all_tests(self) -> int:
@@ -514,13 +511,13 @@ class BaseCLITest:
             Exit code (0 = success, 1 = failure)
         """
         display_name = self.cli_profile.get("display_name", self.CLI_NAME) if self.cli_profile else "Unknown"
-        print("=" * 70)
-        print(f"{display_name} - MCP Mail Integration Tests (REAL CLI)")
-        print("=" * 70)
-        print(f"Started: {datetime.now(timezone.utc).isoformat()}\n")
+        console.print("=" * 70)
+        console.print(f"[bold]{display_name}[/bold] - MCP Mail Integration Tests (REAL CLI)")
+        console.print("=" * 70)
+        console.print(f"[dim]Started:[/dim] {datetime.now(timezone.utc).isoformat()}\n")
 
         # Check prerequisites
-        print("[TEST] CLI availability...")
+        console.print("[bold][TEST][/bold] CLI availability...")
         if not ORCHESTRATION_AVAILABLE:
             self.record(
                 "orchestration",
@@ -543,8 +540,10 @@ class BaseCLITest:
             return self._finish()
 
         # Run CLI test
-        print(f"\n[TEST] CLI invocation (real {display_name})...")
-        success, output = self.run_cli(f"echo 'test marker: {self.test_marker}'")
+        console.print(f"\n[bold][TEST][/bold] CLI invocation (real {display_name})...")
+        success, output = self.run_cli(
+            f"Respond with exactly: 'CLI test marker {self.test_marker} received'"
+        )
         if not success:
             self.record("invocation", False, f"CLI failed: {output[:200]}")
         else:

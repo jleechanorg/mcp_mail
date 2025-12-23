@@ -12,7 +12,7 @@ Usage:
     python -m pytest tests/integration/test_real_cli_integration.py -v
 
     # Run as standalone script
-    python tests/integration/test_real_cli_integration.py
+    python -m tests.integration.test_real_cli_integration
 
 Requirements:
     - uv tool install jleechanorg-orchestration
@@ -26,16 +26,13 @@ Note:
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
 import pytest
+from rich.console import Console
 
-# Add project root to path for imports
-project_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(project_root))
-
-from tests.integration.test_harness_utils import (  # noqa: E402
+from tests.integration.test_harness_utils import (
     ORCHESTRATION_AVAILABLE,
+    BaseCLITest,
     ClaudeCLITest,
     CodexCLITest,
     CursorCLITest,
@@ -43,11 +40,60 @@ from tests.integration.test_harness_utils import (  # noqa: E402
     is_cli_available,
 )
 
+console = Console()
+
 # Skip all tests if orchestration framework is not installed
 pytestmark = pytest.mark.skipif(
     not ORCHESTRATION_AVAILABLE,
     reason="jleechanorg-orchestration not installed - run: uv tool install jleechanorg-orchestration",
 )
+
+
+def _run_cli_suite(
+    test: BaseCLITest,
+    display_name: str,
+    cli_missing: str,
+    prompt: str,
+    require_orchestration: bool = False,
+) -> int:
+    """Run the common CLI integration flow with consistent logging."""
+    console.print("=" * 70)
+    console.print(f"[bold]{display_name}[/bold] - MCP Agent Mail Integration Tests")
+    console.print("=" * 70)
+    console.print(f"[dim]Started:[/dim] {test.start_time.isoformat()}\n")
+
+    if require_orchestration:
+        console.print("[bold][TEST][/bold] Orchestration framework...")
+        if not ORCHESTRATION_AVAILABLE:
+            test.record(
+                "orchestration",
+                False,
+                "Not installed - run: uv tool install jleechanorg-orchestration",
+                skip=True,
+            )
+            return test._finish()
+        test.record("orchestration", True, "Available")
+
+    console.print(f"\n[bold][TEST][/bold] {display_name} CLI availability...")
+    if not test.check_cli_available():
+        test.record("cli", False, cli_missing, skip=True)
+        return test._finish()
+    test.record("cli", True, "Installed and responding")
+
+    console.print("\n[bold][TEST][/bold] MCP Agent Mail tools via CLI...")
+    if not test.validate_mcp_mail_access(timeout=120):
+        return test._finish()
+
+    console.print("\n[bold][TEST][/bold] Basic CLI invocation...")
+    success, output = test.run_cli(prompt)
+    if success and "successful" in output.lower():
+        test.record("basic_invocation", True, "CLI responded correctly")
+    elif success:
+        test.record("basic_invocation", True, f"CLI responded: {output[:100]}...")
+    else:
+        test.record("basic_invocation", False, f"CLI failed: {output[:200]}")
+
+    return test._finish()
 
 
 class MCPMailClaudeCLITest(ClaudeCLITest):
@@ -59,49 +105,13 @@ class MCPMailClaudeCLITest(ClaudeCLITest):
 
     def run_all_tests(self) -> int:
         """Run Claude-specific MCP Mail integration tests."""
-        print("=" * 70)
-        print("Claude Code - MCP Agent Mail Integration Tests")
-        print("=" * 70)
-        print(f"Started: {self.start_time.isoformat()}\n")
-
-        # Check prerequisites
-        print("[TEST] Orchestration framework...")
-        if not ORCHESTRATION_AVAILABLE:
-            self.record(
-                "orchestration",
-                False,
-                "Not installed - run: uv tool install jleechanorg-orchestration",
-                skip=True,
-            )
-            return self._finish()
-        self.record("orchestration", True, "Available")
-
-        print("\n[TEST] Claude CLI availability...")
-        if not self.check_cli_available():
-            self.record(
-                "cli",
-                False,
-                "Claude not installed - run: npm install -g @anthropic/claude-code",
-                skip=True,
-            )
-            return self._finish()
-        self.record("cli", True, "Installed and responding")
-
-        print("\n[TEST] MCP Agent Mail tools via CLI...")
-        if not self.validate_mcp_mail_access(timeout=120):
-            return self._finish()
-
-        # Basic CLI invocation test
-        print("\n[TEST] Basic CLI invocation...")
-        success, output = self.run_cli("Respond with exactly: 'MCP Mail integration test successful'")
-        if success and "successful" in output.lower():
-            self.record("basic_invocation", True, "CLI responded correctly")
-        elif success:
-            self.record("basic_invocation", True, f"CLI responded: {output[:100]}...")
-        else:
-            self.record("basic_invocation", False, f"CLI failed: {output[:200]}")
-
-        return self._finish()
+        return _run_cli_suite(
+            test=self,
+            display_name="Claude Code",
+            cli_missing="Claude not installed - run: npm install -g @anthropic/claude-code",
+            prompt="Respond with exactly: 'MCP Mail integration test successful'",
+            require_orchestration=True,
+        )
 
 
 class MCPMailCursorCLITest(CursorCLITest):
@@ -113,35 +123,12 @@ class MCPMailCursorCLITest(CursorCLITest):
 
     def run_all_tests(self) -> int:
         """Run Cursor-specific MCP Mail integration tests."""
-        print("=" * 70)
-        print("Cursor Agent - MCP Agent Mail Integration Tests")
-        print("=" * 70)
-        print(f"Started: {self.start_time.isoformat()}\n")
-
-        print("[TEST] Cursor CLI availability...")
-        if not self.check_cli_available():
-            self.record(
-                "cli",
-                False,
-                "cursor-agent not installed",
-                skip=True,
-            )
-            return self._finish()
-        self.record("cli", True, "Installed and responding")
-
-        print("\n[TEST] MCP Agent Mail tools via CLI...")
-        if not self.validate_mcp_mail_access(timeout=120):
-            return self._finish()
-
-        # Basic CLI invocation test
-        print("\n[TEST] Basic CLI invocation...")
-        success, output = self.run_cli("echo 'Cursor MCP Mail test'")
-        if success:
-            self.record("basic_invocation", True, "CLI responded")
-        else:
-            self.record("basic_invocation", False, f"CLI failed: {output[:200]}")
-
-        return self._finish()
+        return _run_cli_suite(
+            test=self,
+            display_name="Cursor Agent",
+            cli_missing="cursor-agent not installed",
+            prompt="Respond with exactly: 'Cursor MCP Mail test successful'",
+        )
 
 
 class MCPMailCodexCLITest(CodexCLITest):
@@ -149,35 +136,12 @@ class MCPMailCodexCLITest(CodexCLITest):
 
     def run_all_tests(self) -> int:
         """Run Codex-specific MCP Mail integration tests."""
-        print("=" * 70)
-        print("Codex CLI - MCP Agent Mail Integration Tests")
-        print("=" * 70)
-        print(f"Started: {self.start_time.isoformat()}\n")
-
-        print("[TEST] Codex CLI availability...")
-        if not self.check_cli_available():
-            self.record(
-                "cli",
-                False,
-                "codex not installed",
-                skip=True,
-            )
-            return self._finish()
-        self.record("cli", True, "Installed and responding")
-
-        print("\n[TEST] MCP Agent Mail tools via CLI...")
-        if not self.validate_mcp_mail_access(timeout=120):
-            return self._finish()
-
-        # Basic CLI invocation test
-        print("\n[TEST] Basic CLI invocation...")
-        success, output = self.run_cli("echo 'Codex MCP Mail test'")
-        if success:
-            self.record("basic_invocation", True, "CLI responded")
-        else:
-            self.record("basic_invocation", False, f"CLI failed: {output[:200]}")
-
-        return self._finish()
+        return _run_cli_suite(
+            test=self,
+            display_name="Codex CLI",
+            cli_missing="codex not installed",
+            prompt="Respond with exactly: 'Codex MCP Mail test successful'",
+        )
 
 
 class MCPMailGeminiCLITest(GeminiCLITest):
@@ -185,35 +149,12 @@ class MCPMailGeminiCLITest(GeminiCLITest):
 
     def run_all_tests(self) -> int:
         """Run Gemini-specific MCP Mail integration tests."""
-        print("=" * 70)
-        print("Gemini CLI - MCP Agent Mail Integration Tests")
-        print("=" * 70)
-        print(f"Started: {self.start_time.isoformat()}\n")
-
-        print("[TEST] Gemini CLI availability...")
-        if not self.check_cli_available():
-            self.record(
-                "cli",
-                False,
-                "gemini not installed",
-                skip=True,
-            )
-            return self._finish()
-        self.record("cli", True, "Installed and responding")
-
-        print("\n[TEST] MCP Agent Mail tools via CLI...")
-        if not self.validate_mcp_mail_access(timeout=120):
-            return self._finish()
-
-        # Basic CLI invocation test
-        print("\n[TEST] Basic CLI invocation...")
-        success, output = self.run_cli("echo 'Gemini MCP Mail test'")
-        if success:
-            self.record("basic_invocation", True, "CLI responded")
-        else:
-            self.record("basic_invocation", False, f"CLI failed: {output[:200]}")
-
-        return self._finish()
+        return _run_cli_suite(
+            test=self,
+            display_name="Gemini CLI",
+            cli_missing="gemini not installed",
+            prompt="Respond with exactly: 'Gemini MCP Mail test successful'",
+        )
 
 
 # Pytest test functions that wrap the harness classes
@@ -276,25 +217,26 @@ if __name__ == "__main__":
         results = []
         for name, cls in test_classes.items():
             if is_cli_available(name):
-                print(f"\n{'=' * 70}")
-                print(f"Running {name.upper()} tests...")
-                print(f"{'=' * 70}\n")
+                console.print(f"\n{'=' * 70}")
+                console.print(f"[bold]Running {name.upper()} tests...[/bold]")
+                console.print(f"{'=' * 70}\n")
                 test = cls()
                 results.append((name, test.run_all_tests()))
             else:
-                print(f"\nSkipping {name} (not installed)")
+                console.print(f"\n[cyan]Skipping {name} (not installed)[/cyan]")
 
-        print("\n" + "=" * 70)
-        print("OVERALL RESULTS")
-        print("=" * 70)
+        console.print("\n" + "=" * 70)
+        console.print("[bold]OVERALL RESULTS[/bold]")
+        console.print("=" * 70)
         for name, code in results:
             status = "PASS" if code == 0 else "FAIL"
-            print(f"  {name}: {status}")
+            color = "green" if code == 0 else "red"
+            console.print(f"  {name}: [{color}]{status}[/{color}]")
 
         sys.exit(1 if any(code != 0 for _, code in results) else 0)
     else:
         if not is_cli_available(args.cli):
-            print(f"Error: {args.cli} CLI not installed")
+            console.print(f"[red]Error:[/red] {args.cli} CLI not installed")
             sys.exit(1)
 
         test = test_classes[args.cli]()
