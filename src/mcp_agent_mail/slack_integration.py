@@ -530,7 +530,7 @@ async def notify_slack_message(
         )
 
         # If this is a new thread or mapping was missing, create mapping
-        if thread_key and not thread_mapping:
+        if thread_key and thread_mapping is None:
             mapped_ts = slack_thread_ts or response.get("ts")
             channel_id = response.get("channel") or channel
             if mapped_ts and channel_id:
