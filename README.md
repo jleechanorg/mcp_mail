@@ -265,7 +265,7 @@ When an agent sends a message via `send_message`, here's what happens:
 - **Blameable**: `git blame` traces who sent what and when
 - **Reversible**: `git revert` to undo problematic messages
 - **Portable**: Clone the repo to backup or share message history
-  
+
 **Configuration:**
 - Storage location: `STORAGE_ROOT` env var (default: `.mcp_mail`)
   - **Project-local**: set `STORAGE_LOCAL_ARCHIVE_ENABLED=true` to store in `.mcp_mail` - messages stored in project directory and committed to Git

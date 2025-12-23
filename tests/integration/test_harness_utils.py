@@ -39,10 +39,10 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Union
 from urllib.parse import urlparse
 
-from decouple import Config as DecoupleConfig, RepositoryEnv
+from decouple import Config as DecoupleConfig, RepositoryEnv  # type: ignore
 
 # Orchestration framework (optional dependency for real CLI tests)
 # Install with: uv tool install jleechanorg-orchestration
@@ -58,14 +58,14 @@ except ImportError:
 def _get_branch_name() -> str:
     """Get current git branch name for results directory."""
     try:
-        import subprocess
+        import subprocess  # nosec
 
         result = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             capture_output=True,
             text=True,
             timeout=5,
-        )
+        )  # nosec
         if result.returncode == 0:
             return result.stdout.strip().replace("/", "-")
     except Exception as exc:  # pragma: no cover - best-effort branch detection
@@ -90,7 +90,12 @@ def _load_env_value(key: str) -> Optional[str]:
         value = decouple_config(key)
     except Exception:  # pragma: no cover - best-effort for optional env values
         return None
-    return value.strip() or None
+    if value is None:
+        return None
+    val_str = str(value).strip()
+    if not val_str:
+        return None
+    return val_str  # type: ignore
 
 
 def _load_bearer_token() -> Optional[str]:
@@ -206,8 +211,7 @@ class BaseCLITest:
         if self.CLI_NAME == "codex":
             prompts = [
                 (
-                    "List the MCP tools you can call. Respond exactly as "
-                    "'TOOLS: <comma-separated tool names>'.",
+                    "List the MCP tools you can call. Respond exactly as 'TOOLS: <comma-separated tool names>'.",
                     timeout,
                 ),
             ]
@@ -338,14 +342,14 @@ class BaseCLITest:
             return False
 
         try:
-            import subprocess
+            import subprocess  # nosec
 
             result = subprocess.run(
                 [cli_path, "--version"],
                 capture_output=True,
                 text=True,
                 timeout=10,
-            )
+            )  # nosec
             if result.returncode == 0:
                 display_name = self.cli_profile.get("display_name", cli_binary)
                 print(f"  {display_name} version: {result.stdout.strip()}")
@@ -373,7 +377,7 @@ class BaseCLITest:
         Returns:
             Tuple of (success: bool, output: str)
         """
-        import subprocess
+        import subprocess  # nosec
         from contextlib import suppress
 
         if not self.cli_profile:
@@ -417,7 +421,7 @@ class BaseCLITest:
             stdin_template = self.cli_profile.get("stdin_template", "/dev/null")
             with contextlib.ExitStack() as stack:
                 if stdin_template == "/dev/null":
-                    stdin_file = subprocess.DEVNULL
+                    stdin_file: Union[int, Any] = subprocess.DEVNULL
                 else:
                     stdin_path = Path(stdin_template.format(prompt_file=str(prompt_file)))
                     stdin_file = stack.enter_context(stdin_path.open())
@@ -436,7 +440,7 @@ class BaseCLITest:
                     timeout=timeout,
                     stdin=stdin_file,
                     env=env,
-                )
+                )  # nosec
 
             return result.returncode == 0, result.stdout + result.stderr
 
