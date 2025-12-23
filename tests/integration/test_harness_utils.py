@@ -190,7 +190,11 @@ class BaseCLITest:
     def _parse_tool_names_from_output(self, output: str) -> set[str]:
         """Parse tool names from CLI output."""
         tokens = set(re.findall(r"[A-Za-z_]+", output.lower()))
-        return tokens
+        derived: set[str] = set()
+        for token in tokens:
+            if "mcp_agent_mail__" in token:
+                derived.add(token.split("mcp_agent_mail__", 1)[1])
+        return tokens | derived
 
     def _exercise_mcp_mail_tools(
         self,
@@ -199,20 +203,29 @@ class BaseCLITest:
         timeout: int = 90,
     ) -> tuple[bool, str, dict[str, Any]]:
         """Prompt the CLI to list available MCP Agent Mail tools."""
-        prompts = [
-            (
-                "Connect to the configured mcp-agent-mail MCP server and list the tool "
-                "names available to you. Respond exactly as 'TOOLS: <comma-separated tool names>'. "
-                f"The server URL should be {server_url}.",
-                timeout,
-            ),
-            (
-                "Important: respond with exactly one line in this format and nothing else:\n"
-                "TOOLS: <comma-separated tool names>\n"
-                f"Use the MCP server at {server_url} and do not explain your answer.",
-                max(timeout, 180),
-            ),
-        ]
+        if self.CLI_NAME == "codex":
+            prompts = [
+                (
+                    "List the MCP tools you can call. Respond exactly as "
+                    "'TOOLS: <comma-separated tool names>'.",
+                    timeout,
+                ),
+            ]
+        else:
+            prompts = [
+                (
+                    "Connect to the configured mcp-agent-mail MCP server and list the tool "
+                    "names available to you. Respond exactly as 'TOOLS: <comma-separated tool names>'. "
+                    f"The server URL should be {server_url}.",
+                    timeout,
+                ),
+                (
+                    "Important: respond with exactly one line in this format and nothing else:\n"
+                    "TOOLS: <comma-separated tool names>\n"
+                    f"Use the MCP server at {server_url} and do not explain your answer.",
+                    max(timeout, 180),
+                ),
+            ]
 
         last_details: dict[str, Any] = {}
         for attempt, (prompt, attempt_timeout) in enumerate(prompts, start=1):
