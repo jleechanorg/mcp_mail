@@ -1557,9 +1557,9 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             fastapi_app.mount("/", stateless_app)
     else:
         with contextlib.suppress(Exception):
-            fastapi_app.mount(base_with_slash, stateless_app)
+            fastapi_app.add_route(base_no_slash, RootPathForceASGIApp(stateless_app))
         with contextlib.suppress(Exception):
-            fastapi_app.mount(base_no_slash, RootPathForceASGIApp(stateless_app))
+            fastapi_app.mount(base_with_slash, stateless_app)
 
     # Expose composed lifespan via router
     fastapi_app.router.lifespan_context = lifespan_context
