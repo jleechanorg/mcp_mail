@@ -267,37 +267,28 @@ When an agent sends a message via `send_message`, here's what happens:
 - **Portable**: Clone the repo to backup or share message history
 
 **Configuration:**
-- Storage location: `STORAGE_ROOT` env var (default: `.mcp_mail`)
-  - **Project-local**: set `STORAGE_LOCAL_ARCHIVE_ENABLED=true` to store in `.mcp_mail` - messages stored in project directory and committed to Git
-  - **Project-key anchored**: set `STORAGE_PROJECT_KEY_ENABLED=true` to store under `<project_key>/.mcp_mail` (project_key must be the git repo root)
-  - **Default behavior**: Both storage modes disabled by default; must explicitly enable one to use MCP Agent Mail
-  - **Global alternative**: `~/.mcp_agent_mail_git_mailbox_repo` - messages stored in user home directory
+- Storage location: `STORAGE_ROOT` env var (default: `.mcp_mail`) for the SQLite DB and local artifacts
+- Archive storage has been removed; messages are no longer written to per-project Git archives
 - Git author: `GIT_AUTHOR_NAME` and `GIT_AUTHOR_EMAIL` env vars
 
-**Messages are automatically committed to Git:**
+**Messages are stored in SQLite by default:**
 ```bash
-# Just run the server - messages go to .mcp_mail/ by default
+# Just run the server - messages go to SQLite under STORAGE_ROOT by default
 uv run python -m mcp_agent_mail.http
-
-# Messages stored in ./mcp_mail/projects/<slug>/messages/
-# Commit to share: git add .mcp_mail && git commit -m "Add agent coordination messages"
 
 # Ensure git hooks are installed (enforces Ruff/ty/Bandit on commit)
 ./scripts/ensure_git_hooks.sh
 ```
 
-**🔒 Want private messages?** Use global storage instead:
+**🔒 Want private messages?** Use a global storage root instead:
 ```bash
-# Set STORAGE_ROOT to use global directory (not committed to Git)
+# Set STORAGE_ROOT to use a global directory outside the repo
 STORAGE_ROOT=~/.mcp_agent_mail_git_mailbox_repo uv run python -m mcp_agent_mail.http
-
-# Use project-key anchored storage (project_key must be repo root)
-STORAGE_PROJECT_KEY_ENABLED=true uv run python -m mcp_agent_mail.http
 ```
 
 ---
 
-**Summary**: This fork removes coordination barriers by making everything **global by default** - agents, messages, and projects all work across boundaries. Combined with advanced search with BM25 relevance ranking, auto-fetch inbox on registration, automatic @mention scanning, and project-local storage (`.mcp_mail/` directory), it creates a **frictionless multi-agent collaboration platform** while maintaining full Git auditability for all communications.
+**Summary**: This fork removes coordination barriers by making everything **global by default** - agents, messages, and projects all work across boundaries. Combined with advanced search with BM25 relevance ranking, auto-fetch inbox on registration, and automatic @mention scanning, it creates a **frictionless multi-agent collaboration platform** with SQLite-backed storage.
 
 ---
 
@@ -1987,9 +1978,7 @@ result = await client.call_tool("list_extended_tools", {})
 
 | Name | Default | Description |
 | :-- | :-- | :-- |
-| `STORAGE_ROOT` | `.mcp_mail` | Root for per-project repos and SQLite DB (project-local by default) |
-| `STORAGE_PROJECT_KEY_ENABLED` | `false` | When true, use `<project_key>/.mcp_mail` as archive root (project_key must be git repo root) |
-| `STORAGE_LOCAL_ARCHIVE_ENABLED` | `false` | When true, enable `.mcp_mail` archive; when false, requires project-key storage |
+| `STORAGE_ROOT` | `.mcp_mail` | Root for the SQLite DB and local artifacts (project-local by default) |
 | `HTTP_HOST` | `127.0.0.1` | Bind host for HTTP transport |
 | `HTTP_PORT` | `8765` | Bind port for HTTP transport |
 | `HTTP_PATH` | `/mcp/` | HTTP path where MCP endpoint is mounted |

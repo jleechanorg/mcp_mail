@@ -454,8 +454,10 @@ def run_multi_agent_test(
                 try:
                     process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    process.wait()
-                agent_record["exit_code"] = process.returncode
+                    agent_record["message"] = f"Timed out after {timeout}s (kill did not terminate in 5s)"
+                    agent_record["exit_code"] = process.poll()
+                else:
+                    agent_record["exit_code"] = process.returncode
             finally:
                 if output_stack:
                     output_stack.close()

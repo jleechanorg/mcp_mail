@@ -135,7 +135,7 @@ class MCPMailCursorCLITest(CursorCLITest):
 
         # Basic CLI invocation test
         print("\n[TEST] Basic CLI invocation...")
-        success, output = self.run_cli("echo 'Cursor MCP Mail test'")
+        success, output = self.run_cli("Respond with exactly: 'MCP Mail integration test successful'")
         if success:
             self.record("basic_invocation", True, "CLI responded")
         else:
@@ -171,7 +171,7 @@ class MCPMailCodexCLITest(CodexCLITest):
 
         # Basic CLI invocation test
         print("\n[TEST] Basic CLI invocation...")
-        success, output = self.run_cli("echo 'Codex MCP Mail test'")
+        success, output = self.run_cli("Respond with exactly: 'MCP Mail integration test successful'")
         if success:
             self.record("basic_invocation", True, "CLI responded")
         else:
@@ -207,7 +207,7 @@ class MCPMailGeminiCLITest(GeminiCLITest):
 
         # Basic CLI invocation test
         print("\n[TEST] Basic CLI invocation...")
-        success, output = self.run_cli("echo 'Gemini MCP Mail test'")
+        success, output = self.run_cli("Respond with exactly: 'MCP Mail integration test successful'")
         if success:
             self.record("basic_invocation", True, "CLI responded")
         else:

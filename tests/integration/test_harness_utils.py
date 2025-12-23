@@ -194,11 +194,26 @@ class BaseCLITest:
 
     def _parse_tool_names_from_output(self, output: str) -> set[str]:
         """Parse tool names from CLI output."""
-        tokens = set(re.findall(r"[A-Za-z_]+", output.lower()))
-        derived: set[str] = set()
-        for token in tokens:
-            if "mcp_agent_mail__" in token:
-                derived.add(token.split("mcp_agent_mail__", 1)[1])
+        tool_line = None
+        for line in output.splitlines():
+            if "tools:" in line.lower():
+                tool_line = line
+                break
+
+        tokens: set[str] = set()
+        if tool_line:
+            _, _, after = tool_line.partition(":")
+            for raw_token in re.split(r"[,\s]+", after.strip()):
+                cleaned = re.sub(r"[^A-Za-z0-9_]", "", raw_token)
+                if cleaned:
+                    tokens.add(cleaned.lower())
+
+        derived = set(
+            re.findall(
+                r"mcp__mcp(?:_)?agent(?:_)?mail__([a-zA-Z_][a-zA-Z0-9_]*)",
+                output.lower(),
+            )
+        )
         return tokens | derived
 
     def _exercise_mcp_mail_tools(
@@ -484,8 +499,6 @@ class BaseCLITest:
         Returns:
             Path to saved results file
         """
-        import json
-
         output_dir = output_dir or RESULTS_DIR
         output_dir.mkdir(parents=True, exist_ok=True)
 

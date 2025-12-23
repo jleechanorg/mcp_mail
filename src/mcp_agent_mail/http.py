@@ -1532,13 +1532,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
     base_no_slash = mount_base.rstrip("/") or "/"
     base_with_slash = base_no_slash if base_no_slash == "/" else base_no_slash + "/"
     stateless_app = MCPHeaderNormalizeASGIApp(mcp_http_app)
-    with contextlib.suppress(Exception):
-        fastapi_app.mount(base_no_slash, stateless_app)
-    with contextlib.suppress(Exception):
-        fastapi_app.mount(base_with_slash, stateless_app)
-
-    # Expose composed lifespan via router
-    fastapi_app.router.lifespan_context = lifespan_context
 
     # Add a direct route at the base path to handle POST /mcp without redirect (307)
     # and support streaming (by using ASGI app directly instead of buffering).
@@ -1559,7 +1552,17 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             new_scope["path"] = "/"
             await self.app(new_scope, receive, send)
 
-    fastapi_app.router.add_route(base_no_slash, RootPathForceASGIApp(stateless_app), methods=["POST"])
+    if base_no_slash == "/":
+        with contextlib.suppress(Exception):
+            fastapi_app.mount("/", stateless_app)
+    else:
+        with contextlib.suppress(Exception):
+            fastapi_app.mount(base_with_slash, stateless_app)
+        with contextlib.suppress(Exception):
+            fastapi_app.mount(base_no_slash, RootPathForceASGIApp(stateless_app))
+
+    # Expose composed lifespan via router
+    fastapi_app.router.lifespan_context = lifespan_context
 
     # ----- Simple SSR Mail UI -----
     def _register_mail_ui() -> None:

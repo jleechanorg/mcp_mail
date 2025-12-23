@@ -31,7 +31,7 @@ class GitRunner:
         check: bool = True,
         capture_output: bool = True,
         timeout: int = 30,
-    ) -> subprocess.CompletedProcess:
+    ) -> subprocess.CompletedProcess[str]:
         """Run a git command safely.
 
         Args:
@@ -48,33 +48,34 @@ class GitRunner:
             cwd=str(self.cwd),
             check=check,
             capture_output=capture_output,
+            shell=False,
             text=True,
             timeout=timeout,
         )
 
-    def init(self) -> subprocess.CompletedProcess:
+    def init(self) -> subprocess.CompletedProcess[str]:
         """Initialize a git repository."""
         return self.run("init")
 
-    def config(self, key: str, value: str) -> subprocess.CompletedProcess:
+    def config(self, key: str, value: str) -> subprocess.CompletedProcess[str]:
         """Set git config value."""
         return self.run("config", key, value)
 
-    def add(self, *paths: str) -> subprocess.CompletedProcess:
+    def add(self, *paths: str) -> subprocess.CompletedProcess[str]:
         """Stage files."""
         return self.run("add", *paths)
 
-    def commit(self, message: str) -> subprocess.CompletedProcess:
+    def commit(self, message: str) -> subprocess.CompletedProcess[str]:
         """Create a commit."""
         return self.run("commit", "-m", message)
 
-    def checkout(self, ref: str, create: bool = False) -> subprocess.CompletedProcess:
+    def checkout(self, ref: str, create: bool = False) -> subprocess.CompletedProcess[str]:
         """Checkout a branch or commit."""
         if create:
             return self.run("checkout", "-b", ref)
         return self.run("checkout", ref)
 
-    def log(self, *args: str) -> subprocess.CompletedProcess:
+    def log(self, *args: str) -> subprocess.CompletedProcess[str]:
         """Run git log."""
         return self.run("log", *args)
 
