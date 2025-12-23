@@ -1420,6 +1420,15 @@ wheels = [
 ]
 
 [[package]]
+name = "jleechanorg-orchestration"
+version = "0.1.18"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/73/5e/6a01a660878d9ead3852340ce3523a21a4d19a5eba086dd642833c42594d/jleechanorg_orchestration-0.1.18.tar.gz", hash = "sha256:b7252dc1f2988ffa70276d396d6c75a887ba037991a702e6bc7a808c8ab3c1e8", size = 158763, upload-time = "2025-12-18T08:41:42.452Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c4/2b/29aca3c7a98e2575e4e9f8d8d60b33176d702f7b5ecad820c60b6c687a7e/jleechanorg_orchestration-0.1.18-py3-none-any.whl", hash = "sha256:295eb84f3641b2d0d4fc4e36de4be156aeaebdccd6297c69bcc62c33ba191798", size = 243358, upload-time = "2025-12-18T08:41:40.951Z" },
+]
+
+[[package]]
 name = "joblib"
 version = "1.5.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1723,6 +1732,7 @@ dev = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "jleechanorg-orchestration" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "pytest-timeout" },
@@ -1775,6 +1785,7 @@ provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "jleechanorg-orchestration", specifier = ">=0.1.18" },
     { name = "pytest-asyncio", specifier = ">=1.2.0" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "pytest-timeout", specifier = ">=2.4.0" },
