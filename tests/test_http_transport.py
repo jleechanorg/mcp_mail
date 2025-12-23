@@ -35,7 +35,7 @@ async def test_http_bearer_and_cors_preflight(isolated_env, monkeypatch):
 
     async with app.router.lifespan_context(app):
         transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
+        async with AsyncClient(transport=transport, base_url="http://test", follow_redirects=True) as client:
             # Preflight OPTIONS
             r0 = await client.options(
                 settings.http.path,
@@ -110,7 +110,7 @@ async def test_http_jwks_validation_and_resource_rate_limit(isolated_env, monkey
 
     async with app.router.lifespan_context(app):
         transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
+        async with AsyncClient(transport=transport, base_url="http://test", follow_redirects=True) as client:
             headers = {"Authorization": f"Bearer {token}"}
             # Reader can call read-only tool
             r = await client.post(
@@ -135,7 +135,8 @@ async def test_http_path_mount_trailing_and_no_slash(isolated_env):
     app = build_http_app(settings, server)
     async with app.router.lifespan_context(app):
         transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
+        async with AsyncClient(transport=transport, base_url="http://test", follow_redirects=True) as client:
+            # Request without trailing slash may redirect (307) to path with trailing slash
             base = settings.http.path.rstrip("/")
             r1 = await client.post(base, json=_rpc("tools/call", {"name": "health_check", "arguments": {}}))
             assert r1.status_code in (200, 401, 403)
@@ -150,7 +151,7 @@ async def test_http_readiness_endpoint(isolated_env):
     app = build_http_app(settings, server)
     async with app.router.lifespan_context(app):
         transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
+        async with AsyncClient(transport=transport, base_url="http://test", follow_redirects=True) as client:
             r = await client.get("/health/readiness")
             assert r.status_code in (200, 503)
 
@@ -169,7 +170,10 @@ async def test_http_lock_status_endpoint(isolated_env):
     metadata_path.write_text(json.dumps({"pid": 999_999, "created_ts": time.time() - 400}), encoding="utf-8")
 
     transport = ASGITransport(app=app)
-    async with app.router.lifespan_context(app), AsyncClient(transport=transport, base_url="http://test") as client:
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(transport=transport, base_url="http://test", follow_redirects=True) as client,
+    ):
         resp = await client.get("/mail/api/locks")
         assert resp.status_code == 200
         payload = resp.json()
