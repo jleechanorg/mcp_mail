@@ -112,13 +112,17 @@ async def _get_agent_record(project: Project, agent_name: str) -> Agent:
         return agent
 
 
-async def _get_agent_global(agent_name: str) -> tuple[Agent, Project]:
-    """Look up an agent globally by name (agents are globally unique)."""
+async def _get_agent_global(agent_name: str) -> tuple[Agent, Optional[Project]]:
+    """Look up an agent globally by name (agents are globally unique).
+
+    Returns the agent and its associated project. Project may be None if the agent
+    has no project_id (as of v0.2.0, project_id is nullable).
+    """
     await ensure_schema()
     async with get_session() as session:
         result = await session.execute(
             select(Agent, Project)
-            .join(Project, Agent.project_id == Project.id)
+            .outerjoin(Project, Agent.project_id == Project.id)  # LEFT OUTER JOIN
             .where(func.lower(Agent.name) == agent_name.lower(), Agent.is_active.is_(True))
         )
         row = result.first()
@@ -2586,8 +2590,10 @@ def acks_pending(
     async def _run() -> tuple[Project, Agent, list[tuple[Message, Any, Any, str]]]:
         # Global agent lookup (agents are globally unique)
         agent_record, project_record = await _get_agent_global(agent)
-        if project_record.id is None or agent_record.id is None:
-            raise ValueError("Project and agent must have IDs")
+        if agent_record.id is None:
+            raise ValueError("Agent must have an ID")
+        if project_record is not None and project_record.id is None:
+            raise ValueError("Project must have an ID if it exists")
         await ensure_schema()
         async with get_session() as session:
             stmt = (
@@ -2656,8 +2662,10 @@ def acks_remind(
     async def _run() -> tuple[Project, Agent, list[tuple[Message, Any, Any, str]]]:
         # Global agent lookup (agents are globally unique)
         agent_record, project_record = await _get_agent_global(agent)
-        if project_record.id is None or agent_record.id is None:
-            raise ValueError("Project and agent must have IDs")
+        if agent_record.id is None:
+            raise ValueError("Agent must have an ID")
+        if project_record is not None and project_record.id is None:
+            raise ValueError("Project must have an ID if it exists")
         await ensure_schema()
         async with get_session() as session:
             stmt = (
@@ -2731,8 +2739,10 @@ def acks_overdue(
     async def _run() -> tuple[Project, Agent, list[tuple[Message, str]]]:
         # Global agent lookup (agents are globally unique)
         agent_record, project_record = await _get_agent_global(agent)
-        if project_record.id is None or agent_record.id is None:
-            raise ValueError("Project and agent must have IDs")
+        if agent_record.id is None:
+            raise ValueError("Agent must have an ID")
+        if project_record is not None and project_record.id is None:
+            raise ValueError("Project must have an ID if it exists")
         await ensure_schema()
         async with get_session() as session:
             cutoff = datetime.now(timezone.utc) - timedelta(minutes=ttl_minutes)
@@ -2814,7 +2824,7 @@ def list_acks(
                 .order_by(desc(Message.created_ts))
                 .limit(limit)
             )
-            return rows.all(), project.human_key
+            return rows.all(), project.human_key if project else "(no project)"
 
     console.rule("[bold blue]Ack-required Messages")
     try:

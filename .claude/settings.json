@@ -12,33 +12,40 @@
     }
   },
   "hooks": {
-    "SessionStart": [
+    "_comment": "Example hooks are commented out - customize with your actual project/agent names",
+    "SessionStart": [],
+    "PreToolUse": [],
+    "PostToolUse": []
+  },
+  "_exampleHooks": {
+    "_instructions": "Uncomment and customize these hooks after registering your project and agent",
+    "SessionStart_example": [
       {
         "hooks": [
-          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli file_reservations active mcp_mail" },
-          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli acks pending m --limit 20" }
+          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli file_reservations active YOUR_PROJECT_NAME" },
+          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli acks pending YOUR_AGENT_NAME --limit 20" }
         ]
       }
     ],
-    "PreToolUse": [
+    "PreToolUse_example": [
       {
         "matcher": "Edit",
         "hooks": [
-          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli file_reservations soon mcp_mail --minutes 10" }
+          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli file_reservations soon YOUR_PROJECT_NAME --minutes 10" }
         ]
       }
     ],
-    "PostToolUse": [
+    "PostToolUse_example": [
       {
         "matcher": "mcp__mcp-agent-mail__send_message",
         "hooks": [
-          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli list-acks --agent m --limit 10" }
+          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli list-acks --agent YOUR_AGENT_NAME --limit 10" }
         ]
       },
       {
         "matcher": "mcp__mcp-agent-mail__call_extended_tool",
         "hooks": [
-          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli file_reservations list mcp_mail" }
+          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli file_reservations list YOUR_PROJECT_NAME" }
         ]
       }
     ]
