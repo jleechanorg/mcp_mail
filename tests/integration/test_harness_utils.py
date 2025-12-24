@@ -442,10 +442,10 @@ class BaseCLITest:
                     stdin_file = stack.enter_context(stdin_path.open())
 
                 env = {**os.environ, "NO_COLOR": "1"}
-                if self.CLI_NAME == "codex":
-                    bearer_token = _load_bearer_token()
-                    if bearer_token:
-                        env["HTTP_BEARER_TOKEN"] = bearer_token
+                # Set bearer token for all CLIs that need HTTP MCP auth
+                bearer_token = _load_bearer_token()
+                if bearer_token:
+                    env["HTTP_BEARER_TOKEN"] = bearer_token
 
                 result = subprocess.run(
                     cli_command,
@@ -455,6 +455,7 @@ class BaseCLITest:
                     timeout=timeout,
                     stdin=stdin_file,
                     env=env,
+                    cwd=str(PROJECT_ROOT),  # Run from project root to pick up .claude/settings.json
                 )  # nosec
 
             return result.returncode == 0, result.stdout + result.stderr
