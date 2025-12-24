@@ -1553,13 +1553,21 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             await self.app(new_scope, receive, send)
 
     if base_no_slash == "/":
+        # CRITICAL: Do not mount at "/" as it shadows all other routes (e.g., /mail UI)
+        # Instead, only mount at "/" with trailing slash if that's the configured path
+        structlog.get_logger(__name__).warning(
+            "HTTP_PATH='/' is not recommended as it shadows other routes. "
+            "Consider using HTTP_PATH='/mcp' instead."
+        )
         with contextlib.suppress(Exception):
             fastapi_app.mount("/", stateless_app)
     else:
+        # Fix ASGI handler signature mismatch: Use mount() instead of add_route()
+        # for the no-slash path to properly handle ASGI app signature
         with contextlib.suppress(Exception):
-            fastapi_app.add_route(base_no_slash, RootPathForceASGIApp(stateless_app))
+            fastapi_app.mount(base_no_slash, RootPathForceASGIApp(stateless_app), name="mcp_no_slash")
         with contextlib.suppress(Exception):
-            fastapi_app.mount(base_with_slash, stateless_app)
+            fastapi_app.mount(base_with_slash, stateless_app, name="mcp_with_slash")
 
     # Expose composed lifespan via router
     fastapi_app.router.lifespan_context = lifespan_context
