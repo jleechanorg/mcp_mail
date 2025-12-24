@@ -1,4 +1,5 @@
 """Regression test for HTTP path handling (no slash vs trailing slash)."""
+
 import pytest
 from httpx import AsyncClient
 
@@ -19,7 +20,7 @@ async def test_mcp_path_no_slash_works():
         response = await client.post(
             "/mcp",
             json={"jsonrpc": "2.0", "id": "test", "method": "initialize", "params": {"capabilities": {}}},
-            headers={"Content-Type": "application/json"}
+            headers={"Content-Type": "application/json"},
         )
 
         # Should not get TypeError from signature mismatch
@@ -29,7 +30,7 @@ async def test_mcp_path_no_slash_works():
         response = await client.post(
             "/mcp/",
             json={"jsonrpc": "2.0", "id": "test", "method": "initialize", "params": {"capabilities": {}}},
-            headers={"Content-Type": "application/json"}
+            headers={"Content-Type": "application/json"},
         )
 
         assert response.status_code in [200, 400, 401]

@@ -1556,8 +1556,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         # CRITICAL: Do not mount at "/" as it shadows all other routes (e.g., /mail UI)
         # Instead, only mount at "/" with trailing slash if that's the configured path
         structlog.get_logger(__name__).warning(
-            "HTTP_PATH='/' is not recommended as it shadows other routes. "
-            "Consider using HTTP_PATH='/mcp' instead."
+            "HTTP_PATH='/' is not recommended as it shadows other routes. Consider using HTTP_PATH='/mcp' instead."
         )
         with contextlib.suppress(Exception):
             fastapi_app.mount("/", stateless_app)
