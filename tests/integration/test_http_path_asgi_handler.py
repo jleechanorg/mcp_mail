@@ -5,6 +5,7 @@ This test suite verifies that:
 2. POST /mcp/ (with trailing slash) works
 3. HTTP_PATH="/" doesn't shadow other routes like /mail
 """
+
 import os
 from unittest.mock import patch
 
@@ -39,9 +40,9 @@ async def test_post_mcp_no_trailing_slash_does_not_crash():
                     "jsonrpc": "2.0",
                     "id": "test-1",
                     "method": "initialize",
-                    "params": {"capabilities": {}, "protocolVersion": "2024-11-05"}
+                    "params": {"capabilities": {}, "protocolVersion": "2024-11-05"},
                 },
-                headers={"Content-Type": "application/json"}
+                headers={"Content-Type": "application/json"},
             )
 
             # Should NOT get 500 Internal Server Error from TypeError
@@ -52,9 +53,7 @@ async def test_post_mcp_no_trailing_slash_does_not_crash():
 
             # Should get either 200 (success), 401 (auth), or 400 (bad request)
             # but NOT 500 (server error from signature mismatch)
-            assert response.status_code in [200, 400, 401, 403], (
-                f"Unexpected status code: {response.status_code}"
-            )
+            assert response.status_code in [200, 400, 401, 403], f"Unexpected status code: {response.status_code}"
 
 
 @pytest.mark.asyncio
@@ -73,9 +72,9 @@ async def test_post_mcp_with_trailing_slash_works():
                     "jsonrpc": "2.0",
                     "id": "test-2",
                     "method": "initialize",
-                    "params": {"capabilities": {}, "protocolVersion": "2024-11-05"}
+                    "params": {"capabilities": {}, "protocolVersion": "2024-11-05"},
                 },
-                headers={"Content-Type": "application/json"}
+                headers={"Content-Type": "application/json"},
             )
 
             # Should work without errors
@@ -105,8 +104,7 @@ async def test_http_path_root_does_not_shadow_mail_ui():
 
                 # Should get 200 or redirect, NOT 404 (which would mean it's shadowed)
                 assert response.status_code != 404, (
-                    f"HTTP_PATH='/' is shadowing /mail route. "
-                    f"Got status: {response.status_code}"
+                    f"HTTP_PATH='/' is shadowing /mail route. Got status: {response.status_code}"
                 )
 
                 # Should get some valid response (200, redirect, or auth required)
@@ -139,9 +137,9 @@ async def test_http_path_root_mcp_still_works():
                         "jsonrpc": "2.0",
                         "id": "test-3",
                         "method": "initialize",
-                        "params": {"capabilities": {}, "protocolVersion": "2024-11-05"}
+                        "params": {"capabilities": {}, "protocolVersion": "2024-11-05"},
                     },
-                    headers={"Content-Type": "application/json"}
+                    headers={"Content-Type": "application/json"},
                 )
 
                 # Should get valid MCP response
