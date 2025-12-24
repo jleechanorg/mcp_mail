@@ -107,8 +107,7 @@ async def test_http_path_root_DOES_shadow_mail_ui():
 
                 # EXPECT 404 - /mail is shadowed by MCP mount at "/"
                 assert response.status_code == 404, (
-                    f"Expected /mail to be shadowed (404) when HTTP_PATH='/'. "
-                    f"Got status: {response.status_code}"
+                    f"Expected /mail to be shadowed (404) when HTTP_PATH='/'. Got status: {response.status_code}"
                 )
 
 
