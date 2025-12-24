@@ -18,6 +18,14 @@ from mcp_agent_mail.app import build_mcp_server
 from mcp_agent_mail.http import build_http_app
 
 
+@pytest.fixture
+def clear_settings_cache() -> None:
+    """Clear settings cache before and after tests that patch environment."""
+    _config.get_settings.cache_clear()  # type: ignore[attr-defined]
+    yield
+    _config.get_settings.cache_clear()  # type: ignore[attr-defined]
+
+
 @pytest.mark.asyncio
 async def test_post_mcp_no_trailing_slash_does_not_crash():
     """Test that POST /mcp (no trailing slash) works without TypeError.
@@ -83,7 +91,7 @@ async def test_post_mcp_with_trailing_slash_works():
 
 
 @pytest.mark.asyncio
-async def test_http_path_root_DOES_shadow_mail_ui():
+async def test_http_path_root_DOES_shadow_mail_ui(clear_settings_cache: None):
     """Test that HTTP_PATH='/' DOES shadow /mail UI (known limitation).
 
     This documents the fundamental limitation: mounting MCP at "/" will shadow
@@ -93,8 +101,6 @@ async def test_http_path_root_DOES_shadow_mail_ui():
     """
     # Mock environment to set HTTP_PATH="/"
     with patch.dict(os.environ, {"HTTP_PATH": "/"}):
-        # Clear settings cache to pick up environment variable
-        _config.get_settings.cache_clear()  # type: ignore[attr-defined]
         settings = _config.get_settings()
         server = build_mcp_server()
         app = build_http_app(settings, server)
@@ -112,15 +118,13 @@ async def test_http_path_root_DOES_shadow_mail_ui():
 
 
 @pytest.mark.asyncio
-async def test_http_path_root_mcp_still_works():
+async def test_http_path_root_mcp_still_works(clear_settings_cache: None):
     """Test that MCP endpoints still work when HTTP_PATH='/'.
 
     Even though HTTP_PATH='/' is not recommended, if configured,
     the MCP endpoints should still be accessible.
     """
     with patch.dict(os.environ, {"HTTP_PATH": "/"}):
-        # Clear settings cache to pick up environment variable
-        _config.get_settings.cache_clear()  # type: ignore[attr-defined]
         settings = _config.get_settings()
         server = build_mcp_server()
         app = build_http_app(settings, server)

@@ -2587,13 +2587,22 @@ def acks_pending(
 ) -> None:
     """List messages that require acknowledgement and are still pending."""
 
-    async def _run() -> tuple[Project, Agent, list[tuple[Message, Any, Any, str]]]:
+    async def _run() -> tuple[Project | None, Agent, list[tuple[Message, Any, Any, str]]]:
         # Global agent lookup (agents are globally unique)
         agent_record, project_record = await _get_agent_global(agent)
         if agent_record.id is None:
             raise ValueError("Agent must have an ID")
         if project_record is not None and project_record.id is None:
             raise ValueError("Project must have an ID if it exists")
+        if project:
+            project_override = await _get_project_record(project)
+            if project_record is None:
+                raise ValueError(f"Agent '{agent}' is not associated with a project; cannot scope to '{project}'.")
+            if project_record.id != project_override.id:
+                raise ValueError(
+                    f"Agent '{agent}' not registered for project '{project_override.human_key}'."
+                )
+            project_record = project_override
         await ensure_schema()
         async with get_session() as session:
             stmt = (
@@ -2615,7 +2624,8 @@ def acks_pending(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
-    table = Table(title=f"Pending ACKs for {agent_record.name} ({project_record.human_key})", show_lines=False)
+    project_label = project_record.human_key if project_record else "(no project)"
+    table = Table(title=f"Pending ACKs for {agent_record.name} ({project_label})", show_lines=False)
     table.add_column("Msg ID")
     table.add_column("Thread")
     table.add_column("Subject")
@@ -2659,13 +2669,22 @@ def acks_remind(
 ) -> None:
     """Highlight pending acknowledgements older than a threshold."""
 
-    async def _run() -> tuple[Project, Agent, list[tuple[Message, Any, Any, str]]]:
+    async def _run() -> tuple[Project | None, Agent, list[tuple[Message, Any, Any, str]]]:
         # Global agent lookup (agents are globally unique)
         agent_record, project_record = await _get_agent_global(agent)
         if agent_record.id is None:
             raise ValueError("Agent must have an ID")
         if project_record is not None and project_record.id is None:
             raise ValueError("Project must have an ID if it exists")
+        if project:
+            project_override = await _get_project_record(project)
+            if project_record is None:
+                raise ValueError(f"Agent '{agent}' is not associated with a project; cannot scope to '{project}'.")
+            if project_record.id != project_override.id:
+                raise ValueError(
+                    f"Agent '{agent}' not registered for project '{project_override.human_key}'."
+                )
+            project_record = project_override
         await ensure_schema()
         async with get_session() as session:
             stmt = (
@@ -2736,13 +2755,22 @@ def acks_overdue(
 ) -> None:
     """List ack-required messages older than a threshold without acknowledgements."""
 
-    async def _run() -> tuple[Project, Agent, list[tuple[Message, str]]]:
+    async def _run() -> tuple[Project | None, Agent, list[tuple[Message, str]]]:
         # Global agent lookup (agents are globally unique)
         agent_record, project_record = await _get_agent_global(agent)
         if agent_record.id is None:
             raise ValueError("Agent must have an ID")
         if project_record is not None and project_record.id is None:
             raise ValueError("Project must have an ID if it exists")
+        if project:
+            project_override = await _get_project_record(project)
+            if project_record is None:
+                raise ValueError(f"Agent '{agent}' is not associated with a project; cannot scope to '{project}'.")
+            if project_record.id != project_override.id:
+                raise ValueError(
+                    f"Agent '{agent}' not registered for project '{project_override.human_key}'."
+                )
+            project_record = project_override
         await ensure_schema()
         async with get_session() as session:
             cutoff = datetime.now(timezone.utc) - timedelta(minutes=ttl_minutes)
@@ -2766,7 +2794,8 @@ def acks_overdue(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
-    table = Table(title=f"ACK Overdue (>{ttl_minutes}m) for {agent_record.name} ({project_record.human_key})")
+    project_label = project_record.human_key if project_record else "(no project)"
+    table = Table(title=f"ACK Overdue (>{ttl_minutes}m) for {agent_record.name} ({project_label})")
     table.add_column("ID")
     table.add_column("Subject")
     table.add_column("Created")

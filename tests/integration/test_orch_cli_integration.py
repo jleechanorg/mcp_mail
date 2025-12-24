@@ -6,13 +6,13 @@ orchestration framework and verify MCP Agent Mail functionality.
 
 Usage:
     # Run Claude integration test
-    python -m pytest tests/integration/test_real_cli_integration.py -k claude -v
+    python -m pytest tests/integration/test_orch_cli_integration.py -k claude -v
 
     # Run all real CLI tests (requires CLIs installed)
-    python -m pytest tests/integration/test_real_cli_integration.py -v
+    python -m pytest tests/integration/test_orch_cli_integration.py -v
 
     # Run as standalone script
-    python tests/integration/test_real_cli_integration.py
+    python tests/integration/test_orch_cli_integration.py
 
 Requirements:
     - uv tool install jleechanorg-orchestration
