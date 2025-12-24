@@ -1553,13 +1553,54 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             await self.app(new_scope, receive, send)
 
     if base_no_slash == "/":
-        # CRITICAL: Do not mount at "/" as it shadows all other routes (e.g., /mail UI)
-        # Instead, only mount at "/" with trailing slash if that's the configured path
+        # Special handling for HTTP_PATH="/" to avoid shadowing other routes
+        # Cannot use mount("/", ...) because it's a catch-all that shadows /mail and other routes
+        # Instead, use add_route() for specific root path handling
         structlog.get_logger(__name__).warning(
-            "HTTP_PATH='/' is not recommended as it shadows other routes. Consider using HTTP_PATH='/mcp' instead."
+            "HTTP_PATH='/' is not recommended as it may conflict with other routes. "
+            "Consider using HTTP_PATH='/mcp' instead."
         )
+
+        # Create a wrapper that converts Request to ASGI call for root path
+
+        async def root_mcp_handler(request: Request):
+            """Wrapper to call ASGI app from Request handler."""
+            # Get the ASGI scope, receive, and build a send callable
+            scope = request.scope
+
+            # Build receive callable from request
+            async def receive():
+                return await request.receive()
+
+            # Create a send callable that captures the response
+            response_started = False
+            status_code = 200
+            headers: list = []
+            body_parts: list = []
+
+            async def send(message: dict):
+                nonlocal response_started, status_code, headers, body_parts
+                if message["type"] == "http.response.start":
+                    response_started = True
+                    status_code = message["status"]
+                    headers = list(message.get("headers", []))
+                elif message["type"] == "http.response.body":
+                    body_parts.append(message.get("body", b""))
+
+            # Call the ASGI app with proper scope/receive/send
+            await stateless_app(scope, receive, send)
+
+            # Return the response
+            from starlette.responses import Response
+            body = b"".join(body_parts)
+            # Convert headers list of tuples to dict
+            response_headers = {k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+                               for k, v in headers}
+            return Response(content=body, status_code=status_code, headers=response_headers)
+
+        # Register root path handler that doesn't shadow other routes
         with contextlib.suppress(Exception):
-            fastapi_app.mount("/", stateless_app)
+            fastapi_app.add_route("/", root_mcp_handler, methods=["GET", "POST", "OPTIONS"])
     else:
         # Fix ASGI handler signature mismatch: Use mount() instead of add_route()
         # for the no-slash path to properly handle ASGI app signature
