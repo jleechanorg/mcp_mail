@@ -39,11 +39,11 @@ def _seed_ack_data() -> None:
 def test_cli_acks_views_with_data(isolated_env):
     _seed_ack_data()
     runner = CliRunner()
-    res = runner.invoke(app, ["acks", "pending", "Backend", "Blue", "--limit", "10"])
+    res = runner.invoke(app, ["acks", "pending", "Blue", "Backend", "--limit", "10"])
     assert res.exit_code == 0
-    res2 = runner.invoke(app, ["acks", "remind", "Backend", "Blue", "--min-age-minutes", "30", "--limit", "10"])
+    res2 = runner.invoke(app, ["acks", "remind", "Blue", "Backend", "--min-age-minutes", "30", "--limit", "10"])
     assert res2.exit_code == 0
-    res3 = runner.invoke(app, ["acks", "overdue", "Backend", "Blue", "--ttl-minutes", "60", "--limit", "10"])
+    res3 = runner.invoke(app, ["acks", "overdue", "Blue", "Backend", "--ttl-minutes", "60", "--limit", "10"])
     assert res3.exit_code == 0
 
 

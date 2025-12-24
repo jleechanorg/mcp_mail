@@ -68,6 +68,6 @@ def test_cli_file_reservations_soon_and_list_acks_and_remind(isolated_env):
     # remind with age threshold 0 should run and not error
     res_remind = runner.invoke(
         app,
-        ["acks", "remind", "Backend", payload["agent_b_name"], "--min-age-minutes", "0", "--limit", "5"],
+        ["acks", "remind", payload["agent_b_name"], "Backend", "--min-age-minutes", "0", "--limit", "5"],
     )
     assert res_remind.exit_code == 0
