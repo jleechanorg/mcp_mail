@@ -2599,9 +2599,7 @@ def acks_pending(
             if project_record is None:
                 raise ValueError(f"Agent '{agent}' is not associated with a project; cannot scope to '{project}'.")
             if project_record.id != project_override.id:
-                raise ValueError(
-                    f"Agent '{agent}' not registered for project '{project_override.human_key}'."
-                )
+                raise ValueError(f"Agent '{agent}' not registered for project '{project_override.human_key}'.")
             project_record = project_override
         await ensure_schema()
         async with get_session() as session:
@@ -2681,9 +2679,7 @@ def acks_remind(
             if project_record is None:
                 raise ValueError(f"Agent '{agent}' is not associated with a project; cannot scope to '{project}'.")
             if project_record.id != project_override.id:
-                raise ValueError(
-                    f"Agent '{agent}' not registered for project '{project_override.human_key}'."
-                )
+                raise ValueError(f"Agent '{agent}' not registered for project '{project_override.human_key}'.")
             project_record = project_override
         await ensure_schema()
         async with get_session() as session:
@@ -2767,9 +2763,7 @@ def acks_overdue(
             if project_record is None:
                 raise ValueError(f"Agent '{agent}' is not associated with a project; cannot scope to '{project}'.")
             if project_record.id != project_override.id:
-                raise ValueError(
-                    f"Agent '{agent}' not registered for project '{project_override.human_key}'."
-                )
+                raise ValueError(f"Agent '{agent}' not registered for project '{project_override.human_key}'.")
             project_record = project_override
         await ensure_schema()
         async with get_session() as session:
