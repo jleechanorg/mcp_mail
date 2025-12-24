@@ -182,7 +182,7 @@ def _resolve_project_identity(target_path: str) -> dict[str, Any]:
 
         # Create fingerprint and hash it
         fingerprint = f"{normalized}@{default_branch}"
-        uid = hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()[:20]
+        uid = hashlib.sha1(fingerprint.encode("utf-8"), usedforsecurity=False).hexdigest()[:20]
         return {"project_uid": uid}
     except (subprocess.CalledProcessError, FileNotFoundError):
         pass

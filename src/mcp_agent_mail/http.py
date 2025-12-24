@@ -1592,10 +1592,12 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
             # Return the response
             from starlette.responses import Response
+
             body = b"".join(body_parts)
             # Convert headers list of tuples to dict
-            response_headers = {k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
-                               for k, v in headers}
+            response_headers = {
+                k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v for k, v in headers
+            }
             return Response(content=body, status_code=status_code, headers=response_headers)
 
         # Register root path handler that doesn't shadow other routes
