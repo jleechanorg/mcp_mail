@@ -112,6 +112,27 @@ async def _get_agent_record(project: Project, agent_name: str) -> Agent:
         return agent
 
 
+async def _get_agent_global(agent_name: str) -> tuple[Agent, Project]:
+    """Look up an agent globally by name (agents are globally unique)."""
+    await ensure_schema()
+    async with get_session() as session:
+        result = await session.execute(
+            select(Agent, Project)
+            .join(Project, Agent.project_id == Project.id)
+            .where(func.lower(Agent.name) == agent_name.lower(), Agent.is_active.is_(True))
+        )
+        row = result.first()
+        if not row:
+            raise ValueError(f"Agent '{agent_name}' not found (globally)")
+        return row[0], row[1]
+
+
+def _get_project_from_cwd() -> str:
+    """Get project identifier from current working directory."""
+    cwd = Path.cwd().resolve()
+    return str(cwd)
+
+
 def _iso(dt: Optional[datetime]) -> str:
     if dt is None:
         return ""
@@ -2556,15 +2577,15 @@ def file_reservations_soon(
 
 @acks_app.command("pending")
 def acks_pending(
-    project: str = typer.Argument(..., help="Project slug or human key"),
-    agent: str = typer.Argument(..., help="Agent name"),
+    agent: str = typer.Argument(..., help="Agent name (globally unique)"),
+    project: Optional[str] = typer.Argument(None, help="Project slug or human key (optional)"),
     limit: int = typer.Option(20, help="Max messages to display"),
 ) -> None:
     """List messages that require acknowledgement and are still pending."""
 
     async def _run() -> tuple[Project, Agent, list[tuple[Message, Any, Any, str]]]:
-        project_record = await _get_project_record(project)
-        agent_record = await _get_agent_record(project_record, agent)
+        # Global agent lookup (agents are globally unique)
+        agent_record, project_record = await _get_agent_global(agent)
         if project_record.id is None or agent_record.id is None:
             raise ValueError("Project and agent must have IDs")
         await ensure_schema()
@@ -2573,7 +2594,6 @@ def acks_pending(
                 select(Message, MessageRecipient.read_ts, MessageRecipient.ack_ts, MessageRecipient.kind)
                 .join(MessageRecipient, MessageRecipient.message_id == Message.id)
                 .where(
-                    Message.project_id == project_record.id,
                     MessageRecipient.agent_id == agent_record.id,
                     cast(Any, Message.ack_required).is_(True),
                     cast(Any, MessageRecipient.ack_ts).is_(None),
@@ -2626,16 +2646,16 @@ def acks_pending(
 
 @acks_app.command("remind")
 def acks_remind(
-    project: str = typer.Argument(..., help="Project slug or human key"),
-    agent: str = typer.Argument(..., help="Agent name"),
+    agent: str = typer.Argument(..., help="Agent name (globally unique)"),
+    project: Optional[str] = typer.Argument(None, help="Project slug or human key (optional)"),
     min_age_minutes: int = typer.Option(30, help="Only show ACK-required older than N minutes"),
     limit: int = typer.Option(50, help="Max messages to display"),
 ) -> None:
     """Highlight pending acknowledgements older than a threshold."""
 
     async def _run() -> tuple[Project, Agent, list[tuple[Message, Any, Any, str]]]:
-        project_record = await _get_project_record(project)
-        agent_record = await _get_agent_record(project_record, agent)
+        # Global agent lookup (agents are globally unique)
+        agent_record, project_record = await _get_agent_global(agent)
         if project_record.id is None or agent_record.id is None:
             raise ValueError("Project and agent must have IDs")
         await ensure_schema()
@@ -2644,7 +2664,6 @@ def acks_remind(
                 select(Message, MessageRecipient.read_ts, MessageRecipient.ack_ts, MessageRecipient.kind)
                 .join(MessageRecipient, MessageRecipient.message_id == Message.id)
                 .where(
-                    Message.project_id == project_record.id,
                     MessageRecipient.agent_id == agent_record.id,
                     cast(Any, Message.ack_required).is_(True),
                     cast(Any, MessageRecipient.ack_ts).is_(None),
@@ -2702,16 +2721,16 @@ def acks_remind(
 
 @acks_app.command("overdue")
 def acks_overdue(
-    project: str = typer.Argument(..., help="Project slug or human key"),
-    agent: str = typer.Argument(..., help="Agent name"),
+    agent: str = typer.Argument(..., help="Agent name (globally unique)"),
+    project: Optional[str] = typer.Argument(None, help="Project slug or human key (optional)"),
     ttl_minutes: int = typer.Option(60, min=1, help="Only show ACK-required older than N minutes"),
     limit: int = typer.Option(50, help="Max messages to display"),
 ) -> None:
     """List ack-required messages older than a threshold without acknowledgements."""
 
     async def _run() -> tuple[Project, Agent, list[tuple[Message, str]]]:
-        project_record = await _get_project_record(project)
-        agent_record = await _get_agent_record(project_record, agent)
+        # Global agent lookup (agents are globally unique)
+        agent_record, project_record = await _get_agent_global(agent)
         if project_record.id is None or agent_record.id is None:
             raise ValueError("Project and agent must have IDs")
         await ensure_schema()
@@ -2721,7 +2740,6 @@ def acks_overdue(
                 select(Message, MessageRecipient.kind)
                 .join(MessageRecipient, MessageRecipient.message_id == Message.id)
                 .where(
-                    Message.project_id == project_record.id,
                     MessageRecipient.agent_id == agent_record.id,
                     cast(Any, Message.ack_required).is_(True),
                     cast(Any, MessageRecipient.ack_ts).is_(None),
@@ -2772,33 +2790,23 @@ def acks_overdue(
 
 @app.command("list-acks")
 def list_acks(
-    project_key: str = typer.Option(..., "--project", help="Project human key or slug."),
-    agent_name: str = typer.Option(..., "--agent", help="Agent name to query."),
+    agent_name: str = typer.Option(..., "--agent", help="Agent name to query (globally unique)."),
+    project_key: Optional[str] = typer.Option(
+        None, "--project", help="Project human key or slug (optional, agent lookup is global)."
+    ),
     limit: int = typer.Option(20, help="Max messages to show."),
 ) -> None:
     """List messages requiring acknowledgement for an agent where ack is missing."""
 
-    async def _collect() -> list[tuple[Message, str]]:
+    async def _collect() -> tuple[list[tuple[Message, str]], str]:
         await ensure_schema()
         async with get_session() as session:
-            # Resolve project and agent
-            proj_result = await session.execute(
-                select(Project).where((Project.slug == slugify(project_key)) | (Project.human_key == project_key))
-            )
-            project = proj_result.scalars().first()
-            if not project:
-                raise typer.BadParameter(f"Project not found for key: {project_key}")
-            agent_result = await session.execute(
-                select(Agent).where(Agent.project_id == project.id, func.lower(Agent.name) == agent_name.lower())
-            )
-            agent = agent_result.scalars().first()
-            if not agent:
-                raise typer.BadParameter(f"Agent '{agent_name}' not found in project '{project.human_key}'")
+            # Global agent lookup (agents are globally unique)
+            agent, project = await _get_agent_global(agent_name)
             rows = await session.execute(
                 select(Message, MessageRecipient.kind)
                 .join(MessageRecipient, MessageRecipient.message_id == Message.id)
                 .where(
-                    Message.project_id == project.id,
                     MessageRecipient.agent_id == agent.id,
                     cast(Any, Message.ack_required).is_(True),
                     cast(Any, MessageRecipient.ack_ts).is_(None),
@@ -2806,11 +2814,14 @@ def list_acks(
                 .order_by(desc(Message.created_ts))
                 .limit(limit)
             )
-            return rows.all()
+            return rows.all(), project.human_key
 
     console.rule("[bold blue]Ack-required Messages")
-    rows = asyncio.run(_collect())
-    table = Table(title=f"Pending Acks for {agent_name}")
+    try:
+        rows, proj_key = asyncio.run(_collect())
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from e
+    table = Table(title=f"Pending Acks for {agent_name} ({proj_key})")
     table.add_column("ID")
     table.add_column("Subject")
     table.add_column("Importance")

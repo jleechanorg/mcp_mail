@@ -15,8 +15,8 @@
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli file_reservations active mcp_agent_mail" },
-          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli acks pending mcp_agent_mail jleechan --limit 20" }
+          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli file_reservations active mcp_mail" },
+          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli acks pending m --limit 20" }
         ]
       }
     ],
@@ -24,7 +24,7 @@
       {
         "matcher": "Edit",
         "hooks": [
-          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli file_reservations soon mcp_agent_mail --minutes 10" }
+          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli file_reservations soon mcp_mail --minutes 10" }
         ]
       }
     ],
@@ -32,13 +32,13 @@
       {
         "matcher": "mcp__mcp-agent-mail__send_message",
         "hooks": [
-          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli list-acks --project mcp_agent_mail --agent jleechan --limit 10" }
+          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli list-acks --agent m --limit 10" }
         ]
       },
       {
         "matcher": "mcp__mcp-agent-mail__call_extended_tool",
         "hooks": [
-          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli file_reservations list mcp_agent_mail" }
+          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli file_reservations list mcp_mail" }
         ]
       }
     ]
