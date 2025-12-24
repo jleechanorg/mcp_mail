@@ -51,6 +51,7 @@ class GitRunner:
             shell=False,
             text=True,
             timeout=timeout,
+            shell=False,
         )
 
     def init(self) -> subprocess.CompletedProcess[str]:
