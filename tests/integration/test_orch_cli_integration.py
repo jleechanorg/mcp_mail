@@ -228,9 +228,24 @@ def test_claude_cli_integration():
 
 
 @pytest.mark.skipif(not is_cli_available("cursor"), reason="Cursor CLI not installed")
-@pytest.mark.xfail(reason="cursor-agent CLI may use different storage than Cursor IDE")
 def test_cursor_cli_integration():
-    """Test Cursor CLI integration with MCP Agent Mail."""
+    """Test Cursor CLI integration with MCP Agent Mail.
+
+    Note: Cursor CLI uses ~/.cursor/mcp.json for MCP configuration.
+    Ensure the mcp-agent-mail server includes Authorization header:
+
+    {
+      "mcpServers": {
+        "mcp-agent-mail": {
+          "type": "http",
+          "url": "http://127.0.0.1:8765/mcp/",
+          "headers": {
+            "Authorization": "Bearer <token>"
+          }
+        }
+      }
+    }
+    """
     test = MCPMailCursorCLITest()
     exit_code = test.run_all_tests()
     assert exit_code == 0, "Cursor CLI integration tests failed"
