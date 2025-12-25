@@ -23,10 +23,11 @@ async def test_request_logging_middleware_and_liveness(isolated_env, monkeypatch
     server = build_mcp_server()
     app = build_http_app(settings, server)
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.get("/health/liveness")
-        assert r.status_code == 200
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get("/health/liveness")
+            assert r.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -45,10 +46,11 @@ async def test_readiness_error_path_returns_503(isolated_env, monkeypatch):
     monkeypatch.setattr(http_mod, "readiness_check", fail_readiness)
     app = build_http_app(settings, server)
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.get("/health/readiness")
-        assert r.status_code == 503
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get("/health/readiness")
+            assert r.status_code == 503
 
 
 @pytest.mark.asyncio
@@ -64,7 +66,8 @@ async def test_rbac_denies_when_tool_name_missing(isolated_env, monkeypatch):
     server = build_mcp_server()
     app = build_http_app(settings, server)
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.post(settings.http.path, json=_rpc("tools/call", {"arguments": {}}))
-        assert r.status_code == 401
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.post(settings.http.path, json=_rpc("tools/call", {"arguments": {}}))
+            assert r.status_code == 401

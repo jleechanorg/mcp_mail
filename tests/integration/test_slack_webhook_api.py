@@ -53,17 +53,18 @@ async def test_slack_webhook_creates_message(monkeypatch):
     timestamp = str(int(time.time()))
     signature = _slack_signature(settings.slack.signing_secret or "", timestamp, body)
 
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post(
-            "/slack/events",
-            content=body,
-            headers={
-                "X-Slack-Request-Timestamp": timestamp,
-                "X-Slack-Signature": signature,
-                "Content-Type": "application/json",
-            },
-        )
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/slack/events",
+                content=body,
+                headers={
+                    "X-Slack-Request-Timestamp": timestamp,
+                    "X-Slack-Signature": signature,
+                    "Content-Type": "application/json",
+                },
+            )
 
     assert resp.status_code == 200
 
@@ -107,17 +108,18 @@ async def test_slack_webhook_thread_mapping(monkeypatch):
     timestamp = str(int(time.time()))
     signature = _slack_signature(settings.slack.signing_secret or "", timestamp, body)
 
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post(
-            "/slack/events",
-            content=body,
-            headers={
-                "X-Slack-Request-Timestamp": timestamp,
-                "X-Slack-Signature": signature,
-                "Content-Type": "application/json",
-            },
-        )
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/slack/events",
+                content=body,
+                headers={
+                    "X-Slack-Request-Timestamp": timestamp,
+                    "X-Slack-Signature": signature,
+                    "Content-Type": "application/json",
+                },
+            )
 
     assert resp.status_code == 200
 
@@ -172,17 +174,18 @@ async def test_slack_webhook_records_thread_mapping_for_top_level(monkeypatch):
     old_client = getattr(app_module, "_slack_client", None)
     app_module._slack_client = dummy_client
     try:
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.post(
-                "/slack/events",
-                content=body,
-                headers={
-                    "X-Slack-Request-Timestamp": timestamp,
-                    "X-Slack-Signature": signature,
-                    "Content-Type": "application/json",
-                },
-            )
+        async with app.router.lifespan_context(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.post(
+                    "/slack/events",
+                    content=body,
+                    headers={
+                        "X-Slack-Request-Timestamp": timestamp,
+                        "X-Slack-Signature": signature,
+                        "Content-Type": "application/json",
+                    },
+                )
     finally:
         app_module._slack_client = old_client
 

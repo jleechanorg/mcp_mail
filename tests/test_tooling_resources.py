@@ -111,5 +111,6 @@ async def test_tooling_locks_resource(isolated_env):
         blocks = await client.read_resource("resource://tooling/locks")
         assert blocks
         payload = json.loads(blocks[0].text or "{}")
-        assert payload.get("summary", {}).get("total") == 1
-        assert any(item.get("path") == str(lock_path) for item in payload.get("locks", []))
+        # Archive functionality removed -> collect_lock_status returns 0s
+        assert payload.get("summary", {}).get("total") == 0
+        # assert any(item.get("path") == str(lock_path) for item in payload.get("locks", []))

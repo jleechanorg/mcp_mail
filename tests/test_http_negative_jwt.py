@@ -49,13 +49,14 @@ async def test_http_jwt_bad_kid_rejected(isolated_env, monkeypatch):
     import httpx  # type: ignore
 
     monkeypatch.setattr(httpx.AsyncClient, "get", fake_get, raising=False)
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        headers = {"Authorization": f"Bearer {token}"}
-        r = await client.post(
-            settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}})
-        )
-        assert r.status_code == 401
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            headers = {"Authorization": f"Bearer {token}"}
+            r = await client.post(
+                settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}})
+            )
+            assert r.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -74,14 +75,15 @@ async def test_http_jwt_wrong_alg_rejected(isolated_env, monkeypatch):
 
     server = build_mcp_server()
     app = build_http_app(settings, server)
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        headers = {"Authorization": f"Bearer {token}"}
-        r = await client.post(
-            settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}})
-        )
-        # Should be 401 due to bad algorithm
-        assert r.status_code == 401
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            headers = {"Authorization": f"Bearer {token}"}
+            r = await client.post(
+                settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}})
+            )
+            # Should be 401 due to bad algorithm
+            assert r.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -100,13 +102,14 @@ async def test_http_jwt_missing_aud_iss_rejected_when_configured(isolated_env, m
     ).decode("utf-8")
     server = build_mcp_server()
     app = build_http_app(settings, server)
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        headers = {"Authorization": f"Bearer {token}"}
-        r = await client.post(
-            settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}})
-        )
-        assert r.status_code == 401
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            headers = {"Authorization": f"Bearer {token}"}
+            r = await client.post(
+                settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}})
+            )
+            assert r.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -117,10 +120,11 @@ async def test_http_jwt_malformed_token(isolated_env, monkeypatch):
     settings = _config.get_settings()
     server = build_mcp_server()
     app = build_http_app(settings, server)
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        headers = {"Authorization": "Bearer not.a.jwt"}
-        r = await client.post(
-            settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}})
-        )
-        assert r.status_code == 401
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            headers = {"Authorization": "Bearer not.a.jwt"}
+            r = await client.post(
+                settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}})
+            )
+            assert r.status_code == 401

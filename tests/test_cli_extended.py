@@ -39,10 +39,10 @@ def test_cli_acks_pending_and_overdue(isolated_env):
     _seed_backend()
     runner = CliRunner()
     # pending acks for Blue (empty)
-    res = runner.invoke(app, ["acks", "pending", "Backend", "Blue", "--limit", "5"])
+    res = runner.invoke(app, ["acks", "pending", "Blue", "Backend", "--limit", "5"])
     assert res.exit_code == 0
     # overdue (empty)
-    res2 = runner.invoke(app, ["acks", "overdue", "Backend", "Blue", "--ttl-minutes", "60", "--limit", "10"])
+    res2 = runner.invoke(app, ["acks", "overdue", "Blue", "Backend", "--ttl-minutes", "60", "--limit", "10"])
     assert res2.exit_code == 0
 
 

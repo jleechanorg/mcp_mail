@@ -182,7 +182,7 @@ def _resolve_project_identity(target_path: str) -> dict[str, Any]:
 
         # Create fingerprint and hash it
         fingerprint = f"{normalized}@{default_branch}"
-        uid = hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()[:20]
+        uid = hashlib.sha1(fingerprint.encode("utf-8"), usedforsecurity=False).hexdigest()[:20]
         return {"project_uid": uid}
     except (subprocess.CalledProcessError, FileNotFoundError):
         pass
@@ -4671,21 +4671,21 @@ def build_mcp_server() -> FastMCP:
     )
     async def mark_message_read(
         ctx: Context,
-        project_key: str,
         agent_name: str,
         message_id: int,
+        project_key: Optional[str] = None,
     ) -> dict[str, Any]:
         """
         Mark a specific message as read for the given agent.
 
         Parameters
         ----------
-        project_key : str
-            Project identifier (informational only - agents and messages are globally accessible).
         agent_name : str
             Name of the agent marking the message as read.
         message_id : int
             ID of the message to mark as read.
+        project_key : Optional[str]
+            Project identifier (optional, informational only - agents and messages are globally accessible).
 
         Notes
         -----
@@ -4757,21 +4757,21 @@ def build_mcp_server() -> FastMCP:
     )
     async def acknowledge_message(
         ctx: Context,
-        project_key: str,
         agent_name: str,
         message_id: int,
+        project_key: Optional[str] = None,
     ) -> dict[str, Any]:
         """
         Acknowledge a message addressed to an agent (and mark as read).
 
         Parameters
         ----------
-        project_key : str
-            Project identifier (informational only - agents and messages are globally accessible).
         agent_name : str
             Name of the agent acknowledging the message.
         message_id : int
             ID of the message to acknowledge.
+        project_key : Optional[str]
+            Project identifier (optional, informational only - agents and messages are globally accessible).
 
         Behavior
         --------

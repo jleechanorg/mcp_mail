@@ -12,12 +12,10 @@ import json
 import logging
 import re
 from collections import deque
-from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
-import anyio
 import structlog
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, status
@@ -500,7 +498,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
     # Build MCP HTTP sub-app with stateless mode for ASGI test transports
     mcp_http_app = server.http_app(path="/", stateless_http=True, json_response=True)
 
-    # no-op wrapper removed; using explicit stateless adapter below
+    # Normalize Accept/Content-Type headers on inbound MCP HTTP calls.
 
     # Background workers lifecycle
     async def _startup() -> None:  # pragma: no cover - service lifecycle
@@ -811,7 +809,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         for task in tasks:
             task.cancel()
         for task in tasks:
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(Exception, asyncio.CancelledError):
                 await task
 
     from contextlib import asynccontextmanager
@@ -1496,11 +1494,9 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
     # A minimal stateless ASGI adapter that does not rely on ASGI lifespan management
     # and runs a fresh StreamableHTTP transport per request.
-    from mcp.server.streamable_http import StreamableHTTPServerTransport
-
-    class StatelessMCPASGIApp:
-        def __init__(self, mcp_server) -> None:
-            self._server = mcp_server
+    class MCPHeaderNormalizeASGIApp:
+        def __init__(self, app) -> None:
+            self._app = app
 
         async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
             if scope.get("type") != "http":
@@ -1523,57 +1519,11 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             new_scope = dict(scope)
             new_scope["headers"] = headers
 
-            http_transport = StreamableHTTPServerTransport(
-                mcp_session_id=None,
-                is_json_response_enabled=True,
-                event_store=None,
-                security_settings=None,
-            )
+            # Ensure path is not empty (fix for mount point root handling)
+            if not new_scope.get("path"):
+                new_scope["path"] = "/"
 
-            try:
-                async with http_transport.connect() as streams:
-                    read_stream, write_stream = streams
-                    server_task = asyncio.create_task(
-                        self._server._mcp_server.run(
-                            read_stream,
-                            write_stream,
-                            self._server._mcp_server.create_initialization_options(),
-                            stateless=True,
-                        )
-                    )
-                    # No response wrapping/unwrapping - just pass through MCP responses as-is
-                    # MCP clients can handle JSON-RPC format properly
-                    try:
-                        await http_transport.handle_request(new_scope, receive, send)
-                    finally:
-                        # Cancel server_task before exiting context to prevent ClosedResourceError
-                        # from the message router trying to read from closed streams
-                        server_task.cancel()
-                        # Wait briefly to allow cancellation to propagate before closing streams
-                        await asyncio.wait({server_task}, timeout=0.1)
-                        try:
-                            await http_transport.terminate()
-                        except anyio.ClosedResourceError:
-                            pass  # Expected on client disconnect
-                        except Exception as exc:
-                            structlog.get_logger().error(
-                                "Unexpected error during http_transport.terminate()",
-                                exc_info=True,
-                                exception=exc,
-                            )
-                        with contextlib.suppress(asyncio.CancelledError):
-                            await server_task
-            except anyio.ClosedResourceError:
-                # Gracefully handle client disconnects - this is expected behavior when
-                # clients close connections during message routing (e.g., Codex, OAuth flows)
-                pass
-            except (ExceptionGroup, BaseExceptionGroup) as eg:
-                # Handle exception groups from anyio task groups - filter out ClosedResourceError
-                # and re-raise if there are other non-suppressible exceptions
-                non_closed = [e for e in eg.exceptions if not isinstance(e, anyio.ClosedResourceError)]
-                if non_closed:
-                    derived = eg.derive(non_closed) if hasattr(eg, "derive") else type(eg)(eg.args[0], non_closed)
-                    raise derived from eg
+            await self._app(new_scope, receive, send)
 
     # Mount at both '/base' and '/base/' to tolerate either form from clients/tests
     mount_base = settings.http.path or "/mcp"
@@ -1581,55 +1531,49 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         mount_base = "/" + mount_base
     base_no_slash = mount_base.rstrip("/") or "/"
     base_with_slash = base_no_slash if base_no_slash == "/" else base_no_slash + "/"
-    stateless_app = StatelessMCPASGIApp(server)
-    with contextlib.suppress(Exception):
-        fastapi_app.mount(base_no_slash, stateless_app)
-    with contextlib.suppress(Exception):
-        fastapi_app.mount(base_with_slash, stateless_app)
+    stateless_app = MCPHeaderNormalizeASGIApp(mcp_http_app)
+
+    # Add a direct route at the base path to handle POST /mcp without redirect (307)
+    # and support streaming (by using ASGI app directly instead of buffering).
+    class RootPathForceASGIApp:
+        """ASGI adapter that rewrites requests to the root path ("/").
+
+        Used to handle POST requests at the mount base path (e.g., /mcp) without
+        FastAPI's automatic redirect (307) to the trailing-slash variant. This
+        enables streaming responses at the exact base path by rewriting the
+        incoming scope path to "/".
+        """
+
+        def __init__(self, app) -> None:
+            self.app = app
+
+        async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+            new_scope = dict(scope)
+            new_scope["path"] = "/"
+            await self.app(new_scope, receive, send)
+
+    if base_no_slash == "/":
+        # CRITICAL WARNING: HTTP_PATH='/' will shadow ALL other routes including /mail UI
+        # This is a fundamental limitation of ASGI/FastAPI routing - mount() at "/" captures everything
+        # RECOMMENDED: Use HTTP_PATH='/mcp' instead
+        structlog.get_logger(__name__).warning(
+            "HTTP_PATH='/' will shadow all routes including /mail UI. "
+            "The /mail interface will NOT be accessible when HTTP_PATH='/'. "
+            "STRONGLY RECOMMENDED: Use HTTP_PATH='/mcp' instead."
+        )
+        # Mount at root - this WILL shadow /mail and other routes, but supports MCP streaming correctly
+        with contextlib.suppress(Exception):
+            fastapi_app.mount("/", stateless_app, name="mcp_root")
+    else:
+        # Fix ASGI handler signature mismatch: Use mount() instead of add_route()
+        # for the no-slash path to properly handle ASGI app signature
+        with contextlib.suppress(Exception):
+            fastapi_app.mount(base_no_slash, RootPathForceASGIApp(stateless_app), name="mcp_no_slash")
+        with contextlib.suppress(Exception):
+            fastapi_app.mount(base_with_slash, stateless_app, name="mcp_with_slash")
 
     # Expose composed lifespan via router
     fastapi_app.router.lifespan_context = lifespan_context
-
-    # Add a direct route at the base path without redirect to tolerate clients omitting trailing slash
-    @fastapi_app.post(base_no_slash)
-    async def _base_passthrough(request: Request) -> JSONResponse:
-        # Re-dispatch to mounted stateless app by calling it directly
-        response_body = {}
-        status_code = 200
-        headers: dict[str, str] = {}
-
-        async def _send(message: Mapping[str, Any]) -> None:
-            nonlocal response_body, status_code, headers
-            if message.get("type") == "http.response.start":
-                status_code = int(message.get("status", 200))
-                hdrs = message.get("headers") or []
-                for k, v in hdrs:
-                    headers[k.decode("latin1")] = v.decode("latin1")
-            elif message.get("type") == "http.response.body":
-                body = message.get("body") or b""
-                try:
-                    response_body = json.loads(body.decode("utf-8")) if body else {}
-                except Exception:
-                    response_body = {}
-
-        # If localhost and allow_localhost_unauthenticated, synthesize Authorization header automatically
-        scope = dict(request.scope)
-        try:
-            client_host = request.client.host if request.client else ""
-        except Exception:
-            client_host = ""
-        if settings.http.allow_localhost_unauthenticated and client_host in {"127.0.0.1", "::1", "localhost"}:
-            scope_headers = list(scope.get("headers") or [])
-            has_auth = any(k.lower() == b"authorization" for k, _ in scope_headers)
-            if not has_auth and settings.http.bearer_token:
-                scope_headers.append((b"authorization", f"Bearer {settings.http.bearer_token}".encode("latin1")))
-            scope["headers"] = scope_headers
-        await stateless_app(
-            {**scope, "path": base_with_slash},  # ensure mounted path
-            request.receive,
-            _send,
-        )
-        return JSONResponse(response_body, status_code=status_code, headers=headers)
 
     # ----- Simple SSR Mail UI -----
     def _register_mail_ui() -> None:

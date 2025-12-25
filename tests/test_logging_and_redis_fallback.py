@@ -18,11 +18,12 @@ async def test_log_json_enabled_path(isolated_env, monkeypatch):
         _config.clear_settings_cache()
     settings = _config.get_settings()
     app = build_http_app(settings, build_mcp_server())
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # Liveness should work; logging config path executed on app build
-        r = await client.get("/health/liveness")
-        assert r.status_code == 200
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Liveness should work; logging config path executed on app build
+            r = await client.get("/health/liveness")
+            assert r.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -46,7 +47,8 @@ async def test_rate_limit_redis_fallback(isolated_env, monkeypatch):
     monkeypatch.setattr(importlib, "import_module", fake_import)
 
     app = build_http_app(settings, build_mcp_server())
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.get("/health/liveness")
-        assert r.status_code == 200
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get("/health/liveness")
+            assert r.status_code == 200

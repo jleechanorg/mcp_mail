@@ -21,17 +21,18 @@ async def test_slackbox_incoming_creates_message(monkeypatch):
     app = build_http_app(settings)
     await ensure_schema()
 
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post(
-            "/slackbox/incoming",
-            data={
-                "token": "slackbox-token",
-                "channel_id": "CCHAN123",
-                "text": "Slackbox hello world",
-                "timestamp": "1111.2222",
-            },
-        )
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/slackbox/incoming",
+                data={
+                    "token": "slackbox-token",
+                    "channel_id": "CCHAN123",
+                    "text": "Slackbox hello world",
+                    "timestamp": "1111.2222",
+                },
+            )
 
     assert resp.status_code == 200
 
@@ -55,12 +56,13 @@ async def test_slackbox_rejects_invalid_token(monkeypatch):
     app = build_http_app(settings)
     await ensure_schema()
 
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post(
-            "/slackbox/incoming",
-            data={"token": "wrong", "text": "hi"},
-        )
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/slackbox/incoming",
+                data={"token": "wrong", "text": "hi"},
+            )
 
     assert resp.status_code == 401
 
@@ -80,17 +82,18 @@ async def test_slackbox_rejects_disallowed_channel(monkeypatch):
     async with get_session() as session:
         before_count = (await session.execute(select(func.count(Message.id)))).scalar_one()
 
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post(
-            "/slackbox/incoming",
-            data={
-                "token": "slackbox-token",
-                "channel_id": "COTHER",
-                "text": "Slackbox disallowed channel",
-                "timestamp": "2222.3333",
-            },
-        )
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/slackbox/incoming",
+                data={
+                    "token": "slackbox-token",
+                    "channel_id": "COTHER",
+                    "text": "Slackbox disallowed channel",
+                    "timestamp": "2222.3333",
+                },
+            )
 
     assert resp.status_code == 200
 

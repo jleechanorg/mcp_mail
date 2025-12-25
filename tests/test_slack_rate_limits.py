@@ -29,36 +29,37 @@ async def test_slack_and_slackbox_rate_limits_use_independent_config(monkeypatch
     settings = get_settings()
     app = build_http_app(settings)
 
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        # Slack Events: first request consumes the only token, second should be rate limited
-        ts = str(int(time.time()))
-        resp1 = await client.post(
-            "/slack/events",
-            content="{}",
-            headers={"X-Slack-Request-Timestamp": ts, "X-Slack-Signature": "v0=invalid"},
-        )
-        assert resp1.status_code != 429
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            # Slack Events: first request consumes the only token, second should be rate limited
+            ts = str(int(time.time()))
+            resp1 = await client.post(
+                "/slack/events",
+                content="{}",
+                headers={"X-Slack-Request-Timestamp": ts, "X-Slack-Signature": "v0=invalid"},
+            )
+            assert resp1.status_code != 429
 
-        resp2 = await client.post(
-            "/slack/events",
-            content="{}",
-            headers={"X-Slack-Request-Timestamp": ts, "X-Slack-Signature": "v0=invalid"},
-        )
-        assert resp2.status_code == 429
+            resp2 = await client.post(
+                "/slack/events",
+                content="{}",
+                headers={"X-Slack-Request-Timestamp": ts, "X-Slack-Signature": "v0=invalid"},
+            )
+            assert resp2.status_code == 429
 
-        # Slackbox: burst of two should be allowed, third should be limited
-        form = {
-            "token": "slackbox-token",
-            "text": "hello from slackbox",
-            "channel_name": "CCHAN123",
-            "timestamp": "1111.2222",
-        }
-        resp3 = await client.post("/slackbox/incoming", data=form)
-        resp4 = await client.post("/slackbox/incoming", data=form)
+            # Slackbox: burst of two should be allowed, third should be limited
+            form = {
+                "token": "slackbox-token",
+                "text": "hello from slackbox",
+                "channel_name": "CCHAN123",
+                "timestamp": "1111.2222",
+            }
+            resp3 = await client.post("/slackbox/incoming", data=form)
+            resp4 = await client.post("/slackbox/incoming", data=form)
 
-        assert resp3.status_code != 429
-        assert resp4.status_code != 429
+            assert resp3.status_code != 429
+            assert resp4.status_code != 429
 
-        resp5 = await client.post("/slackbox/incoming", data=form)
-        assert resp5.status_code == 429
+            resp5 = await client.post("/slackbox/incoming", data=form)
+            assert resp5.status_code == 429

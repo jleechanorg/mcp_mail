@@ -9,7 +9,7 @@
 install_beads_mcp() {
     local BD_FOUND=0
     local BD_PATH=""
-    
+
     # Check if bd CLI exists in PATH
     if command -v bd >/dev/null 2>&1; then
         BD_FOUND=1
@@ -19,7 +19,7 @@ install_beads_mcp() {
         BD_FOUND=1
         BD_PATH="$HOME/go/bin/bd"
     fi
-    
+
     # Only set BEADS_PATH if bd was actually found
     if [[ $BD_FOUND -eq 1 ]]; then
         export BEADS_PATH="$BD_PATH"
@@ -28,7 +28,6 @@ install_beads_mcp() {
         echo "Warning: beads CLI (bd) not found. Skipping BEADS_PATH configuration."
         return 1
     fi
-    
+
     # ... rest of installation logic ...
 }
-
