@@ -12,7 +12,6 @@
     }
   },
   "hooks": {
-    "_comment": "Example hooks are commented out - customize with your actual project/agent names",
     "SessionStart": [],
     "PreToolUse": [],
     "PostToolUse": []
