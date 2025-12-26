@@ -1681,7 +1681,7 @@ wheels = [
 
 [[package]]
 name = "mcp-mail"
-version = "0.1.15"
+version = "0.1.16"
 source = { editable = "." }
 dependencies = [
     { name = "aiolimiter" },
