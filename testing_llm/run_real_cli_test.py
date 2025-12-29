@@ -335,13 +335,15 @@ def create_agent_prompts(run_id: str, project_key: Optional[str]) -> dict[str, s
     prompts = {
         f"FrontendDev-{run_id}": f"""You are Agent1 (FrontendDev-{run_id}). Your task:
 
-{_register_block(
-    project_key=project_key,
-    agent_name=f"FrontendDev-{run_id}",
-    program="cli-agent",
-    model="test",
-    task_description="React UI Development",
-)}
+{
+            _register_block(
+                project_key=project_key,
+                agent_name=f"FrontendDev-{run_id}",
+                program="cli-agent",
+                model="test",
+                task_description="React UI Development",
+            )
+        }
 
 2. Send a message to BackendDev-{run_id}:
    - Use tool: send_message
@@ -362,13 +364,15 @@ def create_agent_prompts(run_id: str, project_key: Optional[str]) -> dict[str, s
 1. Wait 3 seconds for Agent1 to register and send message
 
 2. Register yourself using mcp-agent-mail:
-{_register_block(
-    project_key=project_key,
-    agent_name=f"BackendDev-{run_id}",
-    program="cli-agent",
-    model="test",
-    task_description="FastAPI Backend Development",
-)}
+{
+            _register_block(
+                project_key=project_key,
+                agent_name=f"BackendDev-{run_id}",
+                program="cli-agent",
+                model="test",
+                task_description="FastAPI Backend Development",
+            )
+        }
 
 3. Check your inbox and look for message from FrontendDev-{run_id}
 
@@ -389,13 +393,15 @@ def create_agent_prompts(run_id: str, project_key: Optional[str]) -> dict[str, s
 1. Wait 6 seconds for other agents to start
 
 2. Register yourself using mcp-agent-mail:
-{_register_block(
-    project_key=project_key,
-    agent_name=f"DatabaseAdmin-{run_id}",
-    program="cli-agent",
-    model="test",
-    task_description="PostgreSQL Database Management",
-)}
+{
+            _register_block(
+                project_key=project_key,
+                agent_name=f"DatabaseAdmin-{run_id}",
+                program="cli-agent",
+                model="test",
+                task_description="PostgreSQL Database Management",
+            )
+        }
 
 3. Check your inbox and look for message from BackendDev-{run_id}
 
