@@ -1725,7 +1725,7 @@ async def _create_placeholder_agent(
     return agent
 
 
-async def _delete_agent(agent: Agent, project: Project, settings: Settings) -> dict[str, Any]:
+async def _delete_agent(agent: Agent, project: Project) -> dict[str, Any]:
     """Delete an agent and all related records from the database.
 
     This function:
@@ -3724,7 +3724,7 @@ def build_mcp_server() -> FastMCP:
         # Get the agent's actual project (no fallback to avoid partial deletions)
         project = await _require_project_for_agent(agent, "delete agent")
 
-        stats = await _delete_agent(agent, project, settings)
+        stats = await _delete_agent(agent, project)
         await ctx.info(f"Deleted agent '{name}' from project '{project.human_key}'.")
         return stats
 
