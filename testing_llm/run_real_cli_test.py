@@ -103,7 +103,7 @@ def _load_env_value(key: str) -> Optional[str]:
     decouple_config = DecoupleConfig(RepositoryEnv(str(ENV_PATH)))
     try:
         value = decouple_config(key)
-    except Exception:
+    except (KeyError, ValueError, TypeError):
         return None
     if value is None:
         return None
@@ -125,7 +125,7 @@ def _load_bearer_token() -> Optional[str]:
             auth_header = headers.get("Authorization", "")
             if auth_header.lower().startswith("bearer "):
                 return auth_header.split(" ", 1)[1].strip()
-    except Exception:
+    except (OSError, json.JSONDecodeError, KeyError, IndexError):
         return None
     return None
 
@@ -279,6 +279,10 @@ def run_cli_agent(
             stdin_handle: Any = subprocess.DEVNULL
         else:
             stdin_path = Path(stdin_template.format(prompt_file=str(prompt_file)))
+            if not stdin_path.exists():
+                raise FileNotFoundError(
+                    f"stdin template path does not exist for {cli_name}: {stdin_path}"
+                )
             stdin_handle = output_stack.enter_context(stdin_path.open())
 
         # Start process (non-blocking)
@@ -618,22 +622,6 @@ Evidence Files:
 
     return results
 
-
-def _run_project_key_mode(
-    *,
-    cli_name: str,
-    dry_run: bool,
-    timeout: int,
-    project_key_mode: str,
-) -> dict[str, Any]:
-    return run_multi_agent_test(
-        cli_name=cli_name,
-        dry_run=dry_run,
-        timeout=timeout,
-        project_key_mode=project_key_mode,
-    )
-
-
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -669,7 +657,7 @@ def main():
     suite_results: list[dict[str, Any]] = []
     for mode in modes:
         suite_results.append(
-            _run_project_key_mode(
+            run_multi_agent_test(
                 cli_name=args.cli,
                 dry_run=args.dry_run,
                 timeout=args.timeout,
