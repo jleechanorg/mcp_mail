@@ -878,6 +878,22 @@ async def _get_project_for_agent(agent: Agent) -> Optional[Project]:
         return project
 
 
+async def _require_project_for_agent(agent: Agent, action: str) -> Project:
+    """Return the agent's project or raise a clear error if none exists."""
+
+    project = await _get_project_for_agent(agent)
+    if project is None:
+        raise ToolExecutionError(
+            "NOT_FOUND",
+            (
+                f"Cannot {action}: agent '{agent.name}' is not associated with a project. "
+                "The project may have been deleted or not yet assigned."
+            ),
+            recoverable=False,
+        )
+    return project
+
+
 async def _ensure_global_inbox_agent(project: Project, session: AsyncSession | None = None) -> Agent:
     """Ensure the global inbox agent exists for the given project.
 
@@ -1709,15 +1725,14 @@ async def _create_placeholder_agent(
     return agent
 
 
-async def _delete_agent(project: Project, name: str, settings: Settings) -> dict[str, Any]:
+async def _delete_agent(agent: Agent, project: Project) -> dict[str, Any]:
     """Delete an agent and all related records from the database.
 
     This function:
-    1. Deletes the agent from the agents table
-    2. Deletes associated MessageRecipient records
-    3. Deletes messages sent by the agent
-    4. Deletes file reservations held by the agent
-    5. Writes a deletion marker to the Git archive
+    1. Deletes associated MessageRecipient records
+    2. Deletes messages sent by the agent
+    3. Deletes file reservations held by the agent
+    4. Deletes the agent record itself
 
     Returns a dict with deletion statistics.
     """
@@ -1726,10 +1741,10 @@ async def _delete_agent(project: Project, name: str, settings: Settings) -> dict
 
     await ensure_schema()
 
-    # First, get the agent to ensure it exists
-    agent = await _get_agent(project, name)
     if agent.id is None:
         raise ValueError("Agent must have an id before deletion.")
+    if agent.project_id is not None and agent.project_id != project.id:
+        raise ValueError("Agent project does not match provided project; refusing cross-project deletion.")
 
     agent_id = agent.id
     agent_name = agent.name
@@ -1747,7 +1762,6 @@ async def _delete_agent(project: Project, name: str, settings: Settings) -> dict
         # Subquery of messages authored by this agent (keeps work in DB; avoids param limits)
         msg_ids_subq = select(Message.id).where(
             Message.sender_id == agent_id,
-            Message.project_id == project.id,
         )
 
         # 1) Delete MessageRecipient records where this agent is the recipient
@@ -3672,7 +3686,7 @@ def build_mcp_server() -> FastMCP:
         Parameters
         ----------
         project_key : str
-            Any string identifier for the project containing the agent.
+            Informational only; the agent is identified globally by name. Used for logging/telemetry.
         name : str
             The exact name of the agent to delete (case-insensitive).
 
@@ -3700,10 +3714,17 @@ def build_mcp_server() -> FastMCP:
         --------
         - This operation cannot be undone. The agent and all associated data will be permanently deleted.
         - If the agent doesn't exist, a NoResultFound error will be raised.
+        - If the agent has no associated project (e.g., project was deleted), deletion will fail
+          with a clear error to avoid partial cleanup.
         - Other agents' messages TO this agent will have their recipient records deleted but the messages themselves remain.
         """
-        project = await _get_project_by_identifier(project_key)
-        stats = await _delete_agent(project, name, settings)
+        # Look up agent globally first (agents are globally unique)
+        agent = await _get_agent_by_name(name)
+
+        # Get the agent's actual project (no fallback to avoid partial deletions)
+        project = await _require_project_for_agent(agent, "delete agent")
+
+        stats = await _delete_agent(agent, project)
         await ctx.info(f"Deleted agent '{name}' from project '{project.human_key}'.")
         return stats
 
@@ -3730,8 +3751,10 @@ def build_mcp_server() -> FastMCP:
         Agent names are GLOBALLY UNIQUE across all projects. Use `whois` or `resource://agents`
         to verify agent existence - do NOT rely on project-scoped agent lists for discovery.
 
-        This tool first checks the specified project, then falls back to a global search.
+        This tool performs a global search by name (project_key is informational only).
         If no agent is found, it suggests similar agent names that may match your intent.
+        If the agent has no associated project, the profile is still returned and the
+        missing project association is logged as a warning.
 
         Discovery
         ---------
@@ -3741,7 +3764,7 @@ def build_mcp_server() -> FastMCP:
         Parameters
         ----------
         project_key : str
-            Project slug or human key.
+            Informational only; provided for logging/telemetry. Agent lookup is global.
         agent_name : str
             Agent name to look up (use resource://agents to discover names globally).
         include_recent_commits : bool
@@ -3759,14 +3782,8 @@ def build_mcp_server() -> FastMCP:
         ToolExecutionError
             If the agent cannot be found. The error payload includes suggestions.
         """
-        project = await _get_project_by_identifier(project_key)
-
-        # First try to find agent in the specified project
-        agent = await _get_agent_optional(project, agent_name)
-
-        # If not found in project, try global lookup
-        if not agent:
-            agent = await _get_agent_by_name_optional(agent_name)
+        # Look up agent globally first (agents are globally unique)
+        agent = await _get_agent_by_name_optional(agent_name)
 
         # If still not found, generate suggestions
         if not agent:
@@ -3778,7 +3795,7 @@ def build_mcp_server() -> FastMCP:
             await ctx.warning(error_msg)
             raise ToolExecutionError(
                 "NOT_FOUND",
-                f"Agent '{agent_name}' not registered for project '{project.human_key}'.{suggestion_text}",
+                f"Agent '{agent_name}' not registered globally.{suggestion_text}",
                 data={
                     "agent_name": agent_name,
                     "suggestions": suggestions,
@@ -3786,16 +3803,18 @@ def build_mcp_server() -> FastMCP:
                 },
             )
 
-        # Get the agent's actual project for commit history and logging
-        # With nullable project_id, fall back to the default global project when unset.
-        agent_project = await _get_project_for_agent(agent)
-        if agent_project is None:
-            agent_project = await _get_default_project()
-
         profile = _agent_to_dict(agent)
         # NOTE: Archive storage has been removed. recent_commits is always empty.
         profile["recent_commits"] = []
-        await ctx.info(f"whois for '{agent_name}' in '{agent_project.human_key}'")
+        agent_project = await _get_project_for_agent(agent)
+        if agent_project is None:
+            await ctx.warning(
+                ("Agent '%s' has no associated project; returning profile without project context.") % agent_name
+            )
+            project_label = "<no-project>"
+        else:
+            project_label = agent_project.human_key
+        await ctx.info(f"whois for '{agent_name}' in '{project_label}'")
         return profile
 
     @mcp.tool(name="create_agent_identity")
@@ -3919,6 +3938,12 @@ def build_mcp_server() -> FastMCP:
         The project_key parameter is informational only and does not restrict which agents
         can communicate.
 
+        Project resolution
+        ------------------
+        Messages are recorded under the sender's associated project. If the sender no longer
+        has an associated project (for example, the project was deleted), this call fails to
+        avoid mis-routing messages into an unrelated project.
+
         Discovery
         ---------
         Use resource://agents (global) to discover all registered agents.
@@ -3934,8 +3959,8 @@ def build_mcp_server() -> FastMCP:
         Parameters
         ----------
         project_key : Optional[str]
-            Project identifier (informational only for agent lookup; agents are global). If omitted,
-            the sender's project (or the default global project) is used for routing metadata.
+            Informational only; agent lookup is global. Routing uses the sender's actual project
+            association and fails if none exists.
         sender_name : str
             Must match an existing agent name (agents are global).
         to : Optional[list[str]]
@@ -4030,12 +4055,13 @@ def build_mcp_server() -> FastMCP:
         assert sender_name is not None
         assert subject is not None
         assert body_md is not None
-        # If project_key is None, use sender's project or default project
         # Messages are routed by agent name (globally unique), so project is informational only
-        if project_key is not None:
-            project = await _get_project_by_identifier(project_key)
-        else:
-            project = None
+        # Look up sender first, then use sender's project (ignore project_key)
+        sender = await _get_agent_by_name(sender_name)
+
+        # Use sender's associated project; fail fast if missing to avoid mis-routing
+        project = await _require_project_for_agent(sender, "send message")
+
         to = to or []
         if not isinstance(to, list):
             await ctx.error("INVALID_ARGUMENT: to must be a list of strings.")
@@ -4092,13 +4118,7 @@ def build_mcp_server() -> FastMCP:
                 recoverable=True,
                 data={"argument": "bcc"},
             )
-        sender = await _get_agent_by_name(sender_name)
-
-        # If project wasn't specified, derive from sender's project or use default
-        if project is None:
-            project = await _get_project_for_agent(sender)
-            if project is None:
-                project = await _get_default_project()
+        # sender and project already looked up above
         if get_settings().tools_log_enabled:
             try:
                 import importlib as _imp
@@ -4397,15 +4417,18 @@ def build_mcp_server() -> FastMCP:
         - `thread_id` is taken from the original message if present; otherwise, the original id is used
         - Subject is prefixed with `subject_prefix` if not already present
         - Defaults `to` to the original sender if not explicitly provided
+        - Agent lookup is global by name; project_key is informational only and used for logging
+        - Replies are recorded under the sender's associated project; if the sender has no project,
+          the call fails to prevent routing the reply into an unrelated project
 
         Parameters
         ----------
         project_key : str
-            Project identifier.
+            Informational only; agent lookup is global and routing uses the sender's project association.
         message_id : int
             The id of the message you are replying to.
         sender_name : str
-            Your agent name (must be registered in the project).
+            Your agent name (looked up globally by name).
         body_md : str
             Reply body in Markdown.
         to, cc, bcc : Optional[list[str]]
@@ -4449,8 +4472,12 @@ def build_mcp_server() -> FastMCP:
         }}}
         ```
         """
-        project = await _get_project_by_identifier(project_key)
+        # Look up sender globally first (agents are globally unique)
         sender = await _get_agent_by_name(sender_name)
+
+        # Get project from sender's association (no fallback to avoid cross-project replies)
+        project = await _require_project_for_agent(sender, "send reply")
+
         original = await _get_message_by_id_global(message_id)
         original_sender = await _get_agent_by_id_global(original.sender_id)
         thread_key = original.thread_id or str(original.id)
@@ -4607,6 +4634,12 @@ def build_mcp_server() -> FastMCP:
         and does not affect message retrieval. Agents can see all messages sent to them
         regardless of which project_key is used in the fetch call.
 
+        Project resolution
+        ------------------
+        Messages are fetched from the inbox associated with the agent's project. If the agent no
+        longer has a project (for example, the project was deleted), the call fails to avoid
+        returning messages from an unrelated project.
+
         Filters
         -------
         - `urgent_only`: only messages with importance in {high, urgent}
@@ -4652,8 +4685,11 @@ def build_mcp_server() -> FastMCP:
                 pass
         try:
             # project_key is now informational only - agents are looked up globally
-            project = await _get_project_by_identifier(project_key)
             agent = await _get_agent_by_name(agent_name)
+
+            # Get project from agent's association (no fallback to avoid reading wrong inbox)
+            project = await _require_project_for_agent(agent, "fetch inbox")
+
             items = await _list_inbox(project, agent, limit, urgent_only, include_bodies, since_ts)
             await ctx.info(f"Fetched {len(items)} messages for '{agent.name}'. urgent_only={urgent_only}")
             return items
