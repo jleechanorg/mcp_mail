@@ -280,9 +280,7 @@ def run_cli_agent(
         else:
             stdin_path = Path(stdin_template.format(prompt_file=str(prompt_file)))
             if not stdin_path.exists():
-                raise FileNotFoundError(
-                    f"stdin template path does not exist for {cli_name}: {stdin_path}"
-                )
+                raise FileNotFoundError(f"stdin template path does not exist for {cli_name}: {stdin_path}")
             stdin_handle = output_stack.enter_context(stdin_path.open())
 
         # Start process (non-blocking)
@@ -621,6 +619,7 @@ Evidence Files:
     print("=" * 70)
 
     return results
+
 
 def main():
     """Main entry point."""

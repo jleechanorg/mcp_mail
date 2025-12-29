@@ -1745,9 +1745,7 @@ async def _delete_agent(agent: Agent, project: Project, settings: Settings) -> d
     if agent.id is None:
         raise ValueError("Agent must have an id before deletion.")
     if agent.project_id is not None and agent.project_id != project.id:
-        raise ValueError(
-            "Agent project does not match provided project; refusing cross-project deletion."
-        )
+        raise ValueError("Agent project does not match provided project; refusing cross-project deletion.")
 
     agent_id = agent.id
     agent_name = agent.name
