@@ -12,6 +12,12 @@ Usage:
     python testing_llm/run_real_cli_test.py --cli codex
     python testing_llm/run_real_cli_test.py --cli gemini
 
+    # Run both with/without project_key (default)
+    python testing_llm/run_real_cli_test.py --project-key-mode both
+
+    # Run only without project_key
+    python testing_llm/run_real_cli_test.py --project-key-mode without
+
     # Dry run (don't execute CLIs)
     python testing_llm/run_real_cli_test.py --dry-run
 
@@ -24,6 +30,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import importlib
+import json
 import os
 import shlex
 import shutil
@@ -35,6 +42,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from decouple import Config as DecoupleConfig, RepositoryEnv  # type: ignore
+
 # Orchestration framework for CLI profiles
 try:
     orchestration_module = importlib.import_module("orchestration.task_dispatcher")
@@ -43,6 +52,11 @@ try:
 except ImportError:
     CLI_PROFILES = {}
     ORCHESTRATION_AVAILABLE = False
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+ENV_PATH = PROJECT_ROOT / ".env"
+MCP_CONFIG_PATH = PROJECT_ROOT / ".mcp.json"
 
 
 # CLI configuration mapping (extends orchestration profiles with MCP-specific settings)
@@ -67,7 +81,7 @@ MCP_CLI_CONFIG = {
 
 def get_timestamp() -> str:
     """Get timestamp for unique identifiers."""
-    return datetime.now().strftime("%Y%m%d_%H%M%S")
+    return datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 
 
 def setup_test_directory() -> Path:
@@ -80,6 +94,40 @@ def setup_test_directory() -> Path:
 
     print(f"Test directory: {test_dir}")
     return test_dir
+
+
+def _load_env_value(key: str) -> Optional[str]:
+    """Load a value from the repo .env using python-decouple."""
+    if not ENV_PATH.exists():
+        return None
+    decouple_config = DecoupleConfig(RepositoryEnv(str(ENV_PATH)))
+    try:
+        value = decouple_config(key)
+    except Exception:
+        return None
+    if value is None:
+        return None
+    val_str = str(value).strip()
+    if not val_str:
+        return None
+    return val_str
+
+
+def _load_bearer_token() -> Optional[str]:
+    """Best-effort bearer token lookup for MCP HTTP auth."""
+    token = _load_env_value("HTTP_BEARER_TOKEN")
+    if token:
+        return token
+    try:
+        if MCP_CONFIG_PATH.exists():
+            config = json.loads(MCP_CONFIG_PATH.read_text())
+            headers = config.get("mcpServers", {}).get("mcp-agent-mail", {}).get("headers", {})
+            auth_header = headers.get("Authorization", "")
+            if auth_header.lower().startswith("bearer "):
+                return auth_header.split(" ", 1)[1].strip()
+    except Exception:
+        return None
+    return None
 
 
 def check_cli_available(cli_name: str) -> tuple[bool, str]:
@@ -211,6 +259,10 @@ def run_cli_agent(
         env[config_env] = config_file
     env["NO_COLOR"] = "1"  # Disable color output for cleaner logs
 
+    bearer_token = _load_bearer_token()
+    if bearer_token:
+        env["HTTP_BEARER_TOKEN"] = bearer_token
+
     print(f"  Command: {' '.join(command)}")
     print(f"  Output: {output_file}")
 
@@ -219,15 +271,24 @@ def run_cli_agent(
 
     output_stack: Optional[contextlib.ExitStack] = None
     try:
-        # Open output file for writing and keep handle alive until caller closes
         output_stack = contextlib.ExitStack()
         output_handle = output_stack.enter_context(output_file.open("w"))
+
+        stdin_template = CLI_PROFILES.get(cli_name, {}).get("stdin_template", "/dev/null")
+        if stdin_template == "/dev/null":
+            stdin_handle: Any = subprocess.DEVNULL
+        else:
+            stdin_path = Path(stdin_template.format(prompt_file=str(prompt_file)))
+            stdin_handle = output_stack.enter_context(stdin_path.open())
+
         # Start process (non-blocking)
         process = subprocess.Popen(
             command,
             stdout=output_handle,
             stderr=subprocess.STDOUT,
+            stdin=stdin_handle,
             env=env,
+            cwd=str(PROJECT_ROOT),
             shell=False,  # Security: avoid shell injection
             text=True,
         )
@@ -241,12 +302,32 @@ def run_cli_agent(
         return False, f"Failed to start: {e}", None, None
 
 
-def create_agent_prompts(run_id: str, project_key: str) -> dict[str, str]:
+def _register_block(
+    *,
+    project_key: Optional[str],
+    agent_name: str,
+    program: str,
+    model: str,
+    task_description: str,
+) -> str:
+    project_line = f'   - project_key: "{project_key}"\n' if project_key else ""
+    return (
+        "1. Register yourself using the mcp-agent-mail MCP server:\n"
+        "   - Use tool: register_agent\n"
+        f"{project_line}"
+        f'   - name: "{agent_name}"\n'
+        f'   - program: "{program}"\n'
+        f'   - model: "{model}"\n'
+        f'   - task_description: "{task_description}"\n'
+    )
+
+
+def create_agent_prompts(run_id: str, project_key: Optional[str]) -> dict[str, str]:
     """Create prompts for each agent.
 
     Args:
         run_id: Unique run identifier
-        project_key: Project key for MCP Agent Mail
+        project_key: Project key for MCP Agent Mail (optional)
 
     Returns:
         Dictionary mapping agent name to prompt
@@ -254,13 +335,13 @@ def create_agent_prompts(run_id: str, project_key: str) -> dict[str, str]:
     prompts = {
         f"FrontendDev-{run_id}": f"""You are Agent1 (FrontendDev-{run_id}). Your task:
 
-1. Register yourself using the mcp-agent-mail MCP server:
-   - Use tool: register_agent
-   - project_key: "{project_key}"
-   - name: "FrontendDev-{run_id}"
-   - program: "cli-agent"
-   - model: "test"
-   - task_description: "React UI Development"
+{_register_block(
+    project_key=project_key,
+    agent_name=f"FrontendDev-{run_id}",
+    program="cli-agent",
+    model="test",
+    task_description="React UI Development",
+)}
 
 2. Send a message to BackendDev-{run_id}:
    - Use tool: send_message
@@ -281,11 +362,13 @@ def create_agent_prompts(run_id: str, project_key: str) -> dict[str, str]:
 1. Wait 3 seconds for Agent1 to register and send message
 
 2. Register yourself using mcp-agent-mail:
-   - project_key: "{project_key}"
-   - name: "BackendDev-{run_id}"
-   - program: "cli-agent"
-   - model: "test"
-   - task_description: "FastAPI Backend Development"
+{_register_block(
+    project_key=project_key,
+    agent_name=f"BackendDev-{run_id}",
+    program="cli-agent",
+    model="test",
+    task_description="FastAPI Backend Development",
+)}
 
 3. Check your inbox and look for message from FrontendDev-{run_id}
 
@@ -306,11 +389,13 @@ def create_agent_prompts(run_id: str, project_key: str) -> dict[str, str]:
 1. Wait 6 seconds for other agents to start
 
 2. Register yourself using mcp-agent-mail:
-   - project_key: "{project_key}"
-   - name: "DatabaseAdmin-{run_id}"
-   - program: "cli-agent"
-   - model: "test"
-   - task_description: "PostgreSQL Database Management"
+{_register_block(
+    project_key=project_key,
+    agent_name=f"DatabaseAdmin-{run_id}",
+    program="cli-agent",
+    model="test",
+    task_description="PostgreSQL Database Management",
+)}
 
 3. Check your inbox and look for message from BackendDev-{run_id}
 
@@ -327,9 +412,11 @@ def create_agent_prompts(run_id: str, project_key: str) -> dict[str, str]:
 
 
 def run_multi_agent_test(
+    *,
     cli_name: str = "claude",
     dry_run: bool = False,
     timeout: int = 120,
+    project_key_mode: str = "with",
 ) -> dict:
     """Run the multi-agent coordination test.
 
@@ -340,6 +427,7 @@ def run_multi_agent_test(
         cli_name: Which CLI to use (claude, codex, gemini)
         dry_run: If True, don't actually execute CLIs
         timeout: Timeout for each agent in seconds
+        project_key_mode: "with" for project_key, "without" for no project key
 
     Returns:
         Test results dictionary
@@ -347,6 +435,7 @@ def run_multi_agent_test(
     print("=" * 70)
     print("Real CLI Multi-Agent Coordination Test")
     print(f"CLI: {cli_name}")
+    print(f"Project key mode: {project_key_mode}")
     print("=" * 70)
 
     agents: list[dict[str, Any]] = []
@@ -382,10 +471,13 @@ def run_multi_agent_test(
 
     # Create unique identifiers
     run_id = get_timestamp()
-    project_key = f"/tmp/real_cli_test_project_{run_id}"
+    project_key = None
+    if project_key_mode == "with":
+        project_key = f"/tmp/real_cli_test_project_{run_id}"
 
     results["run_id"] = run_id
     results["project_key"] = project_key
+    results["project_key_mode"] = project_key_mode
 
     # Create prompts
     prompts = create_agent_prompts(run_id, project_key)
@@ -474,6 +566,8 @@ Test Directory: {test_dir}
 Timestamp: {results["timestamp"]}
 CLI: {cli_name}
 Run ID: {run_id}
+Project key mode: {project_key_mode}
+Project key: {project_key if project_key else "(none)"}
 
 Agents:
 """
@@ -519,6 +613,21 @@ Evidence Files:
     return results
 
 
+def _run_project_key_mode(
+    *,
+    cli_name: str,
+    dry_run: bool,
+    timeout: int,
+    project_key_mode: str,
+) -> dict[str, Any]:
+    return run_multi_agent_test(
+        cli_name=cli_name,
+        dry_run=dry_run,
+        timeout=timeout,
+        project_key_mode=project_key_mode,
+    )
+
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -541,16 +650,30 @@ def main():
         default=120,
         help="Timeout per agent in seconds (default: 120)",
     )
+    parser.add_argument(
+        "--project-key-mode",
+        choices=["with", "without", "both"],
+        default="both",
+        help="Run with project key, without, or both (default: both)",
+    )
 
     args = parser.parse_args()
 
-    results = run_multi_agent_test(
-        cli_name=args.cli,
-        dry_run=args.dry_run,
-        timeout=args.timeout,
-    )
+    modes = ["with", "without"] if args.project_key_mode == "both" else [args.project_key_mode]
+    suite_results: list[dict[str, Any]] = []
+    for mode in modes:
+        suite_results.append(
+            _run_project_key_mode(
+                cli_name=args.cli,
+                dry_run=args.dry_run,
+                timeout=args.timeout,
+                project_key_mode=mode,
+            )
+        )
 
-    sys.exit(0 if results["status"] == "success" else 1)
+    all_success = all(result["status"] == "success" for result in suite_results)
+
+    sys.exit(0 if all_success else 1)
 
 
 if __name__ == "__main__":
