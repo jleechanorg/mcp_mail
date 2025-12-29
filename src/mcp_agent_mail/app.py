@@ -3702,7 +3702,14 @@ def build_mcp_server() -> FastMCP:
         - If the agent doesn't exist, a NoResultFound error will be raised.
         - Other agents' messages TO this agent will have their recipient records deleted but the messages themselves remain.
         """
-        project = await _get_project_by_identifier(project_key)
+        # Look up agent globally first (agents are globally unique)
+        agent = await _get_agent_by_name(name)
+
+        # Get agent's project for deletion
+        project = await _get_project_for_agent(agent)
+        if project is None:
+            project = await _get_default_project()
+
         stats = await _delete_agent(project, name, settings)
         await ctx.info(f"Deleted agent '{name}' from project '{project.human_key}'.")
         return stats
@@ -3759,14 +3766,8 @@ def build_mcp_server() -> FastMCP:
         ToolExecutionError
             If the agent cannot be found. The error payload includes suggestions.
         """
-        project = await _get_project_by_identifier(project_key)
-
-        # First try to find agent in the specified project
-        agent = await _get_agent_optional(project, agent_name)
-
-        # If not found in project, try global lookup
-        if not agent:
-            agent = await _get_agent_by_name_optional(agent_name)
+        # Look up agent globally first (agents are globally unique)
+        agent = await _get_agent_by_name_optional(agent_name)
 
         # If still not found, generate suggestions
         if not agent:
@@ -3778,7 +3779,7 @@ def build_mcp_server() -> FastMCP:
             await ctx.warning(error_msg)
             raise ToolExecutionError(
                 "NOT_FOUND",
-                f"Agent '{agent_name}' not registered for project '{project.human_key}'.{suggestion_text}",
+                f"Agent '{agent_name}' not registered globally.{suggestion_text}",
                 data={
                     "agent_name": agent_name,
                     "suggestions": suggestions,
@@ -4030,12 +4031,15 @@ def build_mcp_server() -> FastMCP:
         assert sender_name is not None
         assert subject is not None
         assert body_md is not None
-        # If project_key is None, use sender's project or default project
         # Messages are routed by agent name (globally unique), so project is informational only
-        if project_key is not None:
-            project = await _get_project_by_identifier(project_key)
-        else:
-            project = None
+        # Look up sender first, then use sender's project (ignore project_key)
+        sender = await _get_agent_by_name(sender_name)
+
+        # Use sender's associated project or default project
+        project = await _get_project_for_agent(sender)
+        if project is None:
+            project = await _get_default_project()
+
         to = to or []
         if not isinstance(to, list):
             await ctx.error("INVALID_ARGUMENT: to must be a list of strings.")
@@ -4092,13 +4096,7 @@ def build_mcp_server() -> FastMCP:
                 recoverable=True,
                 data={"argument": "bcc"},
             )
-        sender = await _get_agent_by_name(sender_name)
-
-        # If project wasn't specified, derive from sender's project or use default
-        if project is None:
-            project = await _get_project_for_agent(sender)
-            if project is None:
-                project = await _get_default_project()
+        # sender and project already looked up above
         if get_settings().tools_log_enabled:
             try:
                 import importlib as _imp
@@ -4449,8 +4447,14 @@ def build_mcp_server() -> FastMCP:
         }}}
         ```
         """
-        project = await _get_project_by_identifier(project_key)
+        # Look up sender globally first (agents are globally unique)
         sender = await _get_agent_by_name(sender_name)
+
+        # Get project from sender's association (ignore project_key)
+        project = await _get_project_for_agent(sender)
+        if project is None:
+            project = await _get_default_project()
+
         original = await _get_message_by_id_global(message_id)
         original_sender = await _get_agent_by_id_global(original.sender_id)
         thread_key = original.thread_id or str(original.id)
@@ -4652,8 +4656,13 @@ def build_mcp_server() -> FastMCP:
                 pass
         try:
             # project_key is now informational only - agents are looked up globally
-            project = await _get_project_by_identifier(project_key)
             agent = await _get_agent_by_name(agent_name)
+
+            # Get project from agent's association (or default) instead of requiring valid project_key
+            project = await _get_project_for_agent(agent)
+            if project is None:
+                project = await _get_default_project()
+
             items = await _list_inbox(project, agent, limit, urgent_only, include_bodies, since_ts)
             await ctx.info(f"Fetched {len(items)} messages for '{agent.name}'. urgent_only={urgent_only}")
             return items
