@@ -3710,8 +3710,9 @@ def build_mcp_server() -> FastMCP:
         project = await _get_project_for_agent(agent)
         if project is None:
             raise ToolExecutionError(
+                "PROJECT_NOT_FOUND",
                 f"Cannot delete agent '{name}': associated project not found. "
-                "The project may have been deleted; delete associated data manually if needed."
+                "The project may have been deleted; delete associated data manually if needed.",
             )
 
         stats = await _delete_agent(project, name, settings)
@@ -3795,8 +3796,9 @@ def build_mcp_server() -> FastMCP:
         agent_project = await _get_project_for_agent(agent)
         if agent_project is None:
             raise ToolExecutionError(
+                "PROJECT_NOT_FOUND",
                 f"Cannot retrieve profile for agent '{agent_name}': associated project not found. "
-                "The project may have been deleted or is misconfigured."
+                "The project may have been deleted or is misconfigured.",
             )
 
         profile = _agent_to_dict(agent)
@@ -4047,8 +4049,9 @@ def build_mcp_server() -> FastMCP:
         project = await _get_project_for_agent(sender)
         if project is None:
             raise ToolExecutionError(
+                "PROJECT_NOT_FOUND",
                 f"Cannot send message from agent '{sender_name}': associated project not found. "
-                "The project may have been deleted."
+                "The project may have been deleted.",
             )
 
         to = to or []
@@ -4467,8 +4470,9 @@ def build_mcp_server() -> FastMCP:
         project = await _get_project_for_agent(sender)
         if project is None:
             raise ToolExecutionError(
+                "PROJECT_NOT_FOUND",
                 f"Cannot reply from agent '{sender_name}': associated project not found. "
-                "The project may have been deleted."
+                "The project may have been deleted.",
             )
 
         original = await _get_message_by_id_global(message_id)
@@ -4679,8 +4683,9 @@ def build_mcp_server() -> FastMCP:
             project = await _get_project_for_agent(agent)
             if project is None:
                 raise ToolExecutionError(
+                    "PROJECT_NOT_FOUND",
                     f"Cannot fetch inbox for agent '{agent_name}': associated project not found. "
-                    "The project may have been deleted."
+                    "The project may have been deleted.",
                 )
 
             items = await _list_inbox(project, agent, limit, urgent_only, include_bodies, since_ts)
