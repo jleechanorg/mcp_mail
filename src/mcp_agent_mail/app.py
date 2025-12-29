@@ -3705,10 +3705,14 @@ def build_mcp_server() -> FastMCP:
         # Look up agent globally first (agents are globally unique)
         agent = await _get_agent_by_name(name)
 
-        # Get agent's project for deletion
+        # Get agent's project for deletion; do not fall back to a default project,
+        # as that could cause incomplete deletion if the agent's data lives elsewhere.
         project = await _get_project_for_agent(agent)
         if project is None:
-            project = await _get_default_project()
+            raise ToolExecutionError(
+                f"Cannot delete agent '{name}': associated project not found. "
+                "The project may have been deleted; delete associated data manually if needed."
+            )
 
         stats = await _delete_agent(project, name, settings)
         await ctx.info(f"Deleted agent '{name}' from project '{project.human_key}'.")
@@ -3788,10 +3792,12 @@ def build_mcp_server() -> FastMCP:
             )
 
         # Get the agent's actual project for commit history and logging
-        # With nullable project_id, fall back to the default global project when unset.
         agent_project = await _get_project_for_agent(agent)
         if agent_project is None:
-            agent_project = await _get_default_project()
+            raise ToolExecutionError(
+                f"Cannot retrieve profile for agent '{agent_name}': associated project not found. "
+                "The project may have been deleted or is misconfigured."
+            )
 
         profile = _agent_to_dict(agent)
         # NOTE: Archive storage has been removed. recent_commits is always empty.
@@ -4035,10 +4041,15 @@ def build_mcp_server() -> FastMCP:
         # Look up sender first, then use sender's project (ignore project_key)
         sender = await _get_agent_by_name(sender_name)
 
-        # Use sender's associated project or default project
+        # Use sender's associated project for message metadata
+        # Note: This represents a behavioral change - project_key parameter is now ignored
+        # in favor of the sender's project association
         project = await _get_project_for_agent(sender)
         if project is None:
-            project = await _get_default_project()
+            raise ToolExecutionError(
+                f"Cannot send message from agent '{sender_name}': associated project not found. "
+                "The project may have been deleted."
+            )
 
         to = to or []
         if not isinstance(to, list):
@@ -4450,10 +4461,15 @@ def build_mcp_server() -> FastMCP:
         # Look up sender globally first (agents are globally unique)
         sender = await _get_agent_by_name(sender_name)
 
-        # Get project from sender's association (ignore project_key)
+        # Get project from sender's association
+        # Note: This represents a behavioral change - project_key parameter is now ignored
+        # in favor of the sender's project association
         project = await _get_project_for_agent(sender)
         if project is None:
-            project = await _get_default_project()
+            raise ToolExecutionError(
+                f"Cannot reply from agent '{sender_name}': associated project not found. "
+                "The project may have been deleted."
+            )
 
         original = await _get_message_by_id_global(message_id)
         original_sender = await _get_agent_by_id_global(original.sender_id)
@@ -4658,10 +4674,14 @@ def build_mcp_server() -> FastMCP:
             # project_key is now informational only - agents are looked up globally
             agent = await _get_agent_by_name(agent_name)
 
-            # Get project from agent's association (or default) instead of requiring valid project_key
+            # Get project from agent's association instead of requiring valid project_key
+            # Do not fall back to default project - that would query the wrong global inbox
             project = await _get_project_for_agent(agent)
             if project is None:
-                project = await _get_default_project()
+                raise ToolExecutionError(
+                    f"Cannot fetch inbox for agent '{agent_name}': associated project not found. "
+                    "The project may have been deleted."
+                )
 
             items = await _list_inbox(project, agent, limit, urgent_only, include_bodies, since_ts)
             await ctx.info(f"Fetched {len(items)} messages for '{agent.name}'. urgent_only={urgent_only}")
