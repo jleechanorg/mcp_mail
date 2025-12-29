@@ -3809,11 +3809,7 @@ def build_mcp_server() -> FastMCP:
         agent_project = await _get_project_for_agent(agent)
         if agent_project is None:
             await ctx.warning(
-                (
-                    "Agent '%s' has no associated project; returning profile without project "
-                    "context."
-                )
-                % agent_name
+                ("Agent '%s' has no associated project; returning profile without project context.") % agent_name
             )
             project_label = "<no-project>"
         else:
