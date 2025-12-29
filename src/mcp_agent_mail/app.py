@@ -1729,11 +1729,10 @@ async def _delete_agent(agent: Agent, project: Project, settings: Settings) -> d
     """Delete an agent and all related records from the database.
 
     This function:
-    1. Deletes the agent from the agents table
-    2. Deletes associated MessageRecipient records
-    3. Deletes messages sent by the agent
-    4. Deletes file reservations held by the agent
-    5. Writes a deletion marker to the Git archive
+    1. Deletes associated MessageRecipient records
+    2. Deletes messages sent by the agent
+    3. Deletes file reservations held by the agent
+    4. Deletes the agent record itself
 
     Returns a dict with deletion statistics.
     """
@@ -3754,6 +3753,8 @@ def build_mcp_server() -> FastMCP:
 
         This tool performs a global search by name (project_key is informational only).
         If no agent is found, it suggests similar agent names that may match your intent.
+        If the agent has no associated project, the profile is still returned and the
+        missing project association is logged as a warning.
 
         Discovery
         ---------
@@ -3802,13 +3803,22 @@ def build_mcp_server() -> FastMCP:
                 },
             )
 
-        # Get the agent's actual project for commit history and logging
-        agent_project = await _require_project_for_agent(agent, "resolve whois context")
-
         profile = _agent_to_dict(agent)
         # NOTE: Archive storage has been removed. recent_commits is always empty.
         profile["recent_commits"] = []
-        await ctx.info(f"whois for '{agent_name}' in '{agent_project.human_key}'")
+        agent_project = await _get_project_for_agent(agent)
+        if agent_project is None:
+            await ctx.warning(
+                (
+                    "Agent '%s' has no associated project; returning profile without project "
+                    "context."
+                )
+                % agent_name
+            )
+            project_label = "<no-project>"
+        else:
+            project_label = agent_project.human_key
+        await ctx.info(f"whois for '{agent_name}' in '{project_label}'")
         return profile
 
     @mcp.tool(name="create_agent_identity")

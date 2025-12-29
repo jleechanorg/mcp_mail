@@ -30,7 +30,6 @@ from __future__ import annotations
 import argparse
 import contextlib
 import importlib
-import json
 import os
 import shlex
 import shutil
@@ -42,7 +41,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from decouple import Config as DecoupleConfig, RepositoryEnv  # type: ignore
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+sys.path.insert(0, str(PROJECT_ROOT))
+from tests.integration.test_harness_utils import (  # type: ignore # noqa: E402
+    MCP_AGENT_MAIL_SERVER,
+    _load_bearer_token,
+)
 
 # Orchestration framework for CLI profiles
 try:
@@ -52,12 +57,6 @@ try:
 except ImportError:
     CLI_PROFILES = {}
     ORCHESTRATION_AVAILABLE = False
-
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-ENV_PATH = PROJECT_ROOT / ".env"
-MCP_CONFIG_PATH = PROJECT_ROOT / ".mcp.json"
-
 
 # CLI configuration mapping (extends orchestration profiles with MCP-specific settings)
 MCP_CLI_CONFIG = {
@@ -74,7 +73,12 @@ MCP_CLI_CONFIG = {
     "gemini": {
         "mcp_config_env": "GEMINI_CONFIG",
         "mcp_config_file": "./gemini.mcp.json",  # relative to current working directory
-        "extra_args": ["--approval-mode", "yolo", "--allowed-mcp-server-names", "mcp-agent-mail"],
+        "extra_args": [
+            "--approval-mode",
+            "yolo",
+            "--allowed-mcp-server-names",
+            MCP_AGENT_MAIL_SERVER,
+        ],
     },
 }
 
@@ -94,40 +98,6 @@ def setup_test_directory() -> Path:
 
     print(f"Test directory: {test_dir}")
     return test_dir
-
-
-def _load_env_value(key: str) -> Optional[str]:
-    """Load a value from the repo .env using python-decouple."""
-    if not ENV_PATH.exists():
-        return None
-    decouple_config = DecoupleConfig(RepositoryEnv(str(ENV_PATH)))
-    try:
-        value = decouple_config(key)
-    except (KeyError, ValueError, TypeError):
-        return None
-    if value is None:
-        return None
-    val_str = str(value).strip()
-    if not val_str:
-        return None
-    return val_str
-
-
-def _load_bearer_token() -> Optional[str]:
-    """Best-effort bearer token lookup for MCP HTTP auth."""
-    token = _load_env_value("HTTP_BEARER_TOKEN")
-    if token:
-        return token
-    try:
-        if MCP_CONFIG_PATH.exists():
-            config = json.loads(MCP_CONFIG_PATH.read_text())
-            headers = config.get("mcpServers", {}).get("mcp-agent-mail", {}).get("headers", {})
-            auth_header = headers.get("Authorization", "")
-            if auth_header.lower().startswith("bearer "):
-                return auth_header.split(" ", 1)[1].strip()
-    except (OSError, json.JSONDecodeError, KeyError, IndexError):
-        return None
-    return None
 
 
 def check_cli_available(cli_name: str) -> tuple[bool, str]:
