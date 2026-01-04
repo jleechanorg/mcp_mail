@@ -12,7 +12,13 @@
     }
   },
   "hooks": {
-    "SessionStart": [],
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "./scripts/auto_register_agent.sh --program claude-code --model opus --quiet" }
+        ]
+      }
+    ],
     "PreToolUse": [],
     "PostToolUse": []
   },
