@@ -17,7 +17,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/lib.sh" 2>/dev/null || true
+# Source lib.sh if it exists and is readable
+if [[ -f "${SCRIPT_DIR}/lib.sh" ]] && [[ -r "${SCRIPT_DIR}/lib.sh" ]]; then
+  source "${SCRIPT_DIR}/lib.sh" 2>/dev/null || true
+fi
 
 # Initialize colors if lib.sh loaded
 if command -v init_colors >/dev/null 2>&1; then
@@ -35,6 +38,10 @@ QUIET="${QUIET:-0}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --suffix)
+      if [[ -z "${2:-}" ]] || [[ "$2" == --* ]]; then
+        echo "ERROR: --suffix requires a value" >&2
+        exit 1
+      fi
       SUFFIX="$2"
       shift 2
       ;;
@@ -43,6 +50,10 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --program)
+      if [[ -z "${2:-}" ]] || [[ "$2" == --* ]]; then
+        echo "ERROR: --program requires a value" >&2
+        exit 1
+      fi
       PROGRAM="$2"
       shift 2
       ;;
@@ -51,6 +62,10 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --model)
+      if [[ -z "${2:-}" ]] || [[ "$2" == --* ]]; then
+        echo "ERROR: --model requires a value" >&2
+        exit 1
+      fi
       MODEL="$2"
       shift 2
       ;;
@@ -63,6 +78,10 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --url)
+      if [[ -z "${2:-}" ]] || [[ "$2" == --* ]]; then
+        echo "ERROR: --url requires a value" >&2
+        exit 1
+      fi
       MCP_MAIL_URL="$2"
       shift 2
       ;;
@@ -90,13 +109,28 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Function to load token from .env file and strip surrounding quotes
+load_token_from_env() {
+  local env_file="$1"
+  local token=""
+  
+  if [[ -f "$env_file" ]]; then
+    token=$(grep -E '^HTTP_BEARER_TOKEN=' "$env_file" | sed -E 's/^HTTP_BEARER_TOKEN=//' | head -1) || true
+    # Strip surrounding quotes if present
+    token="${token%\"}"
+    token="${token#\"}"
+    token="${token%\'}"
+    token="${token#\'}"
+  fi
+  
+  echo "$token"
+}
+
 # Load bearer token from environment or .env
 if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then
-  if [[ -f .env ]]; then
-    HTTP_BEARER_TOKEN=$(grep -E '^HTTP_BEARER_TOKEN=' .env | sed -E 's/^HTTP_BEARER_TOKEN=//' | head -1) || true
-  fi
-  if [[ -z "${HTTP_BEARER_TOKEN:-}" ]] && [[ -f ~/.config/mcp-agent-mail/.env ]]; then
-    HTTP_BEARER_TOKEN=$(grep -E '^HTTP_BEARER_TOKEN=' ~/.config/mcp-agent-mail/.env | sed -E 's/^HTTP_BEARER_TOKEN=//' | head -1) || true
+  HTTP_BEARER_TOKEN=$(load_token_from_env ".env")
+  if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then
+    HTTP_BEARER_TOKEN=$(load_token_from_env "${HOME}/.config/mcp-agent-mail/.env")
   fi
 fi
 
@@ -145,9 +179,51 @@ if [[ -z "$AGENT_NAME" ]]; then
   exit 1
 fi
 
-# Build JSON-RPC request
-REQUEST_ID=$(date +%s%N | cut -c1-16)
-JSON_PAYLOAD=$(cat <<EOF
+# Generate request ID (use portable date command + PID for uniqueness)
+# Note: Using $$ (process ID) for portability across Linux and macOS
+REQUEST_ID="$(date +%s)$$"
+
+# Build JSON-RPC request using jq for safe JSON construction
+# Security note: Bearer token is visible in process listing during execution
+if command -v jq >/dev/null 2>&1; then
+  JSON_PAYLOAD=$(jq -n \
+    --arg request_id "$REQUEST_ID" \
+    --arg agent_name "$AGENT_NAME" \
+    --arg program "$PROGRAM" \
+    --arg model "$MODEL" \
+    --arg branch "$BRANCH" \
+    '{
+      "jsonrpc": "2.0",
+      "id": $request_id,
+      "method": "tools/call",
+      "params": {
+        "name": "register_agent",
+        "arguments": {
+          "name": $agent_name,
+          "program": $program,
+          "model": $model,
+          "task_description": ("Auto-registered from branch " + $branch)
+        }
+      }
+    }')
+else
+  # Fallback: basic escaping for JSON strings (replace ", \, and control characters)
+  escape_json() {
+    local str="$1"
+    str="${str//\\/\\\\}"    # Escape backslashes
+    str="${str//\"/\\\"}"    # Escape quotes
+    str="${str//$'\n'/\\n}"  # Escape newlines
+    str="${str//$'\r'/\\r}"  # Escape carriage returns
+    str="${str//$'\t'/\\t}"  # Escape tabs
+    echo "$str"
+  }
+  
+  AGENT_NAME_ESC=$(escape_json "$AGENT_NAME")
+  PROGRAM_ESC=$(escape_json "$PROGRAM")
+  MODEL_ESC=$(escape_json "$MODEL")
+  BRANCH_ESC=$(escape_json "$BRANCH")
+  
+  JSON_PAYLOAD=$(cat <<EOF
 {
   "jsonrpc": "2.0",
   "id": "${REQUEST_ID}",
@@ -155,33 +231,57 @@ JSON_PAYLOAD=$(cat <<EOF
   "params": {
     "name": "register_agent",
     "arguments": {
-      "name": "${AGENT_NAME}",
-      "program": "${PROGRAM}",
-      "model": "${MODEL}",
-      "task_description": "Auto-registered from branch ${BRANCH}"
+      "name": "${AGENT_NAME_ESC}",
+      "program": "${PROGRAM_ESC}",
+      "model": "${MODEL_ESC}",
+      "task_description": "Auto-registered from branch ${BRANCH_ESC}"
     }
   }
 }
 EOF
 )
+fi
 
-# Make HTTP request
-RESPONSE=$(curl -sS --connect-timeout 5 --max-time 30 \
+# Make HTTP request with status code capture
+HTTP_RESPONSE=$(mktemp)
+HTTP_STATUS=$(curl -sS --connect-timeout 5 --max-time 30 \
+  -w '%{http_code}' \
+  -o "$HTTP_RESPONSE" \
   -X POST \
   -H "Content-Type: application/json" \
   -H "Accept: application/json" \
   -H "Authorization: Bearer ${HTTP_BEARER_TOKEN}" \
   -d "$JSON_PAYLOAD" \
   "${MCP_MAIL_URL}" 2>&1) || {
+  rm -f "$HTTP_RESPONSE"
   echo "ERROR: Failed to connect to MCP Mail server at ${MCP_MAIL_URL}" >&2
   exit 1
 }
 
-# Check for errors in response
-if echo "$RESPONSE" | grep -q '"error"'; then
-  ERROR_MSG=$(echo "$RESPONSE" | grep -oE '"message"\s*:\s*"[^"]*"' | head -1 | sed 's/"message"\s*:\s*"\([^"]*\)"/\1/')
-  echo "ERROR: Registration failed: ${ERROR_MSG:-$RESPONSE}" >&2
+RESPONSE=$(cat "$HTTP_RESPONSE")
+rm -f "$HTTP_RESPONSE"
+
+# Check HTTP status code
+if [[ "$HTTP_STATUS" != "200" ]]; then
+  echo "ERROR: HTTP request failed with status ${HTTP_STATUS}" >&2
+  echo "Response: ${RESPONSE}" >&2
   exit 1
+fi
+
+# Check for JSON-RPC error in response
+if command -v jq >/dev/null 2>&1; then
+  ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // empty' 2>/dev/null)
+  if [[ -n "$ERROR_MSG" ]]; then
+    echo "ERROR: Registration failed: ${ERROR_MSG}" >&2
+    exit 1
+  fi
+else
+  # Fallback: check if response contains error field
+  if echo "$RESPONSE" | grep -q '"error"[[:space:]]*:[[:space:]]*{'; then
+    ERROR_MSG=$(echo "$RESPONSE" | grep -oE '"message"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed -E 's/"message"[[:space:]]*:[[:space:]]*"([^"]*)"/\1/')
+    echo "ERROR: Registration failed: ${ERROR_MSG:-$RESPONSE}" >&2
+    exit 1
+  fi
 fi
 
 # Success
