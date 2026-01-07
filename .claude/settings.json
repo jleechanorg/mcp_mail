@@ -13,11 +13,7 @@
   },
   "hooks": {
     "SessionStart": [
-      {
-        "hooks": [
-          { "type": "command", "command": "./scripts/auto_register_agent.sh --program claude-code --model opus --quiet" }
-        ]
-      }
+      { "type": "command", "command": "./scripts/auto_register_agent.sh --program claude-code --model opus --quiet" }
     ],
     "PreToolUse": [],
     "PostToolUse": []

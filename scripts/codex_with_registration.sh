@@ -14,9 +14,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Auto-register agent (branch name + "c" suffix for Codex)
 echo "Auto-registering Codex agent with MCP Mail..."
-"${SCRIPT_DIR}/auto_register_agent.sh" --suffix c --program codex-cli --model o3 --quiet 2>/dev/null || {
-  echo "Warning: Could not register agent (server may not be running)" >&2
-}
+ERROR_LOG=$(mktemp)
+trap 'rm -f "$ERROR_LOG"' EXIT
 
-# Launch Codex CLI
+if ! "${SCRIPT_DIR}/auto_register_agent.sh" --suffix c --program codex-cli --model o3 --quiet 2>"$ERROR_LOG"; then
+  echo "Warning: Could not register agent (server may not be running)" >&2
+  if [[ -s "$ERROR_LOG" ]]; then
+    echo "Details:" >&2
+    cat "$ERROR_LOG" >&2
+  fi
+fi
+
+# Launch Codex CLI with all arguments passed through
 exec codex "$@"

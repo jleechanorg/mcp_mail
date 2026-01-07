@@ -11,8 +11,8 @@
       }
     }
   },
-  "_autoRegistration": {
-    "_instructions": "Codex doesn't have built-in SessionStart hooks. Use one of these methods:",
+  "autoRegistration_DOCS": {
+    "description": "Codex doesn't have built-in SessionStart hooks. Use one of these methods:",
     "method1_wrapper": "Use ./scripts/codex_with_registration.sh instead of bare 'codex' command",
     "method2_alias": "Add to ~/.bashrc: alias codex='./scripts/codex_with_registration.sh'",
     "method3_manual": "Run ./scripts/auto_register_agent.sh --suffix c --program codex-cli --model o3 before starting Codex"

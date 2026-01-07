@@ -13,11 +13,18 @@
 # Environment variables:
 #   HTTP_BEARER_TOKEN  - Required for authentication (or loaded from .env)
 #   MCP_MAIL_URL       - Server URL (default: http://127.0.0.1:8765/mcp)
+#
+# Security note: The bearer token will be visible in process listings during curl execution.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/lib.sh" 2>/dev/null || true
+
+# Optionally load shared helpers; script works without lib.sh
+if [[ -r "${SCRIPT_DIR}/lib.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "${SCRIPT_DIR}/lib.sh" || true
+fi
 
 # Initialize colors if lib.sh loaded
 if command -v init_colors >/dev/null 2>&1; then
@@ -31,10 +38,59 @@ MODEL="unknown"
 MCP_MAIL_URL="${MCP_MAIL_URL:-http://127.0.0.1:8765/mcp}"
 QUIET="${QUIET:-0}"
 
-# Parse arguments
+# Load HTTP_BEARER_TOKEN from a .env-style file
+# Handles comments, whitespace, and quoted values
+load_token_from_file() {
+  local file="$1"
+  local line value
+
+  [[ -f "$file" ]] || return 0
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    # Skip empty lines and comments
+    case "$line" in
+      ''|'#'*) continue ;;
+      HTTP_BEARER_TOKEN=*)
+        value="${line#HTTP_BEARER_TOKEN=}"
+        # Trim leading/trailing whitespace
+        value="${value#"${value%%[![:space:]]*}"}"
+        value="${value%"${value##*[![:space:]]}"}"
+        # Remove matching surrounding quotes (single or double)
+        if [[ ( "${value:0:1}" == '"' && "${value: -1}" == '"' ) || \
+              ( "${value:0:1}" == "'" && "${value: -1}" == "'" ) ]]; then
+          value="${value:1:${#value}-2}"
+        fi
+        if [[ -n "$value" ]]; then
+          HTTP_BEARER_TOKEN="$value"
+        fi
+        break
+        ;;
+    esac
+  done < "$file"
+}
+
+# Strip whitespace and quotes from token (for env var fallback)
+strip_token() {
+  local token="${1:-}"
+  # Trim surrounding whitespace
+  token="${token#${token%%[![:space:]]*}}"
+  token="${token%${token##*[![:space:]]}}"
+  # Trim optional single/double quotes
+  token="${token%\"}"
+  token="${token#\"}"
+  token="${token%\'}"
+  token="${token#\'}"
+  echo "$token"
+}
+
+# Parse arguments with validation
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --suffix)
+      if [[ $# -lt 2 || "$2" == --* ]]; then
+        echo "ERROR: --suffix requires a value" >&2
+        exit 1
+      fi
       SUFFIX="$2"
       shift 2
       ;;
@@ -43,6 +99,10 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --program)
+      if [[ $# -lt 2 || "$2" == --* ]]; then
+        echo "ERROR: --program requires a value" >&2
+        exit 1
+      fi
       PROGRAM="$2"
       shift 2
       ;;
@@ -51,6 +111,10 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --model)
+      if [[ $# -lt 2 || "$2" == --* ]]; then
+        echo "ERROR: --model requires a value" >&2
+        exit 1
+      fi
       MODEL="$2"
       shift 2
       ;;
@@ -63,6 +127,10 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --url)
+      if [[ $# -lt 2 || "$2" == --* ]]; then
+        echo "ERROR: --url requires a value" >&2
+        exit 1
+      fi
       MCP_MAIL_URL="$2"
       shift 2
       ;;
@@ -90,29 +158,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Load bearer token from environment or .env
-strip_token() {
-  local token="${1:-}"
-  # Trim surrounding whitespace
-  token="${token#${token%%[![:space:]]*}}"
-  token="${token%${token##*[![:space:]]}}"
-  # Trim optional single/double quotes
-  token="${token%\"}"
-  token="${token#\"}"
-  token="${token%\'}"
-  token="${token#\'}"
-  echo "$token"
-}
-
+# Load bearer token from environment or .env files
 if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then
-  if [[ -f .env ]]; then
-    HTTP_BEARER_TOKEN=$(grep -E '^HTTP_BEARER_TOKEN=' .env | sed -E 's/^HTTP_BEARER_TOKEN=//' | head -1) || true
-  fi
-  if [[ -z "${HTTP_BEARER_TOKEN:-}" ]] && [[ -f ~/.config/mcp-agent-mail/.env ]]; then
-    HTTP_BEARER_TOKEN=$(grep -E '^HTTP_BEARER_TOKEN=' ~/.config/mcp-agent-mail/.env | sed -E 's/^HTTP_BEARER_TOKEN=//' | head -1) || true
-  fi
+  load_token_from_file ".env"
+fi
+if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then
+  load_token_from_file "${HOME}/.config/mcp-agent-mail/.env"
 fi
 
+# Strip whitespace/quotes from env var (load_token_from_file already handles this for file-loaded tokens)
 HTTP_BEARER_TOKEN=$(strip_token "${HTTP_BEARER_TOKEN:-}")
 
 if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then
@@ -160,17 +214,35 @@ if [[ -z "$AGENT_NAME" ]]; then
   exit 1
 fi
 
-# Build JSON-RPC request
-REQUEST_ID=$(python3 - <<'PY'
-import random
-import time
+# Generate portable request ID (macOS date doesn't support %N)
+REQUEST_ID="$(date +%s)$$"
 
-timestamp = int(time.time() * 1_000_000)  # microseconds for portability
-rand_suffix = random.randint(0, 9999)
-print(f"{timestamp:014d}{rand_suffix:04d}"[:16])
-PY
-)
-JSON_PAYLOAD=$(cat <<EOF
+# Build JSON-RPC request using jq for proper escaping if available
+if command -v jq >/dev/null 2>&1; then
+  JSON_PAYLOAD=$(jq -n \
+    --arg id "$REQUEST_ID" \
+    --arg agent "$AGENT_NAME" \
+    --arg prog "$PROGRAM" \
+    --arg model "$MODEL" \
+    --arg branch "$BRANCH" \
+    '{
+      jsonrpc: "2.0",
+      id: $id,
+      method: "tools/call",
+      params: {
+        name: "register_agent",
+        arguments: {
+          name: $agent,
+          program: $prog,
+          model: $model,
+          task_description: ("Auto-registered from branch " + $branch)
+        }
+      }
+    }')
+else
+  # Fallback: construct JSON directly (agent name is already sanitized to alphanumeric)
+  # PROGRAM and MODEL should be safe values; BRANCH is only used in description
+  JSON_PAYLOAD=$(cat <<EOF
 {
   "jsonrpc": "2.0",
   "id": "${REQUEST_ID}",
@@ -181,72 +253,63 @@ JSON_PAYLOAD=$(cat <<EOF
       "name": "${AGENT_NAME}",
       "program": "${PROGRAM}",
       "model": "${MODEL}",
-      "task_description": "Auto-registered from branch ${BRANCH}"
+      "task_description": "Auto-registered from branch ${AGENT_BASE}"
     }
   }
 }
 EOF
 )
+fi
 
-# Make HTTP request
-TMP_RESPONSE=$(mktemp)
+# Make HTTP request and capture both response and status code
+TEMP_FILE=$(mktemp)
+trap 'rm -f "$TEMP_FILE"' EXIT
+
 HTTP_STATUS=$(curl -sS --connect-timeout 5 --max-time 30 \
-  -o "$TMP_RESPONSE" \
   -w '%{http_code}' \
+  -o "$TEMP_FILE" \
   -X POST \
   -H "Content-Type: application/json" \
   -H "Accept: application/json" \
   -H "Authorization: Bearer ${HTTP_BEARER_TOKEN}" \
   -d "$JSON_PAYLOAD" \
   "${MCP_MAIL_URL}" 2>&1) || {
+  CURL_ERROR="$HTTP_STATUS"
   echo "ERROR: Failed to connect to MCP Mail server at ${MCP_MAIL_URL}" >&2
-  rm -f "$TMP_RESPONSE"
+  if [[ -n "${CURL_ERROR:-}" ]]; then
+    echo "curl error: $CURL_ERROR" >&2
+  fi
   exit 1
 }
-RESPONSE=$(cat "$TMP_RESPONSE")
-rm -f "$TMP_RESPONSE"
 
-if [[ ! "$HTTP_STATUS" =~ ^[0-9]{3}$ ]] || [[ "$HTTP_STATUS" -lt 200 || "$HTTP_STATUS" -ge 300 ]]; then
-  echo "ERROR: Registration request failed with HTTP status ${HTTP_STATUS:-unknown}" >&2
+RESPONSE=$(cat "$TEMP_FILE")
+
+# Check HTTP status code
+if [[ ! "$HTTP_STATUS" =~ ^2[0-9][0-9]$ ]]; then
+  echo "ERROR: HTTP request failed with status $HTTP_STATUS" >&2
   if [[ -n "$RESPONSE" ]]; then
     echo "Response: $RESPONSE" >&2
   fi
   exit 1
 fi
 
-# Check for JSON-RPC errors
-ERROR_MSG=$(python3 - <<'PY'
-import json
-import sys
-
-raw = sys.stdin.read()
-try:
-  payload = json.loads(raw)
-except Exception:
-  sys.exit(1)
-
-error = payload.get("error")
-if not error:
-  sys.exit(2)
-
-message = error.get("message") or json.dumps(error)
-print(message)
-PY
-<<< "$RESPONSE" )
-
-case $? in
-  0)
-    echo "ERROR: Registration failed: ${ERROR_MSG}" >&2
+# Check for JSON-RPC error in response
+# Use jq if available for robust parsing, otherwise fallback to grep
+if command -v jq >/dev/null 2>&1; then
+  ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // empty' 2>/dev/null)
+  if [[ -n "$ERROR_MSG" ]]; then
+    echo "ERROR: Registration failed: $ERROR_MSG" >&2
     exit 1
-    ;;
-  1)
-    echo "ERROR: Unexpected response format: $RESPONSE" >&2
+  fi
+else
+  # Fallback: check for top-level "error" field (JSON-RPC spec)
+  # This pattern matches "error": { at the top level
+  if echo "$RESPONSE" | grep -qE '"error"\s*:\s*\{'; then
+    ERROR_MSG=$(echo "$RESPONSE" | grep -oE '"message"\s*:\s*"[^"]*"' | head -1 | sed 's/"message"\s*:\s*"\([^"]*\)"/\1/')
+    echo "ERROR: Registration failed: ${ERROR_MSG:-unknown error}" >&2
     exit 1
-    ;;
-  *)
-    : # Success path (no error field)
-    ;;
-esac
+  fi
+fi
 
 # Success
 if [[ "$QUIET" != "1" ]]; then
