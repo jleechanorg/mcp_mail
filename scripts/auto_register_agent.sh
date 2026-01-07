@@ -91,6 +91,19 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Load bearer token from environment or .env
+strip_token() {
+  local token="${1:-}"
+  # Trim surrounding whitespace
+  token="${token#${token%%[![:space:]]*}}"
+  token="${token%${token##*[![:space:]]}}"
+  # Trim optional single/double quotes
+  token="${token%\"}"
+  token="${token#\"}"
+  token="${token%\'}"
+  token="${token#\'}"
+  echo "$token"
+}
+
 if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then
   if [[ -f .env ]]; then
     HTTP_BEARER_TOKEN=$(grep -E '^HTTP_BEARER_TOKEN=' .env | sed -E 's/^HTTP_BEARER_TOKEN=//' | head -1) || true
@@ -99,6 +112,8 @@ if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then
     HTTP_BEARER_TOKEN=$(grep -E '^HTTP_BEARER_TOKEN=' ~/.config/mcp-agent-mail/.env | sed -E 's/^HTTP_BEARER_TOKEN=//' | head -1) || true
   fi
 fi
+
+HTTP_BEARER_TOKEN=$(strip_token "${HTTP_BEARER_TOKEN:-}")
 
 if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then
   echo "ERROR: HTTP_BEARER_TOKEN not set and not found in .env" >&2
@@ -146,7 +161,15 @@ if [[ -z "$AGENT_NAME" ]]; then
 fi
 
 # Build JSON-RPC request
-REQUEST_ID=$(date +%s%N | cut -c1-16)
+REQUEST_ID=$(python3 - <<'PY'
+import random
+import time
+
+timestamp = int(time.time() * 1_000_000)  # microseconds for portability
+rand_suffix = random.randint(0, 9999)
+print(f"{timestamp:014d}{rand_suffix:04d}"[:16])
+PY
+)
 JSON_PAYLOAD=$(cat <<EOF
 {
   "jsonrpc": "2.0",
@@ -166,7 +189,10 @@ EOF
 )
 
 # Make HTTP request
-RESPONSE=$(curl -sS --connect-timeout 5 --max-time 30 \
+TMP_RESPONSE=$(mktemp)
+HTTP_STATUS=$(curl -sS --connect-timeout 5 --max-time 30 \
+  -o "$TMP_RESPONSE" \
+  -w '%{http_code}' \
   -X POST \
   -H "Content-Type: application/json" \
   -H "Accept: application/json" \
@@ -174,15 +200,53 @@ RESPONSE=$(curl -sS --connect-timeout 5 --max-time 30 \
   -d "$JSON_PAYLOAD" \
   "${MCP_MAIL_URL}" 2>&1) || {
   echo "ERROR: Failed to connect to MCP Mail server at ${MCP_MAIL_URL}" >&2
+  rm -f "$TMP_RESPONSE"
   exit 1
 }
+RESPONSE=$(cat "$TMP_RESPONSE")
+rm -f "$TMP_RESPONSE"
 
-# Check for errors in response
-if echo "$RESPONSE" | grep -q '"error"'; then
-  ERROR_MSG=$(echo "$RESPONSE" | grep -oE '"message"\s*:\s*"[^"]*"' | head -1 | sed 's/"message"\s*:\s*"\([^"]*\)"/\1/')
-  echo "ERROR: Registration failed: ${ERROR_MSG:-$RESPONSE}" >&2
+if [[ ! "$HTTP_STATUS" =~ ^[0-9]{3}$ ]] || [[ "$HTTP_STATUS" -lt 200 || "$HTTP_STATUS" -ge 300 ]]; then
+  echo "ERROR: Registration request failed with HTTP status ${HTTP_STATUS:-unknown}" >&2
+  if [[ -n "$RESPONSE" ]]; then
+    echo "Response: $RESPONSE" >&2
+  fi
   exit 1
 fi
+
+# Check for JSON-RPC errors
+ERROR_MSG=$(python3 - <<'PY'
+import json
+import sys
+
+raw = sys.stdin.read()
+try:
+  payload = json.loads(raw)
+except Exception:
+  sys.exit(1)
+
+error = payload.get("error")
+if not error:
+  sys.exit(2)
+
+message = error.get("message") or json.dumps(error)
+print(message)
+PY
+<<< "$RESPONSE" )
+
+case $? in
+  0)
+    echo "ERROR: Registration failed: ${ERROR_MSG}" >&2
+    exit 1
+    ;;
+  1)
+    echo "ERROR: Unexpected response format: $RESPONSE" >&2
+    exit 1
+    ;;
+  *)
+    : # Success path (no error field)
+    ;;
+esac
 
 # Success
 if [[ "$QUIET" != "1" ]]; then
