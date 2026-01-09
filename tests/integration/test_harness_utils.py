@@ -98,7 +98,7 @@ def _load_env_value(key: str) -> Optional[str]:
     return val_str  # type: ignore
 
 
-def _load_bearer_token() -> Optional[str]:
+def load_bearer_token() -> Optional[str]:
     """Best-effort bearer token lookup for MCP HTTP auth."""
     token = _load_env_value("HTTP_BEARER_TOKEN")
     if token:
@@ -299,43 +299,9 @@ class BaseCLITest:
             expected_tools=MCP_EXPECTED_TOOLS,
             timeout=timeout,
         )
-        skip_reason = self._maybe_skip_for_transient_cli_error(tool_success, tool_msg, details)
-        if skip_reason:
-            self.record("mcp_tools", False, skip_reason, skip=True, details=details)
-        else:
-            self.record("mcp_tools", tool_success, tool_msg, details=details)
+        self.record("mcp_tools", tool_success, tool_msg, details=details)
 
         return tool_success
-
-    def _maybe_skip_for_transient_cli_error(
-        self,
-        success: bool,
-        message: str,
-        details: dict[str, Any],
-    ) -> Optional[str]:
-        """Return a human-readable skip reason for transient CLI/LLM errors.
-
-        These orchestration-backed CLI tests are intended for local validation, not CI.
-        When the underlying vendor CLI fails due to quota or transient upstream errors,
-        treat the MCP tool probing step as skipped rather than failing the whole suite.
-        """
-        if success:
-            return None
-
-        combined = f"{message}\n{details.get('output', '')}".lower()
-
-        transient_markers = (
-            "resource_exhausted",
-            "rate limit",
-            "too many requests",
-            "quota",
-            "temporarily unavailable",
-            "service unavailable",
-        )
-        if any(marker in combined for marker in transient_markers):
-            return f"Transient upstream/CLI error while probing MCP tools: {message}"
-
-        return None
 
     def record(
         self,
@@ -477,7 +443,7 @@ class BaseCLITest:
 
                 env = {**os.environ, "NO_COLOR": "1"}
                 # Set bearer token for all CLIs that need HTTP MCP auth
-                bearer_token = _load_bearer_token()
+                bearer_token = load_bearer_token()
                 if bearer_token:
                     env["HTTP_BEARER_TOKEN"] = bearer_token
 
