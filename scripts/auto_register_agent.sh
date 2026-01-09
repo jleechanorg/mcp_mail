@@ -35,7 +35,7 @@ fi
 SUFFIX=""
 PROGRAM="unknown"
 MODEL="unknown"
-MCP_MAIL_URL="${MCP_MAIL_URL:-http://127.0.0.1:8765/mcp}"
+MCP_MAIL_URL="${MCP_MAIL_URL:-http://127.0.0.1:8765/mcp/}"
 QUIET="${QUIET:-0}"
 
 # Load HTTP_BEARER_TOKEN from a .env-style file
