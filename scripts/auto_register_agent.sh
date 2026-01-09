@@ -178,9 +178,9 @@ if [[ "$MODEL" == "unknown" ]]; then
   case "$PROGRAM" in
     claude-code)
       # Try to detect from process args, fallback to sonnet
-      if ps aux 2>/dev/null | grep -q "claude.*--model opus"; then
+      if ps aux 2>/dev/null | grep -q "[c]laude.*--model opus"; then
         MODEL="opus"
-      elif ps aux 2>/dev/null | grep -q "claude.*--model sonnet"; then
+      elif ps aux 2>/dev/null | grep -q "[c]laude.*--model sonnet"; then
         MODEL="sonnet"
       else
         MODEL="sonnet"  # Default for Claude Code
