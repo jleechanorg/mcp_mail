@@ -1,10 +1,13 @@
 {
+  "_comment": "Run ./scripts/integrate_claude_code.sh to generate auth token and embed it in headers (recommended)",
   "mcpServers": {
     "mcp-agent-mail": {
       "type": "http",
       "url": "http://127.0.0.1:8765/mcp/",
       "core": true,
-      "headers": {},
+      "headers": {
+        "_note": "Authentication required - run ./scripts/integrate_claude_code.sh to embed token"
+      },
       "options": {
         "timeoutSeconds": 180,
         "initTimeoutSeconds": 30
@@ -17,7 +20,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash -lc 'repo_root=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\"; \"$repo_root/scripts/auto_register_agent.sh\" --program claude-code --model sonnet --quiet'"
+            "command": "bash -lc 'repo_root=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\"; \"$repo_root/scripts/auto_register_agent.sh\" --program claude-code --model sonnet --nonfatal'"
           }
         ]
       }

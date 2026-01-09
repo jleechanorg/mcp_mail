@@ -68,7 +68,9 @@ class MCPMailClaudeCLITest(ClaudeCLITest):
         print("=" * 70)
         print(f"Started: {self.start_time.isoformat()}\n")
 
-        # Context manager to patch .claude/settings.json with token
+        # Context manager to patch .claude/settings.json with auth token.
+        # This is best-effort and always restores in finally, but note that a hard kill
+        # (e.g., SIGKILL) can still leave the patched settings on disk.
         @contextlib.contextmanager
         def patched_settings():
             settings_path = PROJECT_ROOT / ".claude" / "settings.json"
@@ -76,22 +78,23 @@ class MCPMailClaudeCLITest(ClaudeCLITest):
                 yield
                 return
 
-            original_content = settings_path.read_text()
+            original_content = settings_path.read_text(encoding="utf-8")
             try:
                 # Load token and inject into settings
                 token = load_bearer_token()
                 if token:
                     config = json.loads(original_content)
-                    if "mcpServers" in config and "mcp-agent-mail" in config["mcpServers"]:
-                        config["mcpServers"]["mcp-agent-mail"]["headers"] = {"Authorization": f"Bearer {token}"}
-                        settings_path.write_text(json.dumps(config, indent=2))
+                    server = config.get("mcpServers", {}).get("mcp-agent-mail")
+                    if isinstance(server, dict):
+                        server["headers"] = {"Authorization": f"Bearer {token}"}
+                        settings_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
                         print(f"[SETUP] Patched {settings_path} with auth token for test")
                 yield
             except Exception as e:
                 print(f"[SETUP] Warning: Failed to patch settings: {e}")
                 yield
             finally:
-                settings_path.write_text(original_content)
+                settings_path.write_text(original_content, encoding="utf-8")
                 print(f"[TEARDOWN] Restored {settings_path}")
 
         with patched_settings():

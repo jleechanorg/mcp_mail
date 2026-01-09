@@ -37,18 +37,22 @@ PROGRAM="unknown"
 MODEL="unknown"
 MCP_MAIL_URL="${MCP_MAIL_URL:-http://127.0.0.1:8765/mcp/}"
 QUIET="${QUIET:-0}"
+NONFATAL="${NONFATAL:-0}"
 
-# Graceful exit for quiet mode (SessionStart hooks shouldn't break sessions)
+# Graceful exit for nonfatal mode (SessionStart hooks shouldn't break sessions)
 graceful_exit() {
   local exit_code="${1:-1}"
   local msg="${2:-}"
-  if [[ "$QUIET" == "1" ]]; then
-    # In quiet mode, log to stderr but exit 0 to not break SessionStart hooks
-    if [[ -n "$msg" ]]; then
+  if [[ "$NONFATAL" == "1" ]]; then
+    # In nonfatal mode, log to stderr but exit 0 to not break SessionStart hooks
+    if [[ -n "$msg" ]] && [[ "$QUIET" != "1" ]]; then
       echo "$msg" >&2
     fi
     exit 0
   else
+    if [[ -n "$msg" ]] && [[ "$QUIET" != "1" ]]; then
+      echo "$msg" >&2
+    fi
     exit "$exit_code"
   fi
 }
@@ -56,12 +60,16 @@ graceful_exit() {
 # Temp file cleanup (best-effort; avoids leaks on early exit/signals)
 TEMP_FILE=""
 CURL_ERROR_LOG=""
+CURL_CONFIG=""
 cleanup_temp_files() {
   if [[ -n "${TEMP_FILE:-}" ]]; then
     rm -f "$TEMP_FILE" 2>/dev/null || true
   fi
   if [[ -n "${CURL_ERROR_LOG:-}" ]]; then
     rm -f "$CURL_ERROR_LOG" 2>/dev/null || true
+  fi
+  if [[ -n "${CURL_CONFIG:-}" ]]; then
+    rm -f "$CURL_CONFIG" 2>/dev/null || true
   fi
 }
 trap cleanup_temp_files EXIT INT TERM
@@ -147,6 +155,10 @@ while [[ $# -gt 0 ]]; do
       QUIET=1
       shift
       ;;
+    --nonfatal|--best-effort)
+      NONFATAL=1
+      shift
+      ;;
     --url)
       if [[ $# -lt 2 || "$2" == --* ]]; then
         echo "ERROR: --url requires a value" >&2
@@ -160,16 +172,18 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --help|-h)
-      echo "Usage: $0 [--suffix SUFFIX] [--program PROGRAM] [--model MODEL] [--quiet] [--url URL]"
+      echo "Usage: $0 [--suffix SUFFIX] [--program PROGRAM] [--model MODEL] [--quiet] [--nonfatal] [--url URL]"
       echo ""
       echo "Auto-register agent with MCP Mail using git branch name."
       echo ""
       echo "Options:"
-      echo "  --suffix    Suffix to add to agent name (e.g., 'c' for Codex)"
-      echo "  --program   Agent program identifier (e.g., 'claude-code', 'codex-cli')"
-      echo "  --model     Model identifier (e.g., 'opus', 'o3')"
-      echo "  --quiet     Suppress output on success"
-      echo "  --url       MCP Mail server URL (default: http://127.0.0.1:8765/mcp)"
+      echo "  --suffix           Suffix to add to agent name (e.g., 'c' for Codex)"
+      echo "  --program          Agent program identifier (e.g., 'claude-code', 'codex-cli')"
+      echo "  --model            Model identifier (e.g., 'opus', 'o3')"
+      echo "  --quiet            Suppress output (both success and error messages)"
+      echo "  --nonfatal         Exit 0 even on failure (for SessionStart hooks)"
+      echo "  --best-effort      Alias for --nonfatal"
+      echo "  --url              MCP Mail server URL (default: http://127.0.0.1:8765/mcp)"
       exit 0
       ;;
     *)
@@ -289,12 +303,32 @@ sanitize_alphanumeric() {
   echo "$raw" | tr -cd '[:alnum:]' | tr '[:upper:]' '[:lower:]'
 }
 
+# Generate short hash of project key (6 chars for uniqueness across repos)
+get_project_hash() {
+  local project_key="$1"
+  # Use SHA256 and take first 6 chars for compact unique identifier
+  if command -v sha256sum >/dev/null 2>&1; then
+    echo "$project_key" | sha256sum | cut -c1-6
+  elif command -v shasum >/dev/null 2>&1; then
+    echo "$project_key" | shasum -a 256 | cut -c1-6
+  else
+    # Fallback: use last 6 chars of sanitized project path
+    local sanitized=$(sanitize_alphanumeric "$(basename "$project_key")")
+    echo "${sanitized: -6}"
+  fi
+}
+
 # Main logic
 BRANCH=$(get_git_branch)
 PROJECT_KEY=$(get_project_key)
+PROJECT_HASH=$(get_project_hash "$PROJECT_KEY")
 AGENT_BASE=$(sanitize_alphanumeric "$BRANCH")
 SAFE_SUFFIX=$(sanitize_alphanumeric "$SUFFIX")
-AGENT_NAME="${AGENT_BASE}${SAFE_SUFFIX}"
+
+# Include project hash in agent name to prevent cross-repo conflicts
+# Format: <branch><project_hash><suffix>
+# Example: main3f2a1bc or devfeature7b8c2dc
+AGENT_NAME="${AGENT_BASE}${PROJECT_HASH}${SAFE_SUFFIX}"
 
 # Validate agent name is not empty
 if [[ -z "$AGENT_NAME" ]]; then
@@ -342,16 +376,23 @@ JSON_PAYLOAD=$(jq -n \
   }')
 
 # Make HTTP request and capture both response and status code
+# Use curl config file to avoid exposing token in ps output
 TEMP_FILE=$(mktemp)
 CURL_ERROR_LOG=$(mktemp)
+CURL_CONFIG=$(mktemp)
+
+# Write auth header to config file (not visible in ps)
+cat > "$CURL_CONFIG" <<EOF
+header = "Content-Type: application/json"
+header = "Accept: application/json"
+header = "Authorization: Bearer ${HTTP_BEARER_TOKEN}"
+EOF
 
 HTTP_STATUS=$(curl -sS --connect-timeout 5 --max-time 30 \
   -w '%{http_code}' \
   -o "$TEMP_FILE" \
   -X POST \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json" \
-  -H "Authorization: Bearer ${HTTP_BEARER_TOKEN}" \
+  --config "$CURL_CONFIG" \
   -d "$JSON_PAYLOAD" \
   "${MCP_MAIL_URL}" 2>"$CURL_ERROR_LOG") || {
   msg="ERROR: Failed to connect to MCP Mail server at ${MCP_MAIL_URL}"
@@ -361,6 +402,9 @@ HTTP_STATUS=$(curl -sS --connect-timeout 5 --max-time 30 \
   fi
   graceful_exit 1 "$msg"
 }
+
+# Clean up curl config file immediately after use
+rm -f "$CURL_CONFIG"
 
 RESPONSE=$(cat "$TEMP_FILE")
 
@@ -392,7 +436,7 @@ fi
 
 # Success
 if [[ "$QUIET" != "1" ]]; then
-  echo "Registered agent '${AGENT_NAME}' (branch: ${BRANCH}, program: ${PROGRAM})"
+  echo "Registered agent '${AGENT_NAME}' (branch: ${BRANCH}, project: ${PROJECT_HASH}, program: ${PROGRAM})"
 fi
 
 exit 0
