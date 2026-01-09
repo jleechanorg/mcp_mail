@@ -14,8 +14,12 @@
   "hooks": {
     "SessionStart": [
       {
-        "type": "command",
-        "command": "bash -lc 'repo_root=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\"; \"$repo_root/scripts/auto_register_agent.sh\" --program claude-code --model sonnet --quiet'"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -lc 'repo_root=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\"; \"$repo_root/scripts/auto_register_agent.sh\" --program claude-code --model sonnet --quiet'"
+          }
+        ]
       }
     ],
     "PreToolUse": [],
