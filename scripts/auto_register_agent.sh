@@ -151,6 +151,37 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Auto-detect program if not specified
+if [[ "$PROGRAM" == "unknown" ]]; then
+  if [[ -n "${CLAUDECODE:-}" ]]; then
+    PROGRAM="claude-code"
+  elif command -v codex >/dev/null 2>&1 && [[ "$0" =~ codex ]]; then
+    PROGRAM="codex-cli"
+  fi
+fi
+
+# Auto-detect model if not specified (sensible defaults based on program)
+if [[ "$MODEL" == "unknown" ]]; then
+  case "$PROGRAM" in
+    claude-code)
+      # Try to detect from process args, fallback to sonnet
+      if ps aux 2>/dev/null | grep -q "claude.*--model opus"; then
+        MODEL="opus"
+      elif ps aux 2>/dev/null | grep -q "claude.*--model sonnet"; then
+        MODEL="sonnet"
+      else
+        MODEL="sonnet"  # Default for Claude Code
+      fi
+      ;;
+    codex-cli)
+      MODEL="o3"  # Default for Codex
+      ;;
+    *)
+      MODEL="unknown"  # Keep as unknown if we can't detect
+      ;;
+  esac
+fi
+
 # Load bearer token from environment or .env files
 # Try: 1. Env var, 2. Repo .env, 3. Config .env, 4. Legacy .env
 if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then
