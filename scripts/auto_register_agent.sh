@@ -23,7 +23,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Optionally load shared helpers; script works without lib.sh
 if [[ -r "${SCRIPT_DIR}/lib.sh" ]]; then
   # shellcheck source=/dev/null
-  source "${SCRIPT_DIR}/lib.sh" || true
+  source "${SCRIPT_DIR}/lib.sh"
 fi
 
 # Initialize colors if lib.sh loaded
@@ -52,14 +52,7 @@ load_token_from_file() {
       ''|'#'*) continue ;;
       HTTP_BEARER_TOKEN=*)
         value="${line#HTTP_BEARER_TOKEN=}"
-        # Trim leading/trailing whitespace
-        value="${value#"${value%%[![:space:]]*}"}"
-        value="${value%"${value##*[![:space:]]}"}"
-        # Remove matching surrounding quotes (single or double)
-        if [[ ( "${value:0:1}" == '"' && "${value: -1}" == '"' ) || \
-              ( "${value:0:1}" == "'" && "${value: -1}" == "'" ) ]]; then
-          value="${value:1:${#value}-2}"
-        fi
+        value=$(strip_token "$value")
         if [[ -n "$value" ]]; then
           HTTP_BEARER_TOKEN="$value"
         fi
@@ -72,14 +65,14 @@ load_token_from_file() {
 # Strip whitespace and quotes from token (for env var fallback)
 strip_token() {
   local token="${1:-}"
-  # Trim surrounding whitespace
-  token="${token#${token%%[![:space:]]*}}"
-  token="${token%${token##*[![:space:]]}}"
-  # Trim optional single/double quotes
-  token="${token%\"}"
-  token="${token#\"}"
-  token="${token%\'}"
-  token="${token#\'}"
+  # Trim leading/trailing whitespace
+  token="${token#"${token%%[![:space:]]*}"}"
+  token="${token%"${token##*[![:space:]]}"}"
+  # Remove matching surrounding quotes (single or double)
+  if [[ ( "${token:0:1}" == '"' && "${token: -1}" == '"' ) || \
+        ( "${token:0:1}" == "'" && "${token: -1}" == "'" ) ]]; then
+    token="${token:1:${#token}-2}"
+  fi
   echo "$token"
 }
 
@@ -217,53 +210,38 @@ fi
 # Generate portable request ID (macOS date doesn't support %N)
 REQUEST_ID="$(date +%s)$$"
 
-# Build JSON-RPC request using jq for proper escaping if available
-if command -v jq >/dev/null 2>&1; then
-  JSON_PAYLOAD=$(jq -n \
-    --arg id "$REQUEST_ID" \
-    --arg agent "$AGENT_NAME" \
-    --arg prog "$PROGRAM" \
-    --arg model "$MODEL" \
-    --arg branch "$BRANCH" \
-    '{
-      jsonrpc: "2.0",
-      id: $id,
-      method: "tools/call",
-      params: {
-        name: "register_agent",
-        arguments: {
-          name: $agent,
-          program: $prog,
-          model: $model,
-          task_description: ("Auto-registered from branch " + $branch)
-        }
-      }
-    }')
-else
-  # Fallback: construct JSON directly (agent name is already sanitized to alphanumeric)
-  # PROGRAM and MODEL should be safe values; BRANCH is only used in description
-  JSON_PAYLOAD=$(cat <<EOF
-{
-  "jsonrpc": "2.0",
-  "id": "${REQUEST_ID}",
-  "method": "tools/call",
-  "params": {
-    "name": "register_agent",
-    "arguments": {
-      "name": "${AGENT_NAME}",
-      "program": "${PROGRAM}",
-      "model": "${MODEL}",
-      "task_description": "Auto-registered from branch ${AGENT_BASE}"
-    }
-  }
-}
-EOF
-)
+# Build JSON-RPC request using jq for proper escaping
+if ! command -v jq >/dev/null 2>&1; then
+  echo "ERROR: jq is required to build a safe JSON-RPC request payload." >&2
+  echo "Install jq and retry. (https://jqlang.github.io/jq/)" >&2
+  exit 1
 fi
+
+JSON_PAYLOAD=$(jq -n \
+  --arg id "$REQUEST_ID" \
+  --arg agent "$AGENT_NAME" \
+  --arg prog "$PROGRAM" \
+  --arg model "$MODEL" \
+  --arg branch "$BRANCH" \
+  '{
+    jsonrpc: "2.0",
+    id: $id,
+    method: "tools/call",
+    params: {
+      name: "register_agent",
+      arguments: {
+        name: $agent,
+        program: $prog,
+        model: $model,
+        task_description: ("Auto-registered from branch " + $branch)
+      }
+    }
+  }')
 
 # Make HTTP request and capture both response and status code
 TEMP_FILE=$(mktemp)
-trap 'rm -f "$TEMP_FILE"' EXIT
+CURL_ERROR_LOG=$(mktemp)
+trap 'rm -f "$TEMP_FILE" "$CURL_ERROR_LOG"' EXIT
 
 HTTP_STATUS=$(curl -sS --connect-timeout 5 --max-time 30 \
   -w '%{http_code}' \
@@ -273,11 +251,11 @@ HTTP_STATUS=$(curl -sS --connect-timeout 5 --max-time 30 \
   -H "Accept: application/json" \
   -H "Authorization: Bearer ${HTTP_BEARER_TOKEN}" \
   -d "$JSON_PAYLOAD" \
-  "${MCP_MAIL_URL}" 2>&1) || {
-  CURL_ERROR="$HTTP_STATUS"
+  "${MCP_MAIL_URL}" 2>"$CURL_ERROR_LOG") || {
   echo "ERROR: Failed to connect to MCP Mail server at ${MCP_MAIL_URL}" >&2
-  if [[ -n "${CURL_ERROR:-}" ]]; then
-    echo "curl error: $CURL_ERROR" >&2
+  if [[ -s "$CURL_ERROR_LOG" ]]; then
+    echo "curl error:" >&2
+    cat "$CURL_ERROR_LOG" >&2
   fi
   exit 1
 }
