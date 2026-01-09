@@ -171,9 +171,9 @@ fi
 # Strip whitespace/quotes from env var (load_token_from_file already handles this for file-loaded tokens)
 HTTP_BEARER_TOKEN=$(strip_token "${HTTP_BEARER_TOKEN:-}")
 
+# Use default token if none provided (for servers without authentication)
 if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then
-  echo "ERROR: HTTP_BEARER_TOKEN not set in environment and not found in .env files" >&2
-  exit 1
+  HTTP_BEARER_TOKEN="mcp-agent-mail-default-token"
 fi
 
 # Get current git branch
