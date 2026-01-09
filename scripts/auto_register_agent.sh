@@ -38,6 +38,21 @@ MODEL="unknown"
 MCP_MAIL_URL="${MCP_MAIL_URL:-http://127.0.0.1:8765/mcp/}"
 QUIET="${QUIET:-0}"
 
+# Graceful exit for quiet mode (SessionStart hooks shouldn't break sessions)
+graceful_exit() {
+  local exit_code="${1:-1}"
+  local msg="${2:-}"
+  if [[ "$QUIET" == "1" ]]; then
+    # In quiet mode, log to stderr but exit 0 to not break SessionStart hooks
+    if [[ -n "$msg" ]]; then
+      echo "$msg" >&2
+    fi
+    exit 0
+  else
+    exit "$exit_code"
+  fi
+}
+
 # Temp file cleanup (best-effort; avoids leaks on early exit/signals)
 TEMP_FILE=""
 CURL_ERROR_LOG=""
@@ -196,7 +211,13 @@ if [[ "$MODEL" == "unknown" ]]; then
 fi
 
 # Load bearer token from environment or .env files
-# Try: 1. Env var, 2. Repo .env, 3. Config .env, 4. Legacy .env
+# Try: 1. Env var, 2. ~/.mcp_mail/credentials.json, 3. Repo .env, 4. Config .env, 5. Legacy .env
+if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then
+  # Check ~/.mcp_mail/credentials.json (recommended location per CLAUDE.md)
+  if [[ -f "${HOME}/.mcp_mail/credentials.json" ]] && command -v jq >/dev/null 2>&1; then
+    HTTP_BEARER_TOKEN=$(jq -r '.HTTP_BEARER_TOKEN // empty' "${HOME}/.mcp_mail/credentials.json" 2>/dev/null || true)
+  fi
+fi
 if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then
   # Determine repo root for local .env
   REPO_ROOT="."
@@ -217,6 +238,11 @@ HTTP_BEARER_TOKEN=$(strip_token "${HTTP_BEARER_TOKEN:-}")
 
 # Use default token if none provided (for servers without authentication)
 if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then
+  if [[ "$QUIET" != "1" ]]; then
+    echo "WARNING: No HTTP_BEARER_TOKEN found. Using default token 'mcp-agent-mail-default-token'." >&2
+    echo "         This may fail if your server requires authentication." >&2
+    echo "         Configure token in ~/.mcp_mail/credentials.json or set HTTP_BEARER_TOKEN env var." >&2
+  fi
   HTTP_BEARER_TOKEN="mcp-agent-mail-default-token"
 fi
 
@@ -272,8 +298,12 @@ AGENT_NAME="${AGENT_BASE}${SAFE_SUFFIX}"
 
 # Validate agent name is not empty
 if [[ -z "$AGENT_NAME" ]]; then
-  echo "ERROR: Could not derive valid agent name from branch: $BRANCH" >&2
-  exit 1
+  graceful_exit 1 "ERROR: Could not derive valid agent name from branch: $BRANCH"
+fi
+
+# Validate agent name length (max 128 chars per MCP agent registration spec)
+if [[ ${#AGENT_NAME} -gt 128 ]]; then
+  graceful_exit 1 "ERROR: Agent name too long (${#AGENT_NAME} chars): ${AGENT_NAME:0:50}... (max 128 chars)"
 fi
 
 # Generate portable request ID with nanosecond precision if available
@@ -285,9 +315,7 @@ fi
 
 # Build JSON-RPC request using jq for proper escaping
 if ! command -v jq >/dev/null 2>&1; then
-  echo "ERROR: jq is required to build a safe JSON-RPC request payload." >&2
-  echo "Install jq and retry. (https://jqlang.github.io/jq/)" >&2
-  exit 1
+  graceful_exit 1 "ERROR: jq is required to build a safe JSON-RPC request payload. Install jq and retry. (https://jqlang.github.io/jq/)"
 fi
 
 JSON_PAYLOAD=$(jq -n \
@@ -326,30 +354,29 @@ HTTP_STATUS=$(curl -sS --connect-timeout 5 --max-time 30 \
   -H "Authorization: Bearer ${HTTP_BEARER_TOKEN}" \
   -d "$JSON_PAYLOAD" \
   "${MCP_MAIL_URL}" 2>"$CURL_ERROR_LOG") || {
-  echo "ERROR: Failed to connect to MCP Mail server at ${MCP_MAIL_URL}" >&2
+  msg="ERROR: Failed to connect to MCP Mail server at ${MCP_MAIL_URL}"
   if [[ -s "$CURL_ERROR_LOG" ]]; then
-    echo "curl error:" >&2
-    cat "$CURL_ERROR_LOG" >&2
+    curl_err=$(cat "$CURL_ERROR_LOG")
+    msg="$msg"$'\n'"curl error: $curl_err"
   fi
-  exit 1
+  graceful_exit 1 "$msg"
 }
 
 RESPONSE=$(cat "$TEMP_FILE")
 
 # Check HTTP status code
 if [[ ! "$HTTP_STATUS" =~ ^2[0-9][0-9]$ ]]; then
-  echo "ERROR: HTTP request failed with status $HTTP_STATUS" >&2
+  msg="ERROR: HTTP request failed with status $HTTP_STATUS"
   if [[ -n "$RESPONSE" ]]; then
-    echo "Response: $RESPONSE" >&2
+    msg="$msg"$'\n'"Response: $RESPONSE"
   fi
-  exit 1
+  graceful_exit 1 "$msg"
 fi
 
 # Parse JSON-RPC response and validate success (jq is required)
 ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // empty' 2>/dev/null) || true
 if [[ -n "$ERROR_MSG" ]]; then
-  echo "ERROR: Registration failed: $ERROR_MSG" >&2
-  exit 1
+  graceful_exit 1 "ERROR: Registration failed: $ERROR_MSG"
 fi
 
 if ! echo "$RESPONSE" | jq -e --arg req_id "$REQUEST_ID" --arg agent "$AGENT_NAME" '
@@ -360,9 +387,7 @@ if ! echo "$RESPONSE" | jq -e --arg req_id "$REQUEST_ID" --arg agent "$AGENT_NAM
   and (.result.name | type == "string")
   and (.result.name == $agent)
 ' >/dev/null; then
-  echo "ERROR: Registration response did not validate as a successful register_agent call." >&2
-  echo "Response: $RESPONSE" >&2
-  exit 1
+  graceful_exit 1 "ERROR: Registration response did not validate as a successful register_agent call."$'\n'"Response: $RESPONSE"
 fi
 
 # Success
