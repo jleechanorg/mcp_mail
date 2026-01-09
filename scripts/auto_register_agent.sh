@@ -271,22 +271,11 @@ if [[ ! "$HTTP_STATUS" =~ ^2[0-9][0-9]$ ]]; then
   exit 1
 fi
 
-# Check for JSON-RPC error in response
-# Use jq if available for robust parsing, otherwise fallback to grep
-if command -v jq >/dev/null 2>&1; then
-  ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // empty' 2>/dev/null)
-  if [[ -n "$ERROR_MSG" ]]; then
-    echo "ERROR: Registration failed: $ERROR_MSG" >&2
-    exit 1
-  fi
-else
-  # Fallback: check for top-level "error" field (JSON-RPC spec)
-  # This pattern matches "error": { at the top level
-  if echo "$RESPONSE" | grep -qE '"error"\s*:\s*\{'; then
-    ERROR_MSG=$(echo "$RESPONSE" | grep -oE '"message"\s*:\s*"[^"]*"' | head -1 | sed 's/"message"\s*:\s*"\([^"]*\)"/\1/')
-    echo "ERROR: Registration failed: ${ERROR_MSG:-unknown error}" >&2
-    exit 1
-  fi
+# Check for JSON-RPC error in response (jq is required)
+ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // empty' 2>/dev/null)
+if [[ -n "$ERROR_MSG" ]]; then
+  echo "ERROR: Registration failed: $ERROR_MSG" >&2
+  exit 1
 fi
 
 # Success
