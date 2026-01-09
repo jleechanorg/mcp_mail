@@ -83,9 +83,7 @@ class MCPMailClaudeCLITest(ClaudeCLITest):
                 if token:
                     config = json.loads(original_content)
                     if "mcpServers" in config and "mcp-agent-mail" in config["mcpServers"]:
-                        config["mcpServers"]["mcp-agent-mail"]["headers"] = {
-                            "Authorization": f"Bearer {token}"
-                        }
+                        config["mcpServers"]["mcp-agent-mail"]["headers"] = {"Authorization": f"Bearer {token}"}
                         settings_path.write_text(json.dumps(config, indent=2))
                         print(f"[SETUP] Patched {settings_path} with auth token for test")
                 yield
