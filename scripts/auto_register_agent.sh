@@ -38,6 +38,19 @@ MODEL="unknown"
 MCP_MAIL_URL="${MCP_MAIL_URL:-http://127.0.0.1:8765/mcp/}"
 QUIET="${QUIET:-0}"
 
+# Temp file cleanup (best-effort; avoids leaks on early exit/signals)
+TEMP_FILE=""
+CURL_ERROR_LOG=""
+cleanup_temp_files() {
+  if [[ -n "${TEMP_FILE:-}" ]]; then
+    rm -f "$TEMP_FILE" 2>/dev/null || true
+  fi
+  if [[ -n "${CURL_ERROR_LOG:-}" ]]; then
+    rm -f "$CURL_ERROR_LOG" 2>/dev/null || true
+  fi
+}
+trap cleanup_temp_files EXIT INT TERM
+
 # Load HTTP_BEARER_TOKEN from a .env-style file
 # Handles comments, whitespace, and quoted values
 load_token_from_file() {
@@ -303,7 +316,6 @@ JSON_PAYLOAD=$(jq -n \
 # Make HTTP request and capture both response and status code
 TEMP_FILE=$(mktemp)
 CURL_ERROR_LOG=$(mktemp)
-trap 'rm -f "$TEMP_FILE" "$CURL_ERROR_LOG"' EXIT
 
 HTTP_STATUS=$(curl -sS --connect-timeout 5 --max-time 30 \
   -w '%{http_code}' \
@@ -333,17 +345,23 @@ if [[ ! "$HTTP_STATUS" =~ ^2[0-9][0-9]$ ]]; then
   exit 1
 fi
 
-# Check for JSON-RPC error in response (jq is required)
-ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // empty' 2>/dev/null)
+# Parse JSON-RPC response and validate success (jq is required)
+ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // empty' 2>/dev/null) || true
 if [[ -n "$ERROR_MSG" ]]; then
   echo "ERROR: Registration failed: $ERROR_MSG" >&2
   exit 1
 fi
 
-# Fallback: check for top-level "error" field (JSON-RPC spec) if jq failed (unlikely)
-if [[ -z "$ERROR_MSG" ]] && echo "$RESPONSE" | grep -qE '"error"[[:space:]]*:[[:space:]]*\{'; then
-  ERROR_MSG=$(echo "$RESPONSE" | grep -oE '"message"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/"message"[[:space:]]*:[[:space:]]*"\([^"]*\)"/\1/')
-  echo "ERROR: Registration failed: ${ERROR_MSG:-unknown error}" >&2
+if ! echo "$RESPONSE" | jq -e --arg req_id "$REQUEST_ID" --arg agent "$AGENT_NAME" '
+  .jsonrpc == "2.0"
+  and .id == $req_id
+  and (.error | not)
+  and (.result | type == "object")
+  and (.result.name | type == "string")
+  and (.result.name == $agent)
+' >/dev/null; then
+  echo "ERROR: Registration response did not validate as a successful register_agent call." >&2
+  echo "Response: $RESPONSE" >&2
   exit 1
 fi
 
