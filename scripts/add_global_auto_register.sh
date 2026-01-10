@@ -29,7 +29,7 @@ echo "Creating backup at $BACKUP_SETTINGS"
 cp "$GLOBAL_SETTINGS" "$BACKUP_SETTINGS"
 
 # Create the SessionStart hook entry with correct format (matcher-based with hooks array)
-HOOK_CMD='bash -lc '\''repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"; if [[ -f "$repo_root/scripts/auto_register_agent.sh" ]]; then "$repo_root/scripts/auto_register_agent.sh" --program claude-code --model sonnet --nonfatal --force-reclaim; fi'\'''
+HOOK_CMD='bash -lc '\''repo_root=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\"; if [[ -f \"$repo_root/scripts/auto_register_agent.sh\" ]]; then \"$repo_root/scripts/auto_register_agent.sh\" --program claude-code --model sonnet --nonfatal --force-reclaim; fi'\'''
 
 SESSION_START_HOOK=$(jq -n --arg cmd "$HOOK_CMD" '{
   "hooks": [
@@ -43,7 +43,8 @@ SESSION_START_HOOK=$(jq -n --arg cmd "$HOOK_CMD" '{
 # Check if hook already exists (check for command string in any hook entry)
 # We handle nulls gracefully with // [] and ? operator
 HOOK_EXISTS=$(jq --arg cmd "$HOOK_CMD" \
-  '(.hooks.SessionStart // []) | any((.hooks // [])[]?.command == $cmd)' \
+  'def arr(x): if (x|type)=="array" then x else [] end;
+   arr(.hooks.SessionStart) | any(arr(.hooks)[]? | .command == $cmd)' \
   "$GLOBAL_SETTINGS" 2>/dev/null || echo "false")
 
 if [[ "$HOOK_EXISTS" == "true" ]]; then
