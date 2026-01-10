@@ -86,17 +86,24 @@ class MCPMailClaudeCLITest(ClaudeCLITest):
                     config = json.loads(original_content)
                     server = config.get("mcpServers", {}).get("mcp-agent-mail")
                     if isinstance(server, dict):
-                        server["headers"] = {"Authorization": f"Bearer {token}"}
+                        headers = server.get("headers")
+                        if not isinstance(headers, dict):
+                            headers = {}
+                        headers["Authorization"] = f"Bearer {token}"
+                        server["headers"] = headers
                         settings_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
                         print(f"[SETUP] Patched {settings_path} with auth token for test")
             except Exception as e:
                 print(f"[SETUP] Warning: Failed to patch settings: {e}")
-            
+
             try:
                 yield
             finally:
-                settings_path.write_text(original_content, encoding="utf-8")
-                print(f"[TEARDOWN] Restored {settings_path}")
+                try:
+                    settings_path.write_text(original_content, encoding="utf-8")
+                    print(f"[TEARDOWN] Restored {settings_path}")
+                except Exception as e:
+                    print(f"[TEARDOWN] Warning: Failed to restore settings: {e}")
 
         with patched_settings():
             # Check prerequisites

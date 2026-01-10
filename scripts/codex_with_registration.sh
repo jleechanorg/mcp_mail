@@ -29,7 +29,9 @@ else
           # Simple strip (remove quotes/whitespace)
           value="${value#"${value%%[![:space:]]*}"}"
           value="${value%"${value##*[![:space:]]}"}"
-          if [[ ( "${value:0:1}" == '"' && "${value: -1}" == '"' ) ]]; then value="${value:1:${#value}-2}"; fi
+          if [[ ( "${value:0:1}" == '"' && "${value: -1}" == '"' ) || ( "${value:0:1}" == "'" && "${value: -1}" == "'" ) ]]; then
+            value="${value:1:${#value}-2}"
+          fi
           if [[ -n "$value" ]]; then HTTP_BEARER_TOKEN="$value"; fi
           break
           ;;

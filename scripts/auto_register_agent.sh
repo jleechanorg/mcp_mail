@@ -14,7 +14,8 @@
 #   HTTP_BEARER_TOKEN  - Required for authentication (or loaded from .env)
 #   MCP_MAIL_URL       - Server URL (default: http://127.0.0.1:8765/mcp)
 #
-# Security note: The bearer token will be visible in process listings during curl execution.
+# Security note: The bearer token is passed via a temporary curl config file to avoid
+# exposure in process listings. Ensure temporary files are secured (this script uses mktemp).
 
 set -euo pipefail
 
@@ -316,7 +317,8 @@ get_project_hash() {
     echo "$project_key" | shasum -a 256 | cut -c1-6
   else
     # Fallback: use last 6 chars of sanitized project path
-    local sanitized=$(sanitize_alphanumeric "$(basename "$project_key")")
+    local sanitized
+    sanitized=$(sanitize_alphanumeric "$(basename "$project_key")")
     echo "${sanitized: -6}"
   fi
 }

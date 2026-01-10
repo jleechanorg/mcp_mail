@@ -17,12 +17,8 @@
   "hooks": {
     "SessionStart": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash -lc 'repo_root=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\"; \"$repo_root/scripts/auto_register_agent.sh\" --program claude-code --model sonnet --nonfatal --quiet'"
-          }
-        ]
+        "type": "command",
+        "command": "bash -lc 'repo_root=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\"; \"$repo_root/scripts/auto_register_agent.sh\" --program claude-code --model sonnet --nonfatal --quiet'"
       }
     ],
     "PreToolUse": [],
@@ -31,12 +27,8 @@
   "_exampleHooks": {
     "_instructions": "Uncomment and customize these hooks after registering your project and agent. If your server requires auth, generate a local config with an embedded token via ./scripts/integrate_claude_code.sh (recommended) instead of committing secrets.",
     "SessionStart_example": [
-      {
-        "hooks": [
-          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli file_reservations active YOUR_PROJECT_NAME" },
-          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli acks pending YOUR_AGENT_NAME --limit 20" }
-        ]
-      }
+      { "type": "command", "command": "uv run python -m mcp_agent_mail.cli file_reservations active YOUR_PROJECT_NAME" },
+      { "type": "command", "command": "uv run python -m mcp_agent_mail.cli acks pending YOUR_AGENT_NAME --limit 20" }
     ],
     "PreToolUse_example": [
       {
