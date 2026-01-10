@@ -27,6 +27,12 @@ if [[ -r "${SCRIPT_DIR}/lib.sh" ]]; then
   source "${SCRIPT_DIR}/lib.sh"
 fi
 
+# Load name generator for memorable agent names
+if [[ -r "${SCRIPT_DIR}/lib_names.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "${SCRIPT_DIR}/lib_names.sh"
+fi
+
 # Initialize colors if lib.sh loaded
 if command -v init_colors >/dev/null 2>&1; then
   init_colors
@@ -453,7 +459,20 @@ fi
 
 # Success
 if [[ "$QUIET" != "1" ]]; then
-  echo "Registered agent '${AGENT_NAME}' (branch: ${BRANCH}, project: ${PROJECT_HASH}, program: ${PROGRAM})"
+  # Generate memorable name from branch name
+  MEMORABLE_NAME=""
+  if command -v generate_memorable_name >/dev/null 2>&1; then
+    MEMORABLE_NAME=$(generate_memorable_name "$BRANCH")
+  fi
+
+  # Display both technical and memorable names
+  if [[ -n "$MEMORABLE_NAME" ]]; then
+    echo "🤖 Agent registered: ${MEMORABLE_NAME}"
+    echo "   Full ID: ${AGENT_NAME}"
+    echo "   Branch: ${BRANCH}, Program: ${PROGRAM}"
+  else
+    echo "Registered agent '${AGENT_NAME}' (branch: ${BRANCH}, project: ${PROJECT_HASH}, program: ${PROGRAM})"
+  fi
 fi
 
 exit 0
