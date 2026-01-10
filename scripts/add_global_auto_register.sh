@@ -23,17 +23,18 @@ echo "Creating backup at $BACKUP_SETTINGS"
 cp "$GLOBAL_SETTINGS" "$BACKUP_SETTINGS"
 
 # Create the SessionStart hook entry with correct format (matcher-based with hooks array)
-SESSION_START_HOOK='{
+HOOK_CMD='bash -lc '\''repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"; if [[ -f "$repo_root/scripts/auto_register_agent.sh" ]]; then "$repo_root/scripts/auto_register_agent.sh" --program claude-code --model sonnet --nonfatal --force-reclaim; fi'\'''
+
+SESSION_START_HOOK=$(jq -n --arg cmd "$HOOK_CMD" '{
   "hooks": [
     {
       "type": "command",
-      "command": "bash -lc '\''repo_root=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\"; if [[ -f \"$repo_root/scripts/auto_register_agent.sh\" ]]; then \"$repo_root/scripts/auto_register_agent.sh\" --program claude-code --model sonnet --nonfatal --force-reclaim; fi'\''"
+      "command": $cmd
     }
   ]
-}'
+}')
 
 # Check if hook already exists (check for command string in any hook entry)
-HOOK_CMD='bash -lc '\''repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"; if [[ -f "$repo_root/scripts/auto_register_agent.sh" ]]; then "$repo_root/scripts/auto_register_agent.sh" --program claude-code --model sonnet --nonfatal --force-reclaim; fi'\'''
 HOOK_EXISTS=$(jq --arg cmd "$HOOK_CMD" \
   '(.hooks.SessionStart // []) | any(.hooks[]?.command == $cmd)' \
   "$GLOBAL_SETTINGS" 2>/dev/null || echo "false")
@@ -49,7 +50,10 @@ fi
 # Use jq to add the SessionStart hook (initialize array if needed, remove legacy entries, then append)
 echo "Adding SessionStart hook to global settings..."
 jq --argjson hook "$SESSION_START_HOOK" --arg cmd "$HOOK_CMD" \
-  '.hooks.SessionStart = ((.hooks.SessionStart // []) | map(select(.command != $cmd)) + [$hook])' \
+  '.hooks.SessionStart = ((.hooks.SessionStart // []) | map(select(
+    ((.command // "") | contains("scripts/auto_register_agent.sh") | not) and
+    ((.hooks // []) | any(.command | contains("scripts/auto_register_agent.sh")) | not)
+  )) + [$hook])' \
   "$GLOBAL_SETTINGS" > "$GLOBAL_SETTINGS.tmp"
 
 # Validate the JSON is still valid
