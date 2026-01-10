@@ -22,7 +22,7 @@ Validate that multiple real CLI instances can coordinate through MCP Agent Mail 
   - Codex: `MCP_CONFIG=.codex/config.toml`
   - Claude: `MCP_CONFIG=.mcp.json`
   - Gemini: `GEMINI_CONFIG=./examples/gemini.mcp.json`
-- **Agent names are global (not project-scoped).** To avoid collisions with prior runs, generate unique names:
+- **Agent names are global (not project-scoped).** To avoid collisions with prior runs, you must use a unique `RUN_ID` (timestamp or UUID) per run, and make your `project_key` and agent names include it:
   ```bash
   RUN_ID=$(date +"%Y%m%d_%H%M%S")
   PROJECT_KEY="/tmp/real_cli_test_project_${RUN_ID}"
@@ -30,7 +30,12 @@ Validate that multiple real CLI instances can coordinate through MCP Agent Mail 
   BACKEND="BackendDev-${RUN_ID}"
   DBA="DatabaseAdmin-${RUN_ID}"
   ```
-  Replace the names and project_key in the prompt files below before running.
+  The prompt templates below intentionally use placeholders; replace every placeholder (especially `project_key` and agent `name`) before running.
+  Placeholder mapping used below:
+  - `__PROJECT_KEY__` → your `PROJECT_KEY`
+  - `__FRONTEND__` → your `FRONTEND`
+  - `__BACKEND__` → your `BACKEND`
+  - `__DBA__` → your `DBA`
 
 ## Test Setup
 
@@ -54,22 +59,22 @@ ps aux | grep "mcp_agent_mail.*serve-http" | grep -v grep
 
 ### Step 1: Agent 1 - Registers and Sends Initial Message
 
-Create prompt file (substitute your RUN_ID variables if you defined them):
+Create prompt file (replace placeholders using your unique `RUN_ID` values above):
 ```bash
 cat > "$TEST_DIR/prompts/agent1_task.txt" <<'EOF'
 You are Agent1 (FrontendDev). Your task:
 
 1. Register yourself using the mcp-agent-mail MCP server:
    - Use tool: register_agent
-   - project_key: "/tmp/real_cli_test_project"
-   - name: "FrontendDev"
+   - project_key: "__PROJECT_KEY__"
+   - name: "__FRONTEND__"
    - program: "codex-cli"
    - model: "o3"
    - task_description: "React UI Development"
 
 2. Send a message to BackendDev:
    - Use tool: send_message
-   - to: ["BackendDev"]
+   - to: ["__BACKEND__"]
    - subject: "Need API endpoint for dashboard"
    - body_md: "Hi BackendDev! Can you create GET /api/dashboard/stats endpoint? I need it for the React dashboard component."
    - importance: "high"
@@ -109,7 +114,7 @@ echo "Agent1 (FrontendDev) started - PID: $AGENT1_PID"
 
 ### Step 2: Agent 2 - Registers, Reads Message, Responds
 
-Create prompt file (update names/project_key if you set RUN_ID):
+Create prompt file (replace placeholders using your unique `RUN_ID` values above):
 ```bash
 cat > "$TEST_DIR/prompts/agent2_task.txt" <<'EOF'
 You are Agent2 (BackendDev). Your task:
@@ -117,8 +122,8 @@ You are Agent2 (BackendDev). Your task:
 1. Wait 3 seconds for Agent1 to register and send message
 
 2. Register yourself using mcp-agent-mail:
-   - project_key: "/tmp/real_claude_test_project"
-   - name: "BackendDev"
+   - project_key: "__PROJECT_KEY__"
+   - name: "__BACKEND__"
    - program: "claude-code"
    - model: "sonnet-4.5"
    - task_description: "FastAPI Backend Development"
@@ -127,16 +132,16 @@ You are Agent2 (BackendDev). Your task:
    - Use tool: fetch_inbox
    - limit: 5
    - include_bodies: true
-   - Look for message from FrontendDev
+   - Look for message from __FRONTEND__
 
 4. Send message to DatabaseAdmin:
-   - to: ["DatabaseAdmin"]
+   - to: ["__DBA__"]
    - subject: "Need help with user stats query"
    - body_md: "Hi DatabaseAdmin! FrontendDev needs dashboard stats. Can you help optimize this query: SELECT * FROM user_activity WHERE date > NOW() - INTERVAL '7 days'?"
    - importance: "normal"
 
 5. Reply to FrontendDev:
-   - to: ["FrontendDev"]
+   - to: ["__FRONTEND__"]
    - subject: "Re: Need API endpoint for dashboard"
    - body_md: "Working on it! Asked DatabaseAdmin for help with the query. Will have it ready soon."
 
@@ -161,7 +166,7 @@ echo "Agent2 (BackendDev) started - PID: $AGENT2_PID"
 
 ### Step 3: Agent 3 - Registers, Reads Message, Completes Chain
 
-Create prompt file (update names/project_key if you set RUN_ID):
+Create prompt file (replace placeholders using your unique `RUN_ID` values above):
 ```bash
 cat > "$TEST_DIR/prompts/agent3_task.txt" <<'EOF'
 You are Agent3 (DatabaseAdmin). Your task:
@@ -169,8 +174,8 @@ You are Agent3 (DatabaseAdmin). Your task:
 1. Wait 6 seconds for other agents to start
 
 2. Register yourself using mcp-agent-mail:
-   - project_key: "/tmp/real_claude_test_project"
-   - name: "DatabaseAdmin"
+   - project_key: "__PROJECT_KEY__"
+   - name: "__DBA__"
    - program: "claude-code"
    - model: "sonnet-4.5"
    - task_description: "PostgreSQL Database Management"
@@ -179,10 +184,10 @@ You are Agent3 (DatabaseAdmin). Your task:
    - Use tool: fetch_inbox
    - limit: 5
    - include_bodies: true
-   - Look for message from BackendDev
+   - Look for message from __BACKEND__
 
 4. Send optimized query to BackendDev:
-   - to: ["BackendDev"]
+   - to: ["__BACKEND__"]
    - subject: "Re: Need help with user stats query"
    - body_md: "Here's the optimized query:\\n\\`\\`\\`sql\\nCREATE INDEX IF NOT EXISTS idx_user_activity_date ON user_activity(date);\\nSELECT user_id, COUNT(*) as activity_count FROM user_activity WHERE date > NOW() - INTERVAL '7 days' GROUP BY user_id;\\n\\`\\`\\`\\nThis will be much faster!"
    - importance: "high"
@@ -305,7 +310,7 @@ grep -i "error\|exception\|failed" "$TEST_DIR/outputs"/*.txt || echo "✅ No err
 **Solution**: Verify ANTHROPIC_API_KEY is commented out in ~/.bashrc
 
 ### Issue: Agents can't find each other
-**Solution**: All agents must share the same project_key you set for this run (e.g., "/tmp/real_cli_test_project_<RUN_ID>"). Also ensure names include the RUN_ID to avoid collisions with older agents.
+**Solution**: All agents must share the same `project_key` for this run (replace `__PROJECT_KEY__` consistently), and names must be unique (replace `__FRONTEND__`/`__BACKEND__`/`__DBA__` with your `RUN_ID`-suffixed names) to avoid collisions with older agents.
 
 ### Issue: Message delivery delays
 **Solution**: Add sleep delays between agent starts (already included)
