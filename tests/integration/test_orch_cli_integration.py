@@ -89,9 +89,10 @@ class MCPMailClaudeCLITest(ClaudeCLITest):
                         server["headers"] = {"Authorization": f"Bearer {token}"}
                         settings_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
                         print(f"[SETUP] Patched {settings_path} with auth token for test")
-                yield
             except Exception as e:
                 print(f"[SETUP] Warning: Failed to patch settings: {e}")
+            
+            try:
                 yield
             finally:
                 settings_path.write_text(original_content, encoding="utf-8")

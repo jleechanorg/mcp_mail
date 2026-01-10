@@ -76,6 +76,7 @@ trap cleanup_temp_files EXIT INT TERM
 
 # Load HTTP_BEARER_TOKEN from a .env-style file
 # Handles comments, whitespace, and quoted values
+# Note: This logic duplicates lib.sh to ensure this script remains standalone/portable.
 load_token_from_file() {
   local file="$1"
   local line value
@@ -203,6 +204,7 @@ if [[ "$PROGRAM" == "unknown" ]]; then
 fi
 
 # Auto-detect model if not specified (sensible defaults based on program)
+# Note: Process detection (ps aux) is best-effort and may miss if process hasn't started fully or differs in name.
 if [[ "$MODEL" == "unknown" ]]; then
   case "$PROGRAM" in
     claude-code)
@@ -225,6 +227,7 @@ if [[ "$MODEL" == "unknown" ]]; then
 fi
 
 # Load bearer token from environment or .env files
+# Order prioritizes ~/.mcp_mail/credentials.json per CLAUDE.md (differs from lib.sh defaults)
 # Try: 1. Env var, 2. ~/.mcp_mail/credentials.json, 3. Repo .env, 4. Config .env, 5. Legacy .env
 if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then
   # Check ~/.mcp_mail/credentials.json (recommended location per CLAUDE.md)
@@ -418,18 +421,21 @@ if [[ ! "$HTTP_STATUS" =~ ^2[0-9][0-9]$ ]]; then
 fi
 
 # Parse JSON-RPC response and validate success (jq is required)
-ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // empty' 2>/dev/null) || true
-if [[ -n "$ERROR_MSG" ]]; then
+ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // empty' 2>&1) || true
+if [[ -n "$ERROR_MSG" ]] && [[ ! "$ERROR_MSG" =~ "parse error" ]]; then
   graceful_exit 1 "ERROR: Registration failed: $ERROR_MSG"
 fi
 
+# Note: FastMCP puts the tool result in 'structuredContent', not directly in 'result'
 if ! echo "$RESPONSE" | jq -e --arg req_id "$REQUEST_ID" --arg agent "$AGENT_NAME" '
   .jsonrpc == "2.0"
   and .id == $req_id
   and (.error | not)
   and (.result | type == "object")
-  and (.result.name | type == "string")
-  and (.result.name == $agent)
+  and (
+    (.result.name == $agent) or 
+    (.result.structuredContent.name == $agent)
+  )
 ' >/dev/null; then
   graceful_exit 1 "ERROR: Registration response did not validate as a successful register_agent call."$'\n'"Response: $RESPONSE"
 fi
