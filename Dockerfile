@@ -19,8 +19,8 @@ WORKDIR /opt/mcp-agent-mail
 COPY pyproject.toml uv.lock README.md ./
 COPY src src
 COPY third_party_docs third_party_docs
-COPY docs/project_idea_and_guide.md docs/project_idea_and_guide.md
-COPY docs/AGENTS.md docs/AGENTS.md
+COPY project_idea_and_guide.md project_idea_and_guide.md
+COPY AGENTS.md ./
 
 # Create virtualenv and install dependencies
 # The virtualenv is created at /opt/mcp-agent-mail/.venv to match runtime path
