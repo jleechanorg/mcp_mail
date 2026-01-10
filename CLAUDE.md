@@ -44,6 +44,103 @@ This script:
 
 With the server running, Claude agents can call `ensure_project`, `register_agent`, `fetch_inbox`, and the other MCP tools without additional setup.
 
+## Claude Code Settings and Hooks
+
+### Settings.json Format
+
+**CRITICAL: Always use the correct hook format** to avoid breaking Claude Code. The settings file uses a **matcher-based hook structure**.
+
+**Correct format for SessionStart hooks:**
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "your-command-here"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**Common mistakes:**
+
+❌ **Wrong** (missing `hooks` array wrapper):
+```json
+{
+  "SessionStart": [
+    {
+      "type": "command",
+      "command": "..."
+    }
+  ]
+}
+```
+
+✅ **Correct** (with `hooks` array):
+```json
+{
+  "SessionStart": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "..."
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Hook Structure
+
+All hooks follow this pattern:
+
+```json
+{
+  "HookType": [
+    {
+      "matcher": {...},  // Optional for SessionStart, required for Pre/PostToolUse
+      "hooks": [         // REQUIRED: Array of hook objects
+        {
+          "type": "command",
+          "command": "..."
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Official Documentation
+
+**Before modifying settings.json, always check the official docs:**
+
+- **Hooks Reference**: https://code.claude.com/docs/en/hooks
+- **Settings Reference**: https://code.claude.com/docs/en/settings
+
+**To find latest documentation:**
+```bash
+# Web search for current year to get latest docs
+"Claude Code hooks settings.json format 2026"
+"Claude Code SessionStart hook documentation"
+```
+
+### Validation
+
+After editing `.claude/settings.json`:
+1. Restart Claude Code
+2. Check for settings errors in the startup output
+3. If errors appear, compare your format against official docs
+4. Fix immediately - invalid settings break the entire hooks system
+
 ## GitHub Authentication
 
 A GitHub token is available for use by agents via the `GITHUB_TOKEN` environment variable:
