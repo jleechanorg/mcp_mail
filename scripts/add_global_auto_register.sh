@@ -22,16 +22,21 @@ fi
 echo "Creating backup at $BACKUP_SETTINGS"
 cp "$GLOBAL_SETTINGS" "$BACKUP_SETTINGS"
 
-# Create the SessionStart hook entry (just the hook object, not wrapped in "hooks")
+# Create the SessionStart hook entry with correct format (matcher-based with hooks array)
 SESSION_START_HOOK='{
-  "type": "command",
-  "command": "bash -lc '\''repo_root=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\"; if [[ -f \"$repo_root/scripts/auto_register_agent.sh\" ]]; then \"$repo_root/scripts/auto_register_agent.sh\" --program claude-code --model sonnet --nonfatal --force-reclaim; fi'\''"
+  "hooks": [
+    {
+      "type": "command",
+      "command": "bash -lc '\''repo_root=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\"; if [[ -f \"$repo_root/scripts/auto_register_agent.sh\" ]]; then \"$repo_root/scripts/auto_register_agent.sh\" --program claude-code --model sonnet --nonfatal --force-reclaim; fi'\''"
+    }
+  ]
 }'
 
-# Check if hook already exists
-HOOK_EXISTS=$(jq --argjson hook "$SESSION_START_HOOK" \
-  '(.hooks.SessionStart // []) | any(. == $hook)' \
-  "$GLOBAL_SETTINGS")
+# Check if hook already exists (check for command string in any hook entry)
+HOOK_CMD='bash -lc '\''repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"; if [[ -f "$repo_root/scripts/auto_register_agent.sh" ]]; then "$repo_root/scripts/auto_register_agent.sh" --program claude-code --model sonnet --nonfatal --force-reclaim; fi'\'''
+HOOK_EXISTS=$(jq --arg cmd "$HOOK_CMD" \
+  '(.hooks.SessionStart // []) | any(.hooks[]?.command == $cmd)' \
+  "$GLOBAL_SETTINGS" 2>/dev/null || echo "false")
 
 if [[ "$HOOK_EXISTS" == "true" ]]; then
   echo "ℹ️  SessionStart hook already exists in $GLOBAL_SETTINGS"
