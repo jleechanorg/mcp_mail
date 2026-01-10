@@ -46,10 +46,10 @@ if [[ "$HOOK_EXISTS" == "true" ]]; then
   exit 0
 fi
 
-# Use jq to add the SessionStart hook (initialize array if needed, then append)
+# Use jq to add the SessionStart hook (initialize array if needed, remove legacy entries, then append)
 echo "Adding SessionStart hook to global settings..."
-jq --argjson hook "$SESSION_START_HOOK" \
-  '.hooks.SessionStart = ((.hooks.SessionStart // []) + [$hook])' \
+jq --argjson hook "$SESSION_START_HOOK" --arg cmd "$HOOK_CMD" \
+  '.hooks.SessionStart = ((.hooks.SessionStart // []) | map(select(.command != $cmd)) + [$hook])' \
   "$GLOBAL_SETTINGS" > "$GLOBAL_SETTINGS.tmp"
 
 # Validate the JSON is still valid
