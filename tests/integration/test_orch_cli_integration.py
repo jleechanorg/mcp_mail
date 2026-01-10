@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -48,10 +49,18 @@ from tests.integration.test_harness_utils import (  # noqa: E402
 )
 
 # Skip all tests if orchestration framework is not installed
-pytestmark = pytest.mark.skipif(
-    not ORCHESTRATION_AVAILABLE,
-    reason="jleechanorg-orchestration not installed - run: uv tool install jleechanorg-orchestration",
-)
+RUN_REAL_CLI_TESTS = os.environ.get("RUN_REAL_CLI_TESTS") == "1"
+
+pytestmark = [
+    pytest.mark.skipif(
+        not ORCHESTRATION_AVAILABLE,
+        reason="jleechanorg-orchestration not installed - run: uv tool install jleechanorg-orchestration",
+    ),
+    pytest.mark.skipif(
+        not RUN_REAL_CLI_TESTS,
+        reason="Real CLI integration tests are opt-in; set RUN_REAL_CLI_TESTS=1 to enable",
+    ),
+]
 
 
 class MCPMailClaudeCLITest(ClaudeCLITest):
