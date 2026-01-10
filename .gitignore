@@ -199,6 +199,19 @@ vendor/*
 # Internal automation prompt artifacts (auto-generated; do not commit—existing tracked file retained per repo policy)
 .agent_prompt*
 
+# Temporary commit message files
+COMMIT_MSG
+COMMIT_EDITMSG
+
+# Signing keys (should never be committed)
+signing-*.key
+signing-*.pub
+
+# Temporary reports (should go in roadmap/ if needed)
+/coverage_report.txt
+/test_report.md
+/evidence_evaluation_report.md
+
 # Local Claude settings (may contain bearer tokens; never commit)
 .claude/settings.local.json
 .claude/settings.local.json.*
