@@ -17,6 +17,7 @@
   "hooks": {
     "SessionStart": [
       {
+        "matcher": {},
         "hooks": [
           {
             "type": "command",
@@ -32,6 +33,7 @@
     "_instructions": "Uncomment and customize these hooks after registering your project and agent. If your server requires auth, generate a local config with an embedded token via ./scripts/integrate_claude_code.sh (recommended) instead of committing secrets.",
     "SessionStart_example": [
       {
+        "matcher": {},
         "hooks": [
           { "type": "command", "command": "uv run python -m mcp_agent_mail.cli file_reservations active YOUR_PROJECT_NAME" },
           { "type": "command", "command": "uv run python -m mcp_agent_mail.cli acks pending YOUR_AGENT_NAME --limit 20" }
