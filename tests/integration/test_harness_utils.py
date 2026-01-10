@@ -269,7 +269,7 @@ class BaseCLITest:
                 if "resource" in output.lower() and "exhaust" in output.lower():
                     print(f"  WARN: Resource exhaustion detected (attempt {attempt})")
                     if attempt < len(prompts):
-                        backoff_seconds = 2 ** attempt  # Exponential backoff: 2, 4, 8...
+                        backoff_seconds = 2**attempt  # Exponential backoff: 2, 4, 8...
                         print(f"  WARN: Backing off {backoff_seconds}s before retry...")
                         time.sleep(backoff_seconds)
                         continue
