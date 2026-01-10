@@ -47,15 +47,23 @@ SESSION_START_HOOK='{
 # Command string for duplicate detection (must match the JSON-decoded string in settings.json)
 HOOK_CMD='bash -lc '\''repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"; if [[ -f "$repo_root/scripts/auto_register_agent.sh" ]]; then "$repo_root/scripts/auto_register_agent.sh" --program claude-code --model sonnet --nonfatal --force-reclaim; fi'\'''
 
-# Check if hook already exists
-# Use type-safe check: ensure arrays are arrays, handle nulls
-HOOK_EXISTS=$(jq --arg cmd "$HOOK_CMD" \
+# Check state of hooks
+# We only want to exit early if:
+# 1. The NEW format hook exists
+# 2. AND the OLD format hook does NOT exist (so we don't leave duplicates)
+HOOK_STATE=$(jq --arg cmd "$HOOK_CMD" \
   'def arr(x): if (x|type)=="array" then x else [] end;
-   arr(.hooks.SessionStart) | any(arr(.hooks)[]? | .command == $cmd)' \
-  "$GLOBAL_SETTINGS" 2>/dev/null || echo "false")
+   {
+     new_exists: (arr(.hooks.SessionStart) | any(arr(.hooks)[]? | .command == $cmd)),
+     legacy_exists: (arr(.hooks.SessionStart) | any(.command == $cmd))
+   }' \
+  "$GLOBAL_SETTINGS" 2>/dev/null)
 
-if [[ "$HOOK_EXISTS" == "true" ]]; then
-  log_step "SessionStart hook already exists in $GLOBAL_SETTINGS"
+NEW_EXISTS=$(echo "$HOOK_STATE" | jq -r .new_exists)
+LEGACY_EXISTS=$(echo "$HOOK_STATE" | jq -r .legacy_exists)
+
+if [[ "$NEW_EXISTS" == "true" && "$LEGACY_EXISTS" == "false" ]]; then
+  log_step "SessionStart hook already configured correctly in $GLOBAL_SETTINGS"
   echo ""
   echo "The hook is already configured. No changes needed."
   exit 0
