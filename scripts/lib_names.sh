@@ -5,8 +5,8 @@
 # Generate memorable name from branch name
 # Usage: generate_memorable_name <branch_name>
 # Examples:
-#   "claude/auto-register-codex-agent-qIAvB" -> "auto-register-agent"
-#   "feature/user-authentication" -> "user-auth"
+#   "claude/auto-register-codex-agent-qIAvB" -> "auto-register"
+#   "feature/user-authentication" -> "user-authentication"
 #   "fix/login-bug-123" -> "login-bug"
 #   "main" -> "main"
 generate_memorable_name() {
@@ -38,11 +38,11 @@ generate_memorable_name() {
   # Convert to lowercase and replace slashes/underscores with hyphens
   name=$(echo "$name" | tr '[:upper:]' '[:lower:]' | tr '/_' '--')
 
-  # Take first 3 words (separated by hyphens) for brevity
-  # This handles cases like "auto-register-codex-agent-handler" -> "auto-register-codex"
+  # Take first 2 words (separated by hyphens) for brevity
+  # This handles cases like "auto-register-codex-agent-handler" -> "auto-register"
   local words=(${name//-/ })
-  if [[ ${#words[@]} -gt 3 ]]; then
-    name="${words[0]}-${words[1]}-${words[2]}"
+  if [[ ${#words[@]} -gt 2 ]]; then
+    name="${words[0]}-${words[1]}"
   fi
 
   # Limit overall length to 40 chars (still readable)

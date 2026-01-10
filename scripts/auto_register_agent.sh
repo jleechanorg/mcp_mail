@@ -339,13 +339,27 @@ get_project_hash() {
 BRANCH=$(get_git_branch)
 PROJECT_KEY=$(get_project_key)
 PROJECT_HASH=$(get_project_hash "$PROJECT_KEY")
-AGENT_BASE=$(sanitize_alphanumeric "$BRANCH")
-SAFE_SUFFIX=$(sanitize_alphanumeric "$SUFFIX")
 
-# Include project hash in agent name to prevent cross-repo conflicts
-# Format: <branch><project_hash><suffix>
-# Example: main3f2a1bc or devfeature7b8c2dc
-AGENT_NAME="${AGENT_BASE}${PROJECT_HASH}${SAFE_SUFFIX}"
+# Generate memorable name from branch (2 words with hyphens)
+MEMORABLE_NAME=""
+if command -v generate_memorable_name >/dev/null 2>&1; then
+  MEMORABLE_NAME=$(generate_memorable_name "$BRANCH")
+else
+  # Fallback if lib_names.sh not loaded
+  MEMORABLE_NAME="$BRANCH"
+fi
+
+# Add suffix if provided (e.g., "c" for codex -> "auto-register-c")
+if [[ -n "$SUFFIX" ]]; then
+  MEMORABLE_NAME="${MEMORABLE_NAME}-${SUFFIX}"
+fi
+
+# Add project hash for cross-repo uniqueness (e.g., "auto-register-c-3f2a1b")
+MEMORABLE_NAME="${MEMORABLE_NAME}-${PROJECT_HASH}"
+
+# Agent names must be alphanumeric only - sanitize by removing hyphens
+# Example: "auto-register-c-3f2a1b" -> "autoregisterc3f2a1b"
+AGENT_NAME=$(sanitize_alphanumeric "$MEMORABLE_NAME")
 
 # Validate agent name is not empty
 if [[ -z "$AGENT_NAME" ]]; then
@@ -459,20 +473,10 @@ fi
 
 # Success
 if [[ "$QUIET" != "1" ]]; then
-  # Generate memorable name from branch name
-  MEMORABLE_NAME=""
-  if command -v generate_memorable_name >/dev/null 2>&1; then
-    MEMORABLE_NAME=$(generate_memorable_name "$BRANCH")
-  fi
-
-  # Display both technical and memorable names
-  if [[ -n "$MEMORABLE_NAME" ]]; then
-    echo "🤖 Agent registered: ${MEMORABLE_NAME}"
-    echo "   Full ID: ${AGENT_NAME}"
-    echo "   Branch: ${BRANCH}, Program: ${PROGRAM}"
-  else
-    echo "Registered agent '${AGENT_NAME}' (branch: ${BRANCH}, project: ${PROJECT_HASH}, program: ${PROGRAM})"
-  fi
+  # Display memorable name with hyphens and sanitized agent name
+  echo "🤖 Agent registered: ${MEMORABLE_NAME}"
+  echo "   Agent ID: ${AGENT_NAME}"
+  echo "   Branch: ${BRANCH}, Program: ${PROGRAM}, Model: ${MODEL}"
 fi
 
 exit 0
