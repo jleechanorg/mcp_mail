@@ -18,6 +18,12 @@ if [[ ! -f "$GLOBAL_SETTINGS" ]]; then
   exit 1
 fi
 
+# Validate the existing JSON before doing anything else
+if ! jq empty "$GLOBAL_SETTINGS" 2>/dev/null; then
+  echo "❌ Error: $GLOBAL_SETTINGS is not valid JSON"
+  exit 1
+fi
+
 # Backup the current settings
 echo "Creating backup at $BACKUP_SETTINGS"
 cp "$GLOBAL_SETTINGS" "$BACKUP_SETTINGS"
@@ -35,8 +41,9 @@ SESSION_START_HOOK=$(jq -n --arg cmd "$HOOK_CMD" '{
 }')
 
 # Check if hook already exists (check for command string in any hook entry)
+# We handle nulls gracefully with // [] and ? operator
 HOOK_EXISTS=$(jq --arg cmd "$HOOK_CMD" \
-  '(.hooks.SessionStart // []) | any(.hooks[]?.command == $cmd)' \
+  '(.hooks.SessionStart // []) | any((.hooks // [])[]?.command == $cmd)' \
   "$GLOBAL_SETTINGS" 2>/dev/null || echo "false")
 
 if [[ "$HOOK_EXISTS" == "true" ]]; then
@@ -47,18 +54,26 @@ if [[ "$HOOK_EXISTS" == "true" ]]; then
   exit 0
 fi
 
-# Use jq to add the SessionStart hook (initialize array if needed, remove legacy entries, then append)
+# Use jq to add the SessionStart hook
+# Note: We filter out any existing entries that contain the auto_register_agent.sh script
+# to avoid duplicates and ensure we have the latest version of the hook.
+# This cleans up both legacy (flat) and current (nested) formats.
 echo "Adding SessionStart hook to global settings..."
-jq --argjson hook "$SESSION_START_HOOK" --arg cmd "$HOOK_CMD" \
+
+# Use mktemp for safety
+TMP_SETTINGS=$(mktemp "${GLOBAL_SETTINGS}.tmp.XXXXXX")
+trap 'rm -f "$TMP_SETTINGS"' EXIT
+
+if jq --argjson hook "$SESSION_START_HOOK" --arg cmd "$HOOK_CMD" \
   '.hooks.SessionStart = ((.hooks.SessionStart // []) | map(select(
     ((.command // "") | contains("scripts/auto_register_agent.sh") | not) and
-    ((.hooks // []) | any(.command | contains("scripts/auto_register_agent.sh")) | not)
+    ((.hooks // []) | any((.command // "") | contains("scripts/auto_register_agent.sh")) | not)
   )) + [$hook])' \
-  "$GLOBAL_SETTINGS" > "$GLOBAL_SETTINGS.tmp"
+  "$GLOBAL_SETTINGS" > "$TMP_SETTINGS"; then
 
-# Validate the JSON is still valid
-if jq empty "$GLOBAL_SETTINGS.tmp" 2>/dev/null; then
-  mv "$GLOBAL_SETTINGS.tmp" "$GLOBAL_SETTINGS"
+  # atomic move
+  mv "$TMP_SETTINGS" "$GLOBAL_SETTINGS"
+  
   echo "✅ Successfully added SessionStart hook to $GLOBAL_SETTINGS"
   echo "📝 Backup saved at $BACKUP_SETTINGS"
   echo ""
@@ -67,8 +82,7 @@ if jq empty "$GLOBAL_SETTINGS.tmp" 2>/dev/null; then
   echo ""
   echo "💡 Tip: Clean up old backups periodically with: rm ~/.claude/settings.json.backup.*"
 else
-  echo "❌ Error: Generated invalid JSON. Restoring from backup..."
-  mv "$BACKUP_SETTINGS" "$GLOBAL_SETTINGS"
-  rm -f "$GLOBAL_SETTINGS.tmp"
+  echo "❌ Error: Failed to update settings (jq error). Restoring from backup..."
+  cp "$BACKUP_SETTINGS" "$GLOBAL_SETTINGS"
   exit 1
 fi
