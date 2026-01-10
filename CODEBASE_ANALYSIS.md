@@ -233,7 +233,7 @@ MCP Agent Mail (forked from the original `mcp_agent_mail`) is a production-grade
 | File | Purpose |
 |------|---------|
 | **pyproject.toml** | Package definition, dependencies, test config, tool config (ruff, mypy) |
-| **.mcp.json** | HTTP MCP server configuration (auto-generated, contains bearer token) |
+| **.mcp.json** | HTTP MCP server configuration template (uses `${HTTP_BEARER_TOKEN}`; do not commit secrets) |
 | **.env.example** | Template for all configurable settings |
 | **Dockerfile** | Production container image |
 | **docker-compose.yml** | Local dev environment |

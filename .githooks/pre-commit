@@ -17,6 +17,108 @@ if [ ! -f "pyproject.toml" ]; then
     exit 1
 fi
 
+# Block commits that accidentally include bearer tokens or other secrets.
+echo -e "${YELLOW}Scanning staged changes for secrets...${NC}"
+python3 - <<'PY'
+from __future__ import annotations
+
+import re
+import subprocess
+import sys
+
+
+def git_show_index(path: str) -> str | None:
+    try:
+        return subprocess.check_output(["git", "show", f":{path}"], text=True, stderr=subprocess.DEVNULL)
+    except Exception:
+        return None
+
+
+def git_staged_paths() -> list[str]:
+    out = subprocess.check_output(
+        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
+        text=True,
+        stderr=subprocess.DEVNULL,
+    )
+    return [p for p in out.splitlines() if p.strip()]
+
+
+def is_placeholder(value: str) -> bool:
+    value = value.strip()
+    if not value:
+        return True
+    if value.startswith("${") and value.endswith("}"):
+        return True
+    lowered = value.lower()
+    if lowered.startswith("<") or lowered.startswith("your") or lowered.startswith("example"):
+        return True
+    return False
+
+
+def looks_like_secret_token(value: str) -> bool:
+    value = value.strip().strip('"').strip("'")
+    if is_placeholder(value):
+        return False
+    # Shell-style non-literals (command substitution / variable expansion) are not secrets by themselves.
+    if "$(" in value or "`" in value or value.startswith("$"):
+        return False
+    if value == "mcp-agent-mail-default-token":
+        return False
+    # Heuristic: long-ish token-like strings (hex, base64-ish, etc.)
+    if len(value) >= 20:
+        return True
+    return False
+
+
+RULES: list[tuple[str, re.Pattern[str]]] = [
+    ("HTTP_BEARER_TOKEN assignment", re.compile(r"(?m)^\s*HTTP_BEARER_TOKEN\s*=\s*(?P<val>[^#\n\r]+)")),
+    (
+        "Authorization Bearer header (JSON-like)",
+        re.compile(r'(?i)Authorization"\s*:\s*"Bearer\s+(?P<val>[^"]+)"'),
+    ),
+    (
+        "Authorization: Bearer header (text)",
+        re.compile(r"(?i)\bAuthorization\s*:\s*Bearer\s+(?P<val>\S+)"),
+    ),
+]
+
+violations: list[tuple[str, str]] = []
+for path in git_staged_paths():
+    blob = git_show_index(path)
+    if blob is None:
+        continue
+
+    for rule_name, pattern in RULES:
+        for match in pattern.finditer(blob):
+            raw_val = match.group("val").strip()
+            if rule_name.startswith("Authorization"):
+                # Allow common safe placeholders
+                if raw_val.startswith("${") or raw_val.startswith("<"):
+                    continue
+                if "HTTP_BEARER_TOKEN" in raw_val:
+                    continue
+                if looks_like_secret_token(raw_val):
+                    violations.append((path, rule_name))
+                    break
+            else:
+                if looks_like_secret_token(raw_val):
+                    violations.append((path, rule_name))
+                    break
+
+if violations:
+    print(
+        "\nERROR: Potential secret(s) detected in staged changes. Refusing to commit.\n"
+        "Fix by using env placeholders (e.g., ${HTTP_BEARER_TOKEN}) or moving tokens into\n"
+        "untracked local config files (e.g., .claude/settings.local.json).\n",
+        file=sys.stderr,
+    )
+    for path, rule in violations:
+        print(f"  - {path}: {rule}", file=sys.stderr)
+    sys.exit(1)
+
+print("✓ No obvious secrets detected in staged changes")
+PY
+
 # Ensure dependencies are synced (quick check, uv sync is smart about caching)
 echo -e "${YELLOW}Ensuring dependencies are synced...${NC}"
 uv sync --dev --quiet 2>/dev/null || true

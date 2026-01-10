@@ -1,10 +1,13 @@
 {
+  "_comment": "Run ./scripts/integrate_claude_code.sh to generate auth token and embed it in headers (recommended)",
   "mcpServers": {
     "mcp-agent-mail": {
       "type": "http",
       "url": "http://127.0.0.1:8765/mcp/",
       "core": true,
-      "headers": { "Authorization": "Bearer ${HTTP_BEARER_TOKEN}" },
+      "headers": {
+        "_note": "Authentication required - run ./scripts/integrate_claude_code.sh to embed token"
+      },
       "options": {
         "timeoutSeconds": 180,
         "initTimeoutSeconds": 30
@@ -12,19 +15,24 @@
     }
   },
   "hooks": {
-    "SessionStart": [],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -lc 'repo_root=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\"; \"$repo_root/scripts/auto_register_agent.sh\" --program claude-code --model sonnet --nonfatal --force-reclaim'"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [],
     "PostToolUse": []
   },
   "_exampleHooks": {
-    "_instructions": "Uncomment and customize these hooks after registering your project and agent",
+    "_instructions": "Uncomment and customize these hooks after registering your project and agent. If your server requires auth, generate a local config with an embedded token via ./scripts/integrate_claude_code.sh (recommended) instead of committing secrets.",
     "SessionStart_example": [
-      {
-        "hooks": [
-          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli file_reservations active YOUR_PROJECT_NAME" },
-          { "type": "command", "command": "uv run python -m mcp_agent_mail.cli acks pending YOUR_AGENT_NAME --limit 20" }
-        ]
-      }
+      { "type": "command", "command": "uv run python -m mcp_agent_mail.cli file_reservations active YOUR_PROJECT_NAME" },
+      { "type": "command", "command": "uv run python -m mcp_agent_mail.cli acks pending YOUR_AGENT_NAME --limit 20" }
     ],
     "PreToolUse_example": [
       {

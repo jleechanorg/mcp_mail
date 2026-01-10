@@ -85,22 +85,25 @@ if [[ -f "$SETTINGS_PATH" ]]; then
   backup_file "$SETTINGS_PATH"
 fi
 
-log_step "Writing MCP server config and hooks"
-AUTH_HEADER_LINE="        \"Authorization\": \"Bearer ${_TOKEN}\""
-write_atomic "$SETTINGS_PATH" <<JSON
-{
-  "mcpServers": {
-    "mcp-agent-mail": {
-      "type": "http",
-      "url": "${_URL}",
-      "core": true,
-      "headers": {${AUTH_HEADER_LINE}},
-      "options": {
-        "timeoutSeconds": 180,
-        "initTimeoutSeconds": 30
-      }
-    }
-  },
+	log_step "Writing MCP server config and hooks"
+	# Safety: keep the repo-tracked settings.json token-free to avoid accidental commits.
+	# Store the token only in .claude/settings.local.json (gitignored).
+	AUTH_HEADER_LINE="        \"Authorization\": \"Bearer ${_TOKEN}\""
+	SAFE_HEADER_LINE="        \"_note\": \"Auth token is stored in .claude/settings.local.json (gitignored). Run ./scripts/integrate_claude_code.sh to (re)generate.\""
+	write_atomic "$SETTINGS_PATH" <<JSON
+	{
+	  "mcpServers": {
+	    "mcp-agent-mail": {
+	      "type": "http",
+	      "url": "${_URL}",
+	      "core": true,
+	      "headers": {${SAFE_HEADER_LINE}},
+	      "options": {
+	        "timeoutSeconds": 180,
+	        "initTimeoutSeconds": 30
+	      }
+	    }
+	  },
   "hooks": {
     "SessionStart": [
       {
@@ -141,25 +144,25 @@ json_validate "$SETTINGS_PATH" || log_warn "Invalid JSON in ${SETTINGS_PATH}"
 set_secure_file "$SETTINGS_PATH" || true
 
 # Also write to settings.local.json to ensure Claude Code picks it up when local overrides are used
-LOCAL_SETTINGS_PATH="${CLAUDE_DIR}/settings.local.json"
-if [[ -f "$LOCAL_SETTINGS_PATH" ]]; then
-  backup_file "$LOCAL_SETTINGS_PATH"
-fi
+	LOCAL_SETTINGS_PATH="${CLAUDE_DIR}/settings.local.json"
+	if [[ -f "$LOCAL_SETTINGS_PATH" ]]; then
+	  backup_file "$LOCAL_SETTINGS_PATH"
+	fi
 
-write_atomic "$LOCAL_SETTINGS_PATH" <<JSON
-{
-  "mcpServers": {
-    "mcp-agent-mail": {
-      "type": "http",
-      "url": "${_URL}",
-      "core": true,
-      "headers": {${AUTH_HEADER_LINE}},
-      "options": {
-        "timeoutSeconds": 180,
-        "initTimeoutSeconds": 30
-      }
-    }
-  },
+	write_atomic "$LOCAL_SETTINGS_PATH" <<JSON
+	{
+	  "mcpServers": {
+	    "mcp-agent-mail": {
+	      "type": "http",
+	      "url": "${_URL}",
+	      "core": true,
+	      "headers": {${AUTH_HEADER_LINE}},
+	      "options": {
+	        "timeoutSeconds": 180,
+	        "initTimeoutSeconds": 30
+	      }
+	    }
+	  },
   "hooks": {
     "SessionStart": [
       {

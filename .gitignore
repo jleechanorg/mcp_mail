@@ -199,6 +199,10 @@ vendor/*
 # Internal automation prompt artifacts (auto-generated; do not commit—existing tracked file retained per repo policy)
 .agent_prompt*
 
+# Local Claude settings (may contain bearer tokens; never commit)
+.claude/settings.local.json
+.claude/settings.local.json.*
+
 # Benchmark results - exclude transient JSON output files
 benchmarks/tmp_*
 benchmarks/results/**/*.json
