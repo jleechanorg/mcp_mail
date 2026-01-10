@@ -20,7 +20,6 @@ parse_common_flags "$@"
 require_cmd jq
 
 GLOBAL_SETTINGS="$HOME/.claude/settings.json"
-BACKUP_SETTINGS="$HOME/.claude/settings.json.backup.$(date +%Y%m%d_%H%M%S)"
 
 # Check if global settings file exists
 if [[ ! -f "$GLOBAL_SETTINGS" ]]; then
@@ -63,8 +62,7 @@ if [[ "$HOOK_EXISTS" == "true" ]]; then
 fi
 
 # Backup the current settings (only if we are going to change them)
-log_step "Creating backup at $BACKUP_SETTINGS"
-cp "$GLOBAL_SETTINGS" "$BACKUP_SETTINGS"
+backup_file "$GLOBAL_SETTINGS"
 
 # Use jq to add the SessionStart hook
 # 1. Initialize .hooks if missing
@@ -74,7 +72,8 @@ cp "$GLOBAL_SETTINGS" "$BACKUP_SETTINGS"
 
 log_step "Adding SessionStart hook to global settings..."
 
-if jq --argjson hook "$SESSION_START_HOOK" --arg cmd "$HOOK_CMD" \
+# Generate new settings content
+NEW_SETTINGS=$(jq --argjson hook "$SESSION_START_HOOK" --arg cmd "$HOOK_CMD" \
   '.hooks = (.hooks // {}) |
    .hooks.SessionStart = ((.hooks.SessionStart // []) | map(select(
      # Remove legacy entries where command matches
@@ -82,17 +81,25 @@ if jq --argjson hook "$SESSION_START_HOOK" --arg cmd "$HOOK_CMD" \
      # Remove new entries where any hook command matches
      ((.hooks // []) | any(.command == $cmd) | not)
    )) + [$hook])' \
-  "$GLOBAL_SETTINGS" | write_atomic "$GLOBAL_SETTINGS"; then
+  "$GLOBAL_SETTINGS")
+
+# Validate generated JSON
+if ! echo "$NEW_SETTINGS" | jq empty >/dev/null 2>&1; then
+  log_err "Failed to generate valid JSON. Aborting."
+  exit 1
+fi
+
+# Write atomically
+if echo "$NEW_SETTINGS" | write_atomic "$GLOBAL_SETTINGS"; then
   
   log_ok "Successfully added SessionStart hook to $GLOBAL_SETTINGS"
-  echo "📝 Backup saved at $BACKUP_SETTINGS"
+  echo "📝 Backup saved (check backup_config_files/)"
   echo ""
   echo "The hook will now run at the start of every Claude Code session."
   echo "It will auto-register an agent if the project has scripts/auto_register_agent.sh"
   echo ""
-  echo "💡 Tip: Clean up old backups periodically with: rm ~/.claude/settings.json.backup.*"
+  echo "💡 Tip: Clean up old backups periodically with: rm backup_config_files/*.bak"
 else
-  log_err "Failed to update settings. Restoring from backup..."
-  cp "$BACKUP_SETTINGS" "$GLOBAL_SETTINGS"
+  log_err "Failed to update settings."
   exit 1
 fi
