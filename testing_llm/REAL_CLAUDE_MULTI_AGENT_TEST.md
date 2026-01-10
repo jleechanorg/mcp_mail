@@ -17,6 +17,7 @@ Validate that multiple real CLI instances can coordinate through MCP Agent Mail 
   - **Codex CLI**: `codex exec "hello"`
   - **Claude CLI**: `claude -p "hello"`
   - **Gemini CLI**: `gemini "hello"` (if you see ModelNotFound/404, switch to Codex/Claude or adjust model flag)
+- Auth: export `HTTP_BEARER_TOKEN` in your shell (the repo’s `.mcp.json` expects `Bearer ${HTTP_BEARER_TOKEN}`).
 - MCP configs:
   - Codex: `MCP_CONFIG=.codex/config.toml`
   - Claude: `MCP_CONFIG=.mcp.json`

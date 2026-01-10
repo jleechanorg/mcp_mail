@@ -73,6 +73,7 @@ Each test case is a Markdown (`.md`) file with:
   - Codex: `codex exec "hello"`
   - Claude: `claude -p "hello"`
   - Gemini: `gemini "hello"` (if you see ModelNotFoundError, switch to Codex/Claude or adjust the model flag)
+- **Auth**: ensure `HTTP_BEARER_TOKEN` is exported in your shell (the repo’s `.mcp.json` expects `Bearer ${HTTP_BEARER_TOKEN}`).
 - **CLI command patterns** (use one of the binaries you have working):
   - Codex: `MCP_CONFIG=.codex/config.toml codex exec --yolo "$PROMPT"`
   - Claude: `MCP_CONFIG=.mcp.json claude -p --dangerously-skip-permissions "$PROMPT"`

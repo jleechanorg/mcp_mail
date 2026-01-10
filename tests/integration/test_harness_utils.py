@@ -223,11 +223,23 @@ class BaseCLITest:
         timeout: int = 90,
     ) -> tuple[bool, str, dict[str, Any]]:
         """Prompt the CLI to list available MCP Agent Mail tools."""
+        import time
+
         if self.CLI_NAME == "codex":
             prompts = [
                 (
                     "List the MCP tools you can call. Respond exactly as 'TOOLS: <comma-separated tool names>'.",
                     timeout,
+                ),
+            ]
+        elif self.CLI_NAME == "cursor":
+            # Cursor: single attempt with shorter timeout to avoid resource exhaustion
+            prompts = [
+                (
+                    "Connect to the configured mcp-agent-mail MCP server and list the tool "
+                    "names available to you. Respond exactly as 'TOOLS: <comma-separated tool names>'. "
+                    f"The server URL should be {server_url}.",
+                    min(timeout, 90),  # Cap at 90s for Cursor
                 ),
             ]
         else:
@@ -252,8 +264,20 @@ class BaseCLITest:
             if not success:
                 last_details = {"output": output[:500], "attempt": attempt}
                 message = f"MCP tool prompt failed: {output[:200]}"
+
+                # Check for resource exhaustion errors
+                if "resource" in output.lower() and "exhaust" in output.lower():
+                    print(f"  WARN: Resource exhaustion detected (attempt {attempt})")
+                    if attempt < len(prompts):
+                        backoff_seconds = 2 ** attempt  # Exponential backoff: 2, 4, 8...
+                        print(f"  WARN: Backing off {backoff_seconds}s before retry...")
+                        time.sleep(backoff_seconds)
+                        continue
+                    return False, "Resource exhausted - API quota may be exceeded", last_details
+
                 if attempt < len(prompts):
                     print(f"  WARN: {message} (attempt {attempt}); retrying...")
+                    time.sleep(1)  # Brief pause between retries
                     continue
                 return False, message, last_details
 
@@ -267,6 +291,7 @@ class BaseCLITest:
             message = f"Missing expected tools: {', '.join(sorted(missing_tools))}"
             if attempt < len(prompts):
                 print(f"  WARN: {message} (attempt {attempt}); retrying...")
+                time.sleep(1)  # Brief pause between retries
                 continue
             return False, message, last_details
 

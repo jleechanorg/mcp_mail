@@ -39,6 +39,7 @@ MODEL="unknown"
 MCP_MAIL_URL="${MCP_MAIL_URL:-http://127.0.0.1:8765/mcp/}"
 QUIET="${QUIET:-0}"
 NONFATAL="${NONFATAL:-0}"
+FORCE_RECLAIM="${FORCE_RECLAIM:-0}"
 
 # Graceful exit for nonfatal mode (SessionStart hooks shouldn't break sessions)
 graceful_exit() {
@@ -161,6 +162,10 @@ while [[ $# -gt 0 ]]; do
       NONFATAL=1
       shift
       ;;
+    --force-reclaim)
+      FORCE_RECLAIM=1
+      shift
+      ;;
     --url)
       if [[ $# -lt 2 || "$2" == --* ]]; then
         echo "ERROR: --url requires a value" >&2
@@ -174,7 +179,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --help|-h)
-      echo "Usage: $0 [--suffix SUFFIX] [--program PROGRAM] [--model MODEL] [--quiet] [--nonfatal] [--url URL]"
+      echo "Usage: $0 [--suffix SUFFIX] [--program PROGRAM] [--model MODEL] [--quiet] [--nonfatal] [--force-reclaim] [--url URL]"
       echo ""
       echo "Auto-register agent with MCP Mail using git branch name."
       echo ""
@@ -185,6 +190,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --quiet            Suppress output (both success and error messages)"
       echo "  --nonfatal         Exit 0 even on failure (for SessionStart hooks)"
       echo "  --best-effort      Alias for --nonfatal"
+      echo "  --force-reclaim    Retire any existing agent with this name before registering"
       echo "  --url              MCP Mail server URL (default: http://127.0.0.1:8765/mcp)"
       exit 0
       ;;
@@ -364,6 +370,7 @@ JSON_PAYLOAD=$(jq -n \
   --arg model "$MODEL" \
   --arg branch "$BRANCH" \
   --arg project "$PROJECT_KEY" \
+  --argjson force_reclaim "$([[ "$FORCE_RECLAIM" == "1" ]] && echo "true" || echo "false")" \
   '{
     jsonrpc: "2.0",
     id: $id,
@@ -375,7 +382,8 @@ JSON_PAYLOAD=$(jq -n \
         program: $prog,
         model: $model,
         project_key: $project,
-        task_description: ("Auto-registered from branch " + $branch)
+        task_description: ("Auto-registered from branch " + $branch),
+        force_reclaim: $force_reclaim
       }
     }
   }')
@@ -428,19 +436,20 @@ if [[ -n "$ERROR_MSG" ]] && [[ ! "$ERROR_MSG" =~ "parse error" ]]; then
   graceful_exit 1 "ERROR: Registration failed: $ERROR_MSG"
 fi
 
-# Note: FastMCP puts the tool result in 'structuredContent', not directly in 'result'
-if ! echo "$RESPONSE" | jq -e --arg req_id "$REQUEST_ID" --arg agent "$AGENT_NAME" '
-  .jsonrpc == "2.0"
-  and .id == $req_id
-  and (.error | not)
-  and (.result | type == "object")
-  and (
-    (.result.name == $agent) or 
-    (.result.structuredContent.name == $agent)
-  )
-' >/dev/null; then
-  graceful_exit 1 "ERROR: Registration response did not validate as a successful register_agent call."$'\n'"Response: $RESPONSE"
-fi
+	# Note: FastMCP puts the tool result in 'structuredContent', not directly in 'result'
+	if ! echo "$RESPONSE" | jq -e --arg req_id "$REQUEST_ID" --arg agent "$AGENT_NAME" '
+	  .jsonrpc == "2.0"
+	  and .id == $req_id
+	  and (.error | not)
+	  and (.result | type == "object")
+	  and (
+	    # Handle both direct result format and structuredContent format
+	    ((.result.name | type == "string") and (.result.name == $agent))
+	    or ((.result.structuredContent.name | type == "string") and (.result.structuredContent.name == $agent))
+	  )
+	' >/dev/null; then
+	  graceful_exit 1 "ERROR: Registration response did not validate as a successful register_agent call."$'\n'"Response: $RESPONSE"
+	fi
 
 # Success
 if [[ "$QUIET" != "1" ]]; then
