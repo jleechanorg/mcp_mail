@@ -262,7 +262,7 @@ class BaseCLITest:
         for attempt, (prompt, attempt_timeout) in enumerate(prompts, start=1):
             success, output = self.run_cli(prompt, timeout=attempt_timeout)
             if not success:
-                last_details = {"output": output[:500], "attempt": attempt}
+                last_details = {"output": output[:2000], "attempt": attempt}
                 message = f"MCP tool prompt failed: {output[:200]}"
 
                 # Check for resource exhaustion errors
@@ -283,7 +283,7 @@ class BaseCLITest:
 
             tool_names = self._parse_tool_names_from_output(output)
             missing_tools = expected_tools - tool_names
-            last_details = {"tools": sorted(tool_names), "attempt": attempt, "output": output[:500]}
+            last_details = {"tools": sorted(tool_names), "attempt": attempt, "output": output[:2000]}
 
             if not missing_tools:
                 return True, "MCP Agent Mail tools available", last_details
@@ -296,6 +296,36 @@ class BaseCLITest:
             return False, message, last_details
 
         return False, "Unable to validate MCP Agent Mail tools", last_details
+
+    def _classify_mcp_tools_failure_as_skip(self, output: str) -> Optional[str]:
+        """Return a skip reason for known external/credential CLI failures."""
+        lower = output.lower()
+
+        # Cursor agent requires auth to call the hosted LLM service.
+        if (
+            self.CLI_NAME == "cursor"
+            and "authentication required" in lower
+            and ("cursor_api_key" in lower or "agent login" in lower)
+        ):
+            return "Cursor CLI not authenticated (set CURSOR_API_KEY or run `agent login`)"
+
+        # Gemini CLI may fail when credentials/quota are missing; these tests are local-only.
+        if self.CLI_NAME == "gemini":
+            if "error when talking to gemini api" in lower or "gemini-client-error" in lower:
+                return "Gemini CLI not configured/authorized (Gemini API error)"
+            if "modelnotfound" in lower or "404" in lower:
+                return "Gemini CLI model unavailable (configure model/credentials)"
+
+        # Claude can fail due to account/quota/auth; treat as local-only precondition.
+        if self.CLI_NAME == "claude":
+            if "credit balance too low" in lower:
+                return "Claude CLI account/quota not available"
+            if "invalid api key" in lower and "/login" in lower:
+                return "Claude CLI not authenticated (run `claude /login`)"
+            if "anthropic_api_key" in lower and ("not set" in lower or "missing" in lower or "invalid" in lower):
+                return "Claude CLI not authenticated (ANTHROPIC_API_KEY missing/invalid)"
+
+        return None
 
     def validate_mcp_mail_access(self, timeout: int = 90) -> bool:
         """Validate MCP Agent Mail configuration and tool availability via CLI."""
@@ -324,6 +354,13 @@ class BaseCLITest:
             expected_tools=MCP_EXPECTED_TOOLS,
             timeout=timeout,
         )
+        if not tool_success:
+            output = str(details.get("output") or "")
+            skip_reason = self._classify_mcp_tools_failure_as_skip(output)
+            if skip_reason:
+                self.record("mcp_tools", False, skip_reason, skip=True, details=details)
+                return False
+
         self.record("mcp_tools", tool_success, tool_msg, details=details)
 
         return tool_success
@@ -452,8 +489,15 @@ class BaseCLITest:
             cli_command = shlex.split(cli_command_str)
 
             # Add any extra arguments
-            if extra_args:
-                cli_command.extend(extra_args)
+            cli_extra_args: list[str] = list(extra_args or [])
+
+            # Claude output is often configured as stream-json+verbose via CLI_PROFILES.
+            # Override to text to avoid system hook events breaking prompt parsing.
+            if self.CLI_NAME == "claude" and "--output-format" not in cli_extra_args:
+                cli_extra_args.extend(["--output-format", "text"])
+
+            if cli_extra_args:
+                cli_command.extend(cli_extra_args)
 
             print(f"  Command: {' '.join(cli_command)}")
 
