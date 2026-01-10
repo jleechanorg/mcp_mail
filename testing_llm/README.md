@@ -77,7 +77,7 @@ Each test case is a Markdown (`.md`) file with:
 - **CLI command patterns** (use one of the binaries you have working):
   - Codex: `MCP_CONFIG=.codex/config.toml codex exec --yolo "$PROMPT"`
   - Claude: `MCP_CONFIG=.mcp.json claude -p --dangerously-skip-permissions "$PROMPT"`
-  - Gemini: `GEMINI_CONFIG=./gemini.mcp.json gemini --approval-mode yolo --allowed-mcp-server-names mcp-agent-mail "$PROMPT"`
+  - Gemini: `GEMINI_CONFIG=./examples/gemini.mcp.json gemini --approval-mode yolo --allowed-mcp-server-names mcp-agent-mail "$PROMPT"`
 - **Agent names are GLOBAL (not project-scoped)**. Reusing `FrontendDev` from an old run will route messages to that old agent. Avoid collisions:
   - `RUN_ID=$(date +"%Y%m%d_%H%M%S")`
   - Names: `FrontendDev-$RUN_ID`, `BackendDev-$RUN_ID`, `DatabaseAdmin-$RUN_ID`, `DevOpsEngineer-$RUN_ID`

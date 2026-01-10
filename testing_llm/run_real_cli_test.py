@@ -72,7 +72,7 @@ MCP_CLI_CONFIG = {
     },
     "gemini": {
         "mcp_config_env": "GEMINI_CONFIG",
-        "mcp_config_file": "./gemini.mcp.json",  # relative to current working directory
+        "mcp_config_file": "./examples/gemini.mcp.json",  # relative to current working directory
         "extra_args": [
             "--approval-mode",
             "yolo",

@@ -21,7 +21,7 @@ Validate that multiple real CLI instances can coordinate through MCP Agent Mail 
 - MCP configs:
   - Codex: `MCP_CONFIG=.codex/config.toml`
   - Claude: `MCP_CONFIG=.mcp.json`
-  - Gemini: `GEMINI_CONFIG=./gemini.mcp.json`
+  - Gemini: `GEMINI_CONFIG=./examples/gemini.mcp.json`
 - **Agent names are global (not project-scoped).** To avoid collisions with prior runs, generate unique names:
   ```bash
   RUN_ID=$(date +"%Y%m%d_%H%M%S")
@@ -102,7 +102,7 @@ Run Agent1 (pick ONE CLI; keep the same for all agents):
   ```
 - Gemini CLI:
   ```bash
-  GEMINI_CONFIG=./gemini.mcp.json gemini --approval-mode yolo --allowed-mcp-server-names mcp-agent-mail "$(cat $TEST_DIR/prompts/agent1_task.txt)" > "$TEST_DIR/outputs/agent1_output.txt" 2>&1 &
+  GEMINI_CONFIG=./examples/gemini.mcp.json gemini --approval-mode yolo --allowed-mcp-server-names mcp-agent-mail "$(cat $TEST_DIR/prompts/agent1_task.txt)" > "$TEST_DIR/outputs/agent1_output.txt" 2>&1 &
   AGENT1_PID=$!
   ```
 echo "Agent1 (FrontendDev) started - PID: $AGENT1_PID"
@@ -154,7 +154,7 @@ MCP_CONFIG=.codex/config.toml codex exec --yolo "$(cat $TEST_DIR/prompts/agent2_
 # Claude example:
 # MCP_CONFIG=.mcp.json claude -p --dangerously-skip-permissions "$(cat $TEST_DIR/prompts/agent2_task.txt)" > "$TEST_DIR/outputs/agent2_output.txt" 2>&1 &
 # Gemini example:
-# GEMINI_CONFIG=./gemini.mcp.json gemini --approval-mode yolo --allowed-mcp-server-names mcp-agent-mail "$(cat $TEST_DIR/prompts/agent2_task.txt)" > "$TEST_DIR/outputs/agent2_output.txt" 2>&1 &
+# GEMINI_CONFIG=./examples/gemini.mcp.json gemini --approval-mode yolo --allowed-mcp-server-names mcp-agent-mail "$(cat $TEST_DIR/prompts/agent2_task.txt)" > "$TEST_DIR/outputs/agent2_output.txt" 2>&1 &
 AGENT2_PID=$!
 echo "Agent2 (BackendDev) started - PID: $AGENT2_PID"
 ```
@@ -202,7 +202,7 @@ MCP_CONFIG=.codex/config.toml codex exec --yolo "$(cat $TEST_DIR/prompts/agent3_
 # Claude example:
 # MCP_CONFIG=.mcp.json claude -p --dangerously-skip-permissions "$(cat $TEST_DIR/prompts/agent3_task.txt)" > "$TEST_DIR/outputs/agent3_output.txt" 2>&1 &
 # Gemini example:
-# GEMINI_CONFIG=./gemini.mcp.json gemini --approval-mode yolo --allowed-mcp-server-names mcp-agent-mail "$(cat $TEST_DIR/prompts/agent3_task.txt)" > "$TEST_DIR/outputs/agent3_output.txt" 2>&1 &
+# GEMINI_CONFIG=./examples/gemini.mcp.json gemini --approval-mode yolo --allowed-mcp-server-names mcp-agent-mail "$(cat $TEST_DIR/prompts/agent3_task.txt)" > "$TEST_DIR/outputs/agent3_output.txt" 2>&1 &
 AGENT3_PID=$!
 echo "Agent3 (DatabaseAdmin) started - PID: $AGENT3_PID"
 ```
