@@ -44,9 +44,9 @@ from typing import Any, Optional
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 sys.path.insert(0, str(PROJECT_ROOT))
-from tests.integration.test_harness_utils import (  # type: ignore # noqa: E402
+from tests.integration.test_harness_utils import (  # noqa: E402
     MCP_AGENT_MAIL_SERVER,
-    _load_bearer_token,
+    load_bearer_token,
 )
 
 # Orchestration framework for CLI profiles
@@ -229,7 +229,7 @@ def run_cli_agent(
         env[config_env] = config_file
     env["NO_COLOR"] = "1"  # Disable color output for cleaner logs
 
-    bearer_token = _load_bearer_token()
+    bearer_token = load_bearer_token()
     if bearer_token:
         env["HTTP_BEARER_TOKEN"] = bearer_token
 

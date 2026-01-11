@@ -1661,7 +1661,7 @@ def copy_viewer_assets(output_dir: Path) -> None:
 
     package_root = resources.files("mcp_agent_mail.viewer_assets")
 
-    def _walk(node: abc.Traversable, relative: Path) -> None:  # type: ignore[attr-defined]
+    def _walk(node: abc.Traversable, relative: Path) -> None:
         for child in node.iterdir():
             child_relative = relative / child.name
             if child.is_dir():
