@@ -22,7 +22,7 @@ Validate that multiple real CLI instances can coordinate through MCP Agent Mail 
   - Codex: `MCP_CONFIG=.codex/config.toml`
   - Claude: `MCP_CONFIG=.mcp.json`
   - Gemini: `GEMINI_CONFIG=./examples/gemini.mcp.json`
-- **Agent names are global (not project-scoped).** To avoid collisions with prior runs, you must use a unique `RUN_ID` (timestamp or UUID) per run, and make your `project_key` and agent names include it:
+- **Agent names are global (not project-scoped).** To avoid collisions with prior runs, use a unique `RUN_ID` (timestamp or UUID) per run, and make your `project_key` and agent names include it:
   ```bash
   RUN_ID=$(date +"%Y%m%d_%H%M%S")
   PROJECT_KEY="/tmp/real_cli_test_project_${RUN_ID}"
