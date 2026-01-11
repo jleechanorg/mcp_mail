@@ -313,7 +313,7 @@ class BaseCLITest:
         if self.CLI_NAME == "gemini":
             if "error when talking to gemini api" in lower or "gemini-client-error" in lower:
                 return "Gemini CLI not configured/authorized (Gemini API error)"
-            if "modelnotfound" in lower or "404" in lower:
+            if "modelnotfound" in lower or "model not found" in lower or "model_not_found" in lower:
                 return "Gemini CLI model unavailable (configure model/credentials)"
 
         # Claude can fail due to account/quota/auth; treat as local-only precondition.
@@ -493,7 +493,11 @@ class BaseCLITest:
 
             # Claude output is often configured as stream-json+verbose via CLI_PROFILES.
             # Override to text to avoid system hook events breaking prompt parsing.
-            if self.CLI_NAME == "claude" and "--output-format" not in cli_extra_args:
+            has_output_format_flag = any(
+                arg == "--output-format" or arg.startswith("--output-format=")
+                for arg in (*cli_command, *cli_extra_args)
+            )
+            if self.CLI_NAME == "claude" and not has_output_format_flag:
                 cli_extra_args.extend(["--output-format", "text"])
 
             if cli_extra_args:

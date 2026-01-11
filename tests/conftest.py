@@ -51,14 +51,10 @@ def isolated_env(tmp_path, monkeypatch):
                     except Exception:
                         pass
 
-                # Multiple GC passes to ensure full cleanup
+                # Multiple GC passes to ensure full cleanup; avoid O(N) heap scans
+                # (gc.get_objects()) to prevent teardown hangs.
                 for _ in range(3):
                     gc.collect()
-                    # Close any Repo instances that might still be open
-                    # for obj in gc.get_objects():
-                    #     if isinstance(obj, Repo):
-                    #         with contextlib.suppress(Exception):
-                    #             obj.close()
 
                 # Give subprocesses time to terminate
                 time.sleep(0.1)
