@@ -1,7 +1,5 @@
 """Application factory for the MCP Agent Mail server."""
 
-from __future__ import annotations
-
 import asyncio
 import fnmatch
 import functools

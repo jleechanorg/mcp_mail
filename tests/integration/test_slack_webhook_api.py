@@ -148,6 +148,7 @@ async def test_slack_webhook_records_thread_mapping_for_top_level(monkeypatch):
     monkeypatch.setenv("SLACK_SYNC_ENABLED", "1")
     monkeypatch.setenv("SLACK_SYNC_CHANNELS", "CCHAN321")
     monkeypatch.setenv("SLACK_SYNC_PROJECT_NAME", "slack-sync-test-top-level")
+    monkeypatch.setenv("SLACK_SYNC_THREAD_REPLIES", "true")
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
     settings = get_settings()
@@ -172,9 +173,10 @@ async def test_slack_webhook_records_thread_mapping_for_top_level(monkeypatch):
     import mcp_agent_mail.app as app_module
 
     old_client = getattr(app_module, "_slack_client", None)
-    app_module._slack_client = dummy_client
     try:
         async with app.router.lifespan_context(app):
+            # Set dummy client AFTER lifespan starts to avoid it being overwritten
+            app_module._slack_client = dummy_client
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
                 resp = await client.post(
