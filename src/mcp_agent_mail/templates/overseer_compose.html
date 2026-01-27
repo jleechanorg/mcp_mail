@@ -517,7 +517,7 @@ function overseerComposer() {
           return thinkPrefix + rawSubject.slice(godPrefix.length);
         }
         // Otherwise, prepend :THINK:
-        return thinkPrefix + (rawSubject ? ' ' + rawSubject : ' ');
+        return rawSubject ? thinkPrefix + ' ' + rawSubject : thinkPrefix;
       } else if (this.messageMode === 'god') {
         // If subject already starts with :GOD:, return as-is
         if (rawSubject.startsWith(godPrefix)) {
@@ -528,7 +528,7 @@ function overseerComposer() {
           return godPrefix + rawSubject.slice(thinkPrefix.length);
         }
         // Otherwise, prepend :GOD:
-        return godPrefix + (rawSubject ? ' ' + rawSubject : ' ');
+        return rawSubject ? godPrefix + ' ' + rawSubject : godPrefix;
       }
 
       return rawSubject;
