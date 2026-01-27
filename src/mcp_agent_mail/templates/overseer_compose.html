@@ -177,16 +177,17 @@
         </div>
 
         <!-- Message Mode Selector -->
-        <div>
-          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">
+        <fieldset>
+          <legend class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">
             Message Mode
-          </label>
+          </legend>
           <div class="flex items-center gap-4">
             <label class="flex items-center gap-2 cursor-pointer group">
               <input type="radio"
                      name="messageMode"
                      value="normal"
                      x-model="messageMode"
+                     aria-describedby="mode-help-text"
                      class="w-4 h-4 text-primary-600 bg-white dark:bg-slate-700 border-slate-300 dark:border-slate-600 focus:ring-2 focus:ring-primary-500" />
               <span class="text-sm text-slate-700 dark:text-slate-300 group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
                 Normal
@@ -197,6 +198,7 @@
                      name="messageMode"
                      value="think"
                      x-model="messageMode"
+                     aria-describedby="mode-help-text"
                      class="w-4 h-4 text-primary-600 bg-white dark:bg-slate-700 border-slate-300 dark:border-slate-600 focus:ring-2 focus:ring-primary-500" />
               <span class="text-sm text-slate-700 dark:text-slate-300 group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
                 Think/Plan
@@ -207,18 +209,19 @@
                      name="messageMode"
                      value="god"
                      x-model="messageMode"
+                     aria-describedby="mode-help-text"
                      class="w-4 h-4 text-primary-600 bg-white dark:bg-slate-700 border-slate-300 dark:border-slate-600 focus:ring-2 focus:ring-primary-500" />
               <span class="text-sm text-slate-700 dark:text-slate-300 group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
                 God Mode
               </span>
             </label>
           </div>
-          <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">
+          <p id="mode-help-text" class="mt-2 text-xs text-slate-500 dark:text-slate-400">
             <span x-show="messageMode === 'normal'">Standard message - no special indicator</span>
             <span x-show="messageMode === 'think'">Adds <code class="px-1 py-0.5 bg-slate-200 dark:bg-slate-700 rounded text-xs font-mono">:THINK:</code> prefix to help agents identify planning/thinking requests</span>
             <span x-show="messageMode === 'god'">Adds <code class="px-1 py-0.5 bg-slate-200 dark:bg-slate-700 rounded text-xs font-mono">:GOD:</code> prefix for maximum priority directives</span>
           </p>
-        </div>
+        </fieldset>
 
         <!-- Message Body -->
         <div x-show="viewMode === 'write' || viewMode === 'split'" x-transition>
@@ -492,21 +495,43 @@ function overseerComposer() {
       return this.selectedRecipients.length > 0 &&
              this.selectedRecipients.length <= 100 &&
              this.subject.trim() &&
-             this.subject.length <= 200 &&
+             this.getSubjectWithMode().length <= 200 &&
              this.body.trim() &&
              this.body.length <= 49600 &&
              !this.sending;
     },
 
     getSubjectWithMode() {
-      // Append mode indicator to subject based on selected mode
-      const subject = this.subject.trim();
+      // Prepend mode indicator to subject based on selected mode, avoiding duplicate prefixes
+      const rawSubject = this.subject.trim();
+      const thinkPrefix = ':THINK:';
+      const godPrefix = ':GOD:';
+
       if (this.messageMode === 'think') {
-        return ':THINK: ' + subject;
+        // If subject already starts with :THINK:, return as-is
+        if (rawSubject.startsWith(thinkPrefix)) {
+          return rawSubject;
+        }
+        // If subject starts with :GOD:, replace it with :THINK:
+        if (rawSubject.startsWith(godPrefix)) {
+          return thinkPrefix + rawSubject.slice(godPrefix.length);
+        }
+        // Otherwise, prepend :THINK:
+        return rawSubject ? thinkPrefix + ' ' + rawSubject : thinkPrefix;
       } else if (this.messageMode === 'god') {
-        return ':GOD: ' + subject;
+        // If subject already starts with :GOD:, return as-is
+        if (rawSubject.startsWith(godPrefix)) {
+          return rawSubject;
+        }
+        // If subject starts with :THINK:, replace it with :GOD:
+        if (rawSubject.startsWith(thinkPrefix)) {
+          return godPrefix + rawSubject.slice(thinkPrefix.length);
+        }
+        // Otherwise, prepend :GOD:
+        return rawSubject ? godPrefix + ' ' + rawSubject : godPrefix;
       }
-      return subject;
+
+      return rawSubject;
     },
 
     insertMarkdown(before, after, placeholder) {
