@@ -176,6 +176,50 @@
           </p>
         </div>
 
+        <!-- Message Mode Selector -->
+        <div>
+          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">
+            Message Mode
+          </label>
+          <div class="flex items-center gap-4">
+            <label class="flex items-center gap-2 cursor-pointer group">
+              <input type="radio"
+                     name="messageMode"
+                     value="normal"
+                     x-model="messageMode"
+                     class="w-4 h-4 text-primary-600 bg-white dark:bg-slate-700 border-slate-300 dark:border-slate-600 focus:ring-2 focus:ring-primary-500" />
+              <span class="text-sm text-slate-700 dark:text-slate-300 group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
+                Normal
+              </span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer group">
+              <input type="radio"
+                     name="messageMode"
+                     value="think"
+                     x-model="messageMode"
+                     class="w-4 h-4 text-primary-600 bg-white dark:bg-slate-700 border-slate-300 dark:border-slate-600 focus:ring-2 focus:ring-primary-500" />
+              <span class="text-sm text-slate-700 dark:text-slate-300 group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
+                Think/Plan
+              </span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer group">
+              <input type="radio"
+                     name="messageMode"
+                     value="god"
+                     x-model="messageMode"
+                     class="w-4 h-4 text-primary-600 bg-white dark:bg-slate-700 border-slate-300 dark:border-slate-600 focus:ring-2 focus:ring-primary-500" />
+              <span class="text-sm text-slate-700 dark:text-slate-300 group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
+                God Mode
+              </span>
+            </label>
+          </div>
+          <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">
+            <span x-show="messageMode === 'normal'">Standard message - no special indicator</span>
+            <span x-show="messageMode === 'think'">Adds <code class="px-1 py-0.5 bg-slate-200 dark:bg-slate-700 rounded text-xs font-mono">:THINK:</code> prefix to help agents identify planning/thinking requests</span>
+            <span x-show="messageMode === 'god'">Adds <code class="px-1 py-0.5 bg-slate-200 dark:bg-slate-700 rounded text-xs font-mono">:GOD:</code> prefix for maximum priority directives</span>
+          </p>
+        </div>
+
         <!-- Message Body -->
         <div x-show="viewMode === 'write' || viewMode === 'split'" x-transition>
           <label for="body" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
@@ -362,7 +406,17 @@ Please investigate the following:
           </div>
           <div class="flex items-start justify-between text-sm gap-3">
             <span class="text-slate-600 dark:text-slate-400 flex-shrink-0">Subject:</span>
-            <span class="font-medium text-slate-900 dark:text-white text-right" x-text="subject"></span>
+            <span class="font-medium text-slate-900 dark:text-white text-right" x-text="getSubjectWithMode()"></span>
+          </div>
+          <div class="flex items-center justify-between text-sm">
+            <span class="text-slate-600 dark:text-slate-400">Mode:</span>
+            <span class="px-2 py-0.5 text-xs font-medium rounded"
+                  :class="{
+                    'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300': messageMode === 'normal',
+                    'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400': messageMode === 'think',
+                    'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400': messageMode === 'god'
+                  }"
+                  x-text="messageMode === 'normal' ? 'Normal' : messageMode === 'think' ? 'Think/Plan' : 'God Mode'"></span>
           </div>
           <div class="flex items-center justify-between text-sm">
             <span class="text-slate-600 dark:text-slate-400">Priority:</span>
@@ -403,6 +457,7 @@ function overseerComposer() {
     recipientSearch: '',
     viewMode: 'write',
     renderedPreview: '',
+    messageMode: 'normal',
     sending: false,
     showToast: false,
     showConfirmModal: false,
@@ -441,6 +496,17 @@ function overseerComposer() {
              this.body.trim() &&
              this.body.length <= 49600 &&
              !this.sending;
+    },
+
+    getSubjectWithMode() {
+      // Append mode indicator to subject based on selected mode
+      const subject = this.subject.trim();
+      if (this.messageMode === 'think') {
+        return ':THINK: ' + subject;
+      } else if (this.messageMode === 'god') {
+        return ':GOD: ' + subject;
+      }
+      return subject;
     },
 
     insertMarkdown(before, after, placeholder) {
@@ -524,7 +590,7 @@ function overseerComposer() {
           },
           body: JSON.stringify({
             recipients: this.selectedRecipients,
-            subject: this.subject.trim(),
+            subject: this.getSubjectWithMode(),
             body_md: this.body.trim(),
             thread_id: this.threadId.trim() || null,
           })
