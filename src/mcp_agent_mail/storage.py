@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Filesystem and Git archive helpers for MCP Agent Mail.
 
 NOTE: Local disk message copying to .mcp_mail/projects/ has been removed.
@@ -5,7 +7,6 @@ This module now only provides stub functions for backwards compatibility.
 All message storage is handled via SQLite database.
 """
 
-from __future__ import annotations
 
 import asyncio
 import logging

@@ -142,6 +142,10 @@ async def test_slack_webhook_records_thread_mapping_for_top_level(monkeypatch):
         async def map_thread(self, mcp_thread_id: str, slack_channel_id: str, slack_thread_ts: str) -> None:
             self.mappings.append((mcp_thread_id, slack_channel_id, slack_thread_ts))
 
+        async def close(self) -> None:
+            """Dummy close method to avoid errors during cleanup."""
+            pass
+
     monkeypatch.setenv("SLACK_ENABLED", "1")
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test-token")
     monkeypatch.setenv("SLACK_SIGNING_SECRET", "test-secret")
@@ -172,9 +176,13 @@ async def test_slack_webhook_records_thread_mapping_for_top_level(monkeypatch):
     dummy_client = DummySlackClient()
     import mcp_agent_mail.app as app_module
 
-    old_client = getattr(app_module, "_slack_client", None)
-    try:
-        async with app.router.lifespan_context(app):
+    async with app.router.lifespan_context(app):
+        # Capture the real client created during lifespan startup
+        real_client = getattr(app_module, "_slack_client", None)
+        try:
+            # Close the real client before replacing to avoid resource leak
+            if real_client and hasattr(real_client, "close"):
+                await real_client.close()
             # Set dummy client AFTER lifespan starts to avoid it being overwritten
             app_module._slack_client = dummy_client
             transport = httpx.ASGITransport(app=app)
@@ -188,8 +196,9 @@ async def test_slack_webhook_records_thread_mapping_for_top_level(monkeypatch):
                         "Content-Type": "application/json",
                     },
                 )
-    finally:
-        app_module._slack_client = old_client
+        finally:
+            # Restore real client before lifespan cleanup (or set to None if there wasn't one)
+            app_module._slack_client = real_client
 
     assert resp.status_code == 200
     assert dummy_client.mappings == [

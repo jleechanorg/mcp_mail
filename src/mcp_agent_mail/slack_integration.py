@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Slack integration for MCP Agent Mail.
 
 This module provides bidirectional integration with Slack:
@@ -17,7 +19,6 @@ For production deployments, consider implementing persistent storage for thread
 mappings in the database to maintain thread continuity across server restarts.
 """
 
-from __future__ import annotations
 
 import asyncio
 import hashlib

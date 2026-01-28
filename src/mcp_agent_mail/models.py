@@ -1,6 +1,7 @@
+from __future__ import annotations
+
 """SQLModel data models representing agents, messages, projects, and file reservations."""
 
-from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Optional

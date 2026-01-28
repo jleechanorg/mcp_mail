@@ -1,6 +1,7 @@
+from __future__ import annotations
+
 """Async database engine and session management utilities."""
 
-from __future__ import annotations
 
 import asyncio
 import logging
