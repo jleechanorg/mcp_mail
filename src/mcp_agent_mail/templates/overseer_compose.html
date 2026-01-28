@@ -172,16 +172,17 @@
                  placeholder="e.g., Urgent: Review security vulnerability"
                  class="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white placeholder-slate-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all" />
           <p class="mt-1.5 text-xs text-slate-500 dark:text-slate-500">
-            <span x-text="subject.length"></span> / 200 characters
+            <span x-text="getSubjectWithMode().length"></span> / 200 characters
+            <span x-show="messageMode !== 'normal'" class="text-slate-400">(including mode prefix)</span>
           </p>
         </div>
 
         <!-- Message Mode Selector -->
-        <div>
-          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">
+        <fieldset>
+          <legend class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">
             Message Mode
-          </label>
-          <div class="flex items-center gap-4">
+          </legend>
+          <div class="flex items-center gap-4" role="group" aria-describedby="messageMode-help">
             <label class="flex items-center gap-2 cursor-pointer group">
               <input type="radio"
                      name="messageMode"
@@ -213,12 +214,12 @@
               </span>
             </label>
           </div>
-          <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">
+          <p id="messageMode-help" class="mt-2 text-xs text-slate-500 dark:text-slate-400">
             <span x-show="messageMode === 'normal'">Standard message - no special indicator</span>
             <span x-show="messageMode === 'think'">Adds <code class="px-1 py-0.5 bg-slate-200 dark:bg-slate-700 rounded text-xs font-mono">:THINK:</code> prefix to help agents identify planning/thinking requests</span>
             <span x-show="messageMode === 'god'">Adds <code class="px-1 py-0.5 bg-slate-200 dark:bg-slate-700 rounded text-xs font-mono">:GOD:</code> prefix for maximum priority directives</span>
           </p>
-        </div>
+        </fieldset>
 
         <!-- Message Body -->
         <div x-show="viewMode === 'write' || viewMode === 'split'" x-transition>
@@ -489,24 +490,49 @@ function overseerComposer() {
     },
 
     canSend() {
+      // Calculate the final subject length including mode prefix
+      const finalSubjectLength = this.getSubjectWithMode().length;
+
       return this.selectedRecipients.length > 0 &&
              this.selectedRecipients.length <= 100 &&
              this.subject.trim() &&
-             this.subject.length <= 200 &&
+             finalSubjectLength <= 200 &&
              this.body.trim() &&
              this.body.length <= 49600 &&
              !this.sending;
     },
 
     getSubjectWithMode() {
-      // Append mode indicator to subject based on selected mode
-      const subject = this.subject.trim();
+      // Prepend mode indicator to subject based on selected mode, avoiding duplicate prefixes
+      const rawSubject = this.subject.trim();
+      const thinkPrefix = ':THINK:';
+      const godPrefix = ':GOD:';
+
       if (this.messageMode === 'think') {
-        return ':THINK: ' + subject;
+        // If subject already starts with :THINK:, return as-is
+        if (rawSubject.startsWith(thinkPrefix)) {
+          return rawSubject;
+        }
+        // If subject starts with :GOD:, replace it with :THINK:
+        if (rawSubject.startsWith(godPrefix)) {
+          return thinkPrefix + rawSubject.slice(godPrefix.length);
+        }
+        // Otherwise, prepend :THINK:
+        return thinkPrefix + (rawSubject ? ' ' + rawSubject : '');
       } else if (this.messageMode === 'god') {
-        return ':GOD: ' + subject;
+        // If subject already starts with :GOD:, return as-is
+        if (rawSubject.startsWith(godPrefix)) {
+          return rawSubject;
+        }
+        // If subject starts with :THINK:, replace it with :GOD:
+        if (rawSubject.startsWith(thinkPrefix)) {
+          return godPrefix + rawSubject.slice(thinkPrefix.length);
+        }
+        // Otherwise, prepend :GOD:
+        return godPrefix + (rawSubject ? ' ' + rawSubject : '');
       }
-      return subject;
+
+      return rawSubject;
     },
 
     insertMarkdown(before, after, placeholder) {
