@@ -168,11 +168,11 @@
                  id="subject"
                  x-model="subject"
                  required
-                 maxlength="200"
+                 :maxlength="getSubjectMaxLength()"
                  placeholder="e.g., Urgent: Review security vulnerability"
                  class="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white placeholder-slate-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all" />
           <p class="mt-1.5 text-xs text-slate-500 dark:text-slate-500">
-            <span x-text="getSubjectWithMode().length"></span> / 200 characters
+            <span x-text="subject.length"></span> / <span x-text="getSubjectMaxLength()"></span> characters
             <span x-show="messageMode !== 'normal'" class="text-slate-400">(including mode prefix)</span>
           </p>
         </div>
@@ -533,6 +533,12 @@ function overseerComposer() {
       }
 
       return rawSubject;
+    },
+
+    getSubjectMaxLength() {
+      const rawSubject = this.subject.trim();
+      const prefixLength = Math.max(this.getSubjectWithMode().length - rawSubject.length, 0);
+      return 200 - prefixLength;
     },
 
     insertMarkdown(before, after, placeholder) {
