@@ -172,8 +172,8 @@
                  placeholder="e.g., Urgent: Review security vulnerability"
                  class="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white placeholder-slate-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all" />
           <p class="mt-1.5 text-xs text-slate-500 dark:text-slate-500">
-            <span x-text="subject.length"></span> / <span x-text="getSubjectMaxLength()"></span> characters
-            <span x-show="messageMode !== 'normal'" class="text-slate-400">(mode reserves space for prefix)</span>
+            <span x-text="getRawSubjectLength()"></span> / <span x-text="getSubjectMaxLength()"></span> characters
+            <span x-show="messageMode !== 'normal'" class="text-slate-400">(max input length, prefix added automatically)</span>
           </p>
         </div>
 
@@ -539,32 +539,42 @@ function overseerComposer() {
 
     getSubjectMaxLength() {
       const rawSubject = this.subject.trim();
+      const maxFinalLength = 200;
 
       if (this.messageMode === 'think') {
+        // If already has :THINK: prefix, no change needed
         if (rawSubject.startsWith(this.thinkPrefix)) {
-          return 200;
+          return maxFinalLength;
         }
-        // If it starts with the OTHER prefix, account for the replacement
+        // If has :GOD: prefix that will be replaced with :THINK:
+        // Net change: -6 + 8 = +2 chars, so allow 198 raw input for 200 final
         if (rawSubject.startsWith(this.godPrefix)) {
-          // It will replace :GOD: (6) with :THINK: (8), net +2
-          return 200 - (8 - 6); // 198
+          return maxFinalLength - 2;
         }
-        return 200 - 8; // 192
+        // Otherwise, :THINK: + space will be prepended (8 chars)
+        return maxFinalLength - 8;
       }
 
       if (this.messageMode === 'god') {
+        // If already has :GOD: prefix, no change needed
         if (rawSubject.startsWith(this.godPrefix)) {
-          return 200;
+          return maxFinalLength;
         }
-        // If it starts with the OTHER prefix, account for the replacement
+        // If has :THINK: prefix that will be replaced with :GOD:
+        // Net change: -8 + 6 = -2 chars, so allow 202 raw input for 200 final
         if (rawSubject.startsWith(this.thinkPrefix)) {
-          // It will replace :THINK: (8) with :GOD: (6), net -2
-          return 200 + (8 - 6); // 202
+          return maxFinalLength + 2;
         }
-        return 200 - 6; // 194
+        // Otherwise, :GOD: + space will be prepended (6 chars)
+        return maxFinalLength - 6;
       }
 
-      return 200;
+      return maxFinalLength;
+    },
+
+    getRawSubjectLength() {
+      // Returns the length of the actual user input in the subject field
+      return this.subject.trim().length;
     },
 
     insertMarkdown(before, after, placeholder) {
