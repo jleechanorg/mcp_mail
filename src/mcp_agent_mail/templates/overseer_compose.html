@@ -172,8 +172,8 @@
                  placeholder="e.g., Urgent: Review security vulnerability"
                  class="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white placeholder-slate-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all" />
           <p class="mt-1.5 text-xs text-slate-500 dark:text-slate-500">
-            <span x-text="subject.length"></span> / <span x-text="getSubjectMaxLength()"></span> characters
-            <span x-show="messageMode !== 'normal'" class="text-slate-400">(mode reserves space for prefix)</span>
+            <span x-text="subject.trim().length"></span> / <span x-text="getSubjectMaxLength()"></span> characters
+            <span x-show="messageMode !== 'normal'" class="text-slate-400">(mode prefix will be added automatically)</span>
           </p>
         </div>
 
@@ -459,14 +459,16 @@ function overseerComposer() {
     viewMode: 'write',
     renderedPreview: '',
     messageMode: 'normal',
-    thinkPrefix: ':THINK:',
-    godPrefix: ':GOD:',
     sending: false,
     showToast: false,
     showConfirmModal: false,
     toastType: 'success',
     toastTitle: '',
     toastMessage: '',
+    // Centralized prefix constants to avoid duplication
+    thinkPrefix: ':THINK:',
+    godPrefix: ':GOD:',
+    maxSubjectLength: 200,
 
     init() {
       this.updatePreview();
@@ -538,33 +540,36 @@ function overseerComposer() {
     },
 
     getSubjectMaxLength() {
+      // Calculate the maximum allowed input length based on the transformation that will be applied
       const rawSubject = this.subject.trim();
 
       if (this.messageMode === 'think') {
+        // If subject already has :THINK:, no transformation needed
         if (rawSubject.startsWith(this.thinkPrefix)) {
-          return 200;
+          return this.maxSubjectLength;
         }
-        // If it starts with the OTHER prefix, account for the replacement
+        // If subject has :GOD: (6 chars), it will be replaced with :THINK: (7 chars) + space (1 char) = net +2
         if (rawSubject.startsWith(this.godPrefix)) {
-          // It will replace :GOD: (6) with :THINK: (8), net +2
-          return 200 - (8 - 6); // 198
+          return this.maxSubjectLength - 2;  // :THINK: + space adds 2 more chars than :GOD:
         }
-        return 200 - 8; // 192
+        // Otherwise, :THINK: + space (8 chars) will be prepended
+        return this.maxSubjectLength - (this.thinkPrefix.length + 1);
       }
 
       if (this.messageMode === 'god') {
+        // If subject already has :GOD:, no transformation needed
         if (rawSubject.startsWith(this.godPrefix)) {
-          return 200;
+          return this.maxSubjectLength;
         }
-        // If it starts with the OTHER prefix, account for the replacement
+        // If subject has :THINK: (8 chars), it will be replaced with :GOD: (5 chars) + space (1 char) = net -2
         if (rawSubject.startsWith(this.thinkPrefix)) {
-          // It will replace :THINK: (8) with :GOD: (6), net -2
-          return 200 + (8 - 6); // 202
+          return this.maxSubjectLength + 2;  // :GOD: + space uses 2 fewer chars than :THINK: + space
         }
-        return 200 - 6; // 194
+        // Otherwise, :GOD: + space (6 chars) will be prepended
+        return this.maxSubjectLength - (this.godPrefix.length + 1);
       }
 
-      return 200;
+      return this.maxSubjectLength;
     },
 
     insertMarkdown(before, after, placeholder) {
