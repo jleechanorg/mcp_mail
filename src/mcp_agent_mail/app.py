@@ -7482,7 +7482,7 @@ def build_mcp_server() -> FastMCP:
 
         # Workaround for FastMCP stripping query parameters
         params = _extract_raw_uri_params(ctx)
-        if project is None and "project" in params:
+        if project is None and params.get("project"):
             project = params["project"][0]
         caps = _capabilities_for(agent, project)
         return {
@@ -7512,9 +7512,9 @@ def build_mcp_server() -> FastMCP:
 
         # Workaround for FastMCP stripping query parameters
         params = _extract_raw_uri_params(ctx)
-        if agent is None and "agent" in params:
+        if agent is None and params.get("agent"):
             agent = params["agent"][0]
-        if project is None and "project" in params:
+        if project is None and params.get("project"):
             project = params["project"][0]
         try:
             win = int(window_seconds)
@@ -7880,7 +7880,7 @@ def build_mcp_server() -> FastMCP:
 
         # Workaround for FastMCP stripping query parameters
         params = _extract_raw_uri_params(ctx)
-        if "active_only" in params:
+        if params.get("active_only"):
             active_only = _coerce_flag_to_bool(params["active_only"][0], default=active_only)
 
         project = await _get_project_by_identifier(slug_value)
@@ -7965,7 +7965,7 @@ def build_mcp_server() -> FastMCP:
 
         # Workaround for FastMCP stripping query parameters
         params = _extract_raw_uri_params(ctx)
-        if project is None and "project" in params:
+        if project is None and params.get("project"):
             project = params["project"][0]
         if project is None:
             # Try to infer project by message id when unique
@@ -8046,9 +8046,9 @@ def build_mcp_server() -> FastMCP:
 
         # Workaround for FastMCP stripping query parameters
         params = _extract_raw_uri_params(ctx)
-        if project is None and "project" in params:
+        if project is None and params.get("project"):
             project = params["project"][0]
-        if "include_bodies" in params:
+        if params.get("include_bodies"):
             include_bodies = _coerce_flag_to_bool(params["include_bodies"][0], default=False)
 
         logger.debug(
@@ -8185,17 +8185,17 @@ def build_mcp_server() -> FastMCP:
 
         # Workaround for FastMCP stripping query parameters
         params = _extract_raw_uri_params(ctx)
-        if project is None and "project" in params:
+        if project is None and params.get("project"):
             project = params["project"][0]
-        if "since_ts" in params:
+        if params.get("since_ts"):
             since_ts = params["since_ts"][0]
-        if "urgent_only" in params:
+        if params.get("urgent_only"):
             val = params["urgent_only"][0].strip().lower()
             urgent_only = val in ("1", "true", "t", "yes", "y")
-        if "include_bodies" in params:
+        if params.get("include_bodies"):
             val = params["include_bodies"][0].strip().lower()
             include_bodies = val in ("1", "true", "t", "yes", "y")
-        if "limit" in params:
+        if params.get("limit"):
             with suppress(ValueError, IndexError):
                 limit = int(params["limit"][0])
 
@@ -8267,9 +8267,9 @@ def build_mcp_server() -> FastMCP:
 
         # Workaround for FastMCP stripping query parameters
         params = _extract_raw_uri_params(ctx)
-        if project is None and "project" in params:
+        if project is None and params.get("project"):
             project = params["project"][0]
-        if "limit" in params:
+        if params.get("limit"):
             with suppress(ValueError, IndexError):
                 limit = int(params["limit"][0])
 
@@ -8341,9 +8341,9 @@ def build_mcp_server() -> FastMCP:
 
         # Workaround for FastMCP stripping query parameters
         params = _extract_raw_uri_params(ctx)
-        if project is None and "project" in params:
+        if project is None and params.get("project"):
             project = params["project"][0]
-        if "limit" in params:
+        if params.get("limit"):
             with suppress(ValueError, IndexError):
                 limit = int(params["limit"][0])
 
@@ -8427,12 +8427,12 @@ def build_mcp_server() -> FastMCP:
 
         # Workaround for FastMCP stripping query parameters from resource URIs
         params = _extract_raw_uri_params(ctx)
-        if project is None and "project" in params:
+        if project is None and params.get("project"):
             project = params["project"][0]
-        if "ttl_seconds" in params:
+        if params.get("ttl_seconds"):
             with suppress(ValueError, IndexError):
                 ttl_seconds = int(params["ttl_seconds"][0])
-        if "limit" in params:
+        if params.get("limit"):
             with suppress(ValueError, IndexError):
                 limit = int(params["limit"][0])
 
@@ -8521,12 +8521,12 @@ def build_mcp_server() -> FastMCP:
 
         # Workaround for FastMCP stripping query parameters
         params = _extract_raw_uri_params(ctx)
-        if project is None and "project" in params:
+        if project is None and params.get("project"):
             project = params["project"][0]
-        if "ttl_minutes" in params:
+        if params.get("ttl_minutes"):
             with suppress(ValueError, IndexError):
                 ttl_minutes = int(params["ttl_minutes"][0])
-        if "limit" in params:
+        if params.get("limit"):
             with suppress(ValueError, IndexError):
                 limit = int(params["limit"][0])
 
@@ -8604,9 +8604,9 @@ def build_mcp_server() -> FastMCP:
 
         # Workaround for FastMCP stripping query parameters
         params = _extract_raw_uri_params(ctx)
-        if project is None and "project" in params:
+        if project is None and params.get("project"):
             project = params["project"][0]
-        if "limit" in params:
+        if params.get("limit"):
             with suppress(ValueError, IndexError):
                 limit = int(params["limit"][0])
 
@@ -8660,9 +8660,9 @@ def build_mcp_server() -> FastMCP:
 
         # Workaround for FastMCP stripping query parameters
         params = _extract_raw_uri_params(ctx)
-        if project is None and "project" in params:
+        if project is None and params.get("project"):
             project = params["project"][0]
-        if "limit" in params:
+        if params.get("limit"):
             with suppress(ValueError, IndexError):
                 limit = int(params["limit"][0])
         if project is None:
@@ -8720,14 +8720,14 @@ def build_mcp_server() -> FastMCP:
 
         # Workaround for FastMCP stripping query parameters
         params = _extract_raw_uri_params(ctx)
-        if project is None and "project" in params:
+        if project is None and params.get("project"):
             project = params["project"][0]
-        if "limit" in params:
+        if params.get("limit"):
             with suppress(ValueError, IndexError):
                 limit = int(params["limit"][0])
-        if "include_bodies" in params:
+        if params.get("include_bodies"):
             include_bodies = params["include_bodies"][0].lower() in {"1", "true", "t", "yes", "y"}
-        if "since_ts" in params:
+        if params.get("since_ts"):
             since_ts = params["since_ts"][0]
         if project is None:
             raise ValueError("project parameter is required for outbox resource")
