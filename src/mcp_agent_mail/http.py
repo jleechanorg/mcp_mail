@@ -1,7 +1,4 @@
-from __future__ import annotations
-
 """HTTP transport helpers wrapping FastMCP with FastAPI."""
-
 
 import argparse
 import asyncio

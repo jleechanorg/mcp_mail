@@ -17,7 +17,7 @@ from difflib import SequenceMatcher
 from functools import wraps
 from pathlib import Path
 from typing import Any, Optional, cast
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qs, parse_qsl, urlparse
 
 from fastmcp import Context, FastMCP
 from fastmcp.tools.tool import ToolResult  # type: ignore
@@ -3196,8 +3196,12 @@ def build_mcp_server() -> FastMCP:
         if settings.slack.enabled and settings.slack.notify_on_message:
 
             def _slack_done_cb(t: asyncio.Task) -> None:
+                if t.cancelled():
+                    return
                 try:
                     _ = t.result()
+                except asyncio.CancelledError:
+                    pass
                 except Exception as e:
                     logger.exception("Failed to send Slack notification", exc_info=e)
 
@@ -7416,7 +7420,7 @@ def build_mcp_server() -> FastMCP:
             name_part, _, qs = agent.partition("?")
             agent = name_part
             try:
-                from urllib.parse import parse_qs
+                # from urllib.parse import parse_qs - usage global
 
                 parsed = parse_qs(qs, keep_blank_values=False)
                 if project is None and parsed.get("project"):
@@ -7442,7 +7446,7 @@ def build_mcp_server() -> FastMCP:
             seg, _, qs = window_seconds.partition("?")
             window_seconds = seg
             try:
-                from urllib.parse import parse_qs
+                # from urllib.parse import parse_qs - usage global
 
                 parsed = parse_qs(qs, keep_blank_values=False)
                 agent = agent or (parsed.get("agent") or [None])[0]
@@ -7881,7 +7885,7 @@ def build_mcp_server() -> FastMCP:
             id_part, _, qs = message_id.partition("?")
             message_id = id_part
             try:
-                from urllib.parse import parse_qs
+                # from urllib.parse import parse_qs - usage global
 
                 parsed = parse_qs(qs, keep_blank_values=False)
                 if project is None and parsed.get("project"):
@@ -7956,7 +7960,7 @@ def build_mcp_server() -> FastMCP:
             id_part, _, qs = thread_id.partition("?")
             thread_id = id_part
             try:
-                from urllib.parse import parse_qs
+                # from urllib.parse import parse_qs - usage global
 
                 parsed = parse_qs(qs, keep_blank_values=False)
                 if project is None and "project" in parsed and parsed["project"]:
@@ -8081,7 +8085,7 @@ def build_mcp_server() -> FastMCP:
             name_part, _, qs = agent.partition("?")
             agent = name_part
             try:
-                from urllib.parse import parse_qs
+                # from urllib.parse import parse_qs - usage global
 
                 parsed = parse_qs(qs, keep_blank_values=False)
                 if project is None and "project" in parsed and parsed["project"]:
@@ -8155,7 +8159,7 @@ def build_mcp_server() -> FastMCP:
             name_part, _, qs = agent.partition("?")
             agent = name_part
             try:
-                from urllib.parse import parse_qs
+                # from urllib.parse import parse_qs - usage global
 
                 parsed = parse_qs(qs, keep_blank_values=False)
                 if project is None and parsed.get("project"):
@@ -8221,7 +8225,7 @@ def build_mcp_server() -> FastMCP:
             name_part, _, qs = agent.partition("?")
             agent = name_part
             try:
-                from urllib.parse import parse_qs
+                # from urllib.parse import parse_qs - usage global
 
                 parsed = parse_qs(qs, keep_blank_values=False)
                 if project is None and parsed.get("project"):
@@ -8274,6 +8278,7 @@ def build_mcp_server() -> FastMCP:
     @mcp.resource("resource://views/acks-stale/{agent}", mime_type="application/json")
     async def acks_stale_view(
         agent: str,
+        ctx: Context,
         project: Optional[str] = None,
         ttl_seconds: Optional[int] = None,
         limit: int = 20,
@@ -8297,7 +8302,7 @@ def build_mcp_server() -> FastMCP:
             name_part, _, qs = agent.partition("?")
             agent = name_part
             try:
-                from urllib.parse import parse_qs
+                # from urllib.parse import parse_qs - usage global
 
                 parsed = parse_qs(qs, keep_blank_values=False)
                 if project is None and parsed.get("project"):
@@ -8311,6 +8316,56 @@ def build_mcp_server() -> FastMCP:
             except Exception:
                 pass
 
+        # Workaround for FastMCP stripping query parameters from resource URIs
+        try:
+            if ctx and hasattr(ctx, "request_context") and hasattr(ctx, "session"):
+                req_id = ctx.request_context.request_id
+                session = ctx.session
+                if hasattr(session, "_in_flight") and req_id in session._in_flight:
+                    responder = session._in_flight[req_id]
+                    if hasattr(responder, "request"):
+                        raw_req = responder.request
+
+                        # Check for 'uri' in params via model_dump (Pydantic v2) or attributes
+                        raw_uri_str = None
+                        try:
+                            if hasattr(raw_req, "model_dump"):
+                                dump = raw_req.model_dump()
+                                if isinstance(dump, dict) and "params" in dump:
+                                    params_data = dump["params"]
+                                    if isinstance(params_data, dict) and "uri" in params_data:
+                                        raw_uri_str = str(params_data["uri"])
+                        except Exception:
+                            # Fallback if dump fails
+                            pass
+
+                        # Fallback for dict-like or attribute access
+                        if not raw_uri_str and hasattr(raw_req, "params") and raw_req.params:
+                            params_obj = raw_req.params
+                            if isinstance(params_obj, dict):
+                                raw_uri_str = str(params_obj.get("uri", ""))
+                            elif hasattr(params_obj, "uri"):
+                                raw_uri_str = str(params_obj.uri)
+
+                        if raw_uri_str:
+                            try:
+                                parsed = urlparse(raw_uri_str)
+                                query = parse_qs(parsed.query)
+
+                                if "project" in query:
+                                    project = query["project"][0]
+                                if "ttl_seconds" in query:
+                                    with suppress(ValueError, IndexError):
+                                        ttl_seconds = int(query["ttl_seconds"][0])
+                                if "limit" in query:
+                                    with suppress(ValueError, IndexError):
+                                        limit = int(query["limit"][0])
+                            except Exception:
+                                pass
+
+        except Exception as e:
+            logger.warning(f"Failed to manually parse resource URI params: {e}")
+
         if project is None:
             async with get_session() as s_auto:
                 rows = await s_auto.execute(
@@ -8320,10 +8375,10 @@ def build_mcp_server() -> FastMCP:
                     .limit(2)
                 )
                 projects = [row[0] for row in rows.all()]
-            if len(projects) == 1:
-                project_obj = projects[0]
-            else:
-                raise ValueError("project parameter is required for stale acks view")
+                if len(projects) == 1:
+                    project_obj = projects[0]
+                else:
+                    raise ValueError("project parameter is required for stale acks view")
         else:
             project_obj = await _get_project_by_identifier(project)
         agent_obj = await _get_agent(project_obj, agent)
@@ -8381,7 +8436,7 @@ def build_mcp_server() -> FastMCP:
             name_part, _, qs = agent.partition("?")
             agent = name_part
             try:
-                from urllib.parse import parse_qs
+                # from urllib.parse import parse_qs - usage global
 
                 parsed = parse_qs(qs, keep_blank_values=False)
                 if project is None and parsed.get("project"):
@@ -8456,7 +8511,7 @@ def build_mcp_server() -> FastMCP:
             name_part, _, qs = agent.partition("?")
             agent = name_part
             try:
-                from urllib.parse import parse_qs
+                # from urllib.parse import parse_qs - usage global
 
                 parsed = parse_qs(qs, keep_blank_values=False)
                 if project is None and parsed.get("project"):
@@ -8506,7 +8561,7 @@ def build_mcp_server() -> FastMCP:
             name_part, _, qs = agent.partition("?")
             agent = name_part
             try:
-                from urllib.parse import parse_qs
+                # from urllib.parse import parse_qs - usage global
 
                 parsed = parse_qs(qs, keep_blank_values=False)
                 if project is None and parsed.get("project"):
@@ -8555,7 +8610,7 @@ def build_mcp_server() -> FastMCP:
             name_part, _, qs = agent.partition("?")
             agent = name_part
             try:
-                from urllib.parse import parse_qs
+                # from urllib.parse import parse_qs - usage global
 
                 parsed = parse_qs(qs, keep_blank_values=False)
                 if project is None and parsed.get("project"):

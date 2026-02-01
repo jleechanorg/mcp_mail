@@ -1,7 +1,4 @@
-from __future__ import annotations
-
 """Top-level package for the MCP Agent Mail server."""
-
 
 import asyncio
 import importlib

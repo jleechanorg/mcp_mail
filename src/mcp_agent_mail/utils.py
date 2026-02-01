@@ -1,7 +1,4 @@
-from __future__ import annotations
-
 """Utility helpers for the MCP Agent Mail service."""
-
 
 import random
 import re

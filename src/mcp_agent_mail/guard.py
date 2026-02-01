@@ -1,11 +1,8 @@
-from __future__ import annotations
-
 """Pre-commit guard helpers for MCP Agent Mail.
 
 NOTE: Archive storage has been removed. Guard functionality is now disabled
 since it previously depended on the archive's file_reservations directory.
 """
-
 
 import asyncio
 from pathlib import Path

@@ -1,7 +1,4 @@
-from __future__ import annotations
-
 """Utilities for exporting MCP Agent Mail data into shareable static bundles."""
-
 
 import base64
 import binascii

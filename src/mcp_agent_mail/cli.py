@@ -1,7 +1,4 @@
-from __future__ import annotations
-
 """Command-line interface surface for developer tooling."""
-
 
 # ruff: noqa: B008
 import asyncio

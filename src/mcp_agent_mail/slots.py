@@ -1,11 +1,8 @@
-from __future__ import annotations
-
 """Build slot management tools for coordinating parallel build operations.
 
 NOTE: Archive storage has been removed. Build slots functionality is now disabled
 since it previously depended on the archive's filesystem structure.
 """
-
 
 from typing import Any
 

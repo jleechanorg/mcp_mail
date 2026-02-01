@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Application configuration loaded via python-decouple with typed helpers.
 
 Configuration sources (in order of precedence):
@@ -7,7 +5,6 @@ Configuration sources (in order of precedence):
 2. ~/.mcp_mail/credentials.json (for secrets, recommended for PyPI installs)
 3. .env file in current directory (for development)
 """
-
 
 import json
 import os

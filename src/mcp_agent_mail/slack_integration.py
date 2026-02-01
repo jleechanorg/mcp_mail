@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Slack integration for MCP Agent Mail.
 
 This module provides bidirectional integration with Slack:
@@ -18,7 +16,6 @@ Slack thread.
 For production deployments, consider implementing persistent storage for thread
 mappings in the database to maintain thread continuity across server restarts.
 """
-
 
 import asyncio
 import hashlib
@@ -124,7 +121,7 @@ class SlackClient:
         self._reverse_thread_mappings: dict[tuple[str, str], str] = {}
         self._mappings_lock = asyncio.Lock()
 
-    async def __aenter__(self) -> SlackClient:
+    async def __aenter__(self) -> "SlackClient":
         """Async context manager entry."""
         await self.connect()
         return self
