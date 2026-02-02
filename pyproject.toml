@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp_mail"
-version = "0.1.17"
+version = "0.1.18"
 description = "Coordinated multi-agent messaging and coordination MCP server."
 readme = "README.md"
 requires-python = ">=3.11"

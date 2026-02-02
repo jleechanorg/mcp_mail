@@ -167,15 +167,19 @@ def build_cli_command(
     # Build command using template from profile
     command_template = profile.get("command_template", "{binary} -p {prompt_file}")
 
-    # Get model from profile or use sensible default (templates may include {model})
-    model = profile.get("model") or "sonnet"
+    # Get model from profile or use CLI-specific default (templates may include {model})
+    model = profile.get("model")
+    if not model:
+        # Use CLI-specific defaults when model not specified in profile
+        cli_model_defaults = {"claude": "sonnet", "gemini": "gemini-2.0-flash", "codex": "o3-mini"}
+        model = cli_model_defaults.get(cli_name, "default")
 
     # Format the command template
     command_str = command_template.format(
         binary=shlex.quote(binary_path),
         prompt_file=shlex.quote(str(prompt_file)),
         continue_flag="",
-        model=model,
+        model=shlex.quote(model),  # Quote model to prevent command injection
     )
 
     # Parse into list (shell=False for security)

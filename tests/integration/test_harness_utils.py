@@ -365,15 +365,20 @@ class BaseCLITest:
             tool_names = self._parse_tool_names_from_output(output)
             last_details = {"tools": sorted(tool_names), "attempt": attempt, "output": self._redact_output(output)}
 
-            # Check if we found EITHER core tools OR extended tools (both indicate successful MCP connection)
-            has_core = bool(MCP_EXPECTED_TOOLS_CORE & tool_names)
-            has_extended = bool(MCP_EXPECTED_TOOLS_EXTENDED & tool_names)
+            # Check if ALL core tools OR ALL extended tools are present (both indicate successful MCP connection)
+            has_all_core = tool_names >= MCP_EXPECTED_TOOLS_CORE
+            has_all_extended = tool_names >= MCP_EXPECTED_TOOLS_EXTENDED
 
-            if has_core or has_extended:
-                found_type = "core" if has_core else "extended"
+            if has_all_core or has_all_extended:
+                if has_all_core and has_all_extended:
+                    found_type = "core and extended"
+                elif has_all_core:
+                    found_type = "core"
+                else:
+                    found_type = "extended"
                 return True, f"MCP Agent Mail tools available ({found_type})", last_details
 
-            message = f"No MCP Agent Mail tools found. Expected some of: {', '.join(sorted(expected_tools))}"
+            message = f"No complete MCP Agent Mail toolset found. Expected all of core {sorted(MCP_EXPECTED_TOOLS_CORE)} or extended {sorted(MCP_EXPECTED_TOOLS_EXTENDED)}"
             if attempt < len(prompts):
                 print(f"  WARN: {message} (attempt {attempt}); retrying...")
                 time.sleep(1)  # Brief pause between retries
@@ -546,13 +551,17 @@ class BaseCLITest:
         try:
             # Build command using CLI profile template
             command_template = self.cli_profile.get("command_template", "{binary} -p {prompt_file}")
-            # Get model from profile or use sensible default (templates may include {model})
-            model = self.cli_profile.get("model") or "sonnet"
+            # Get model from profile or use CLI-specific default (templates may include {model})
+            model = self.cli_profile.get("model")
+            if not model:
+                # Use CLI-specific defaults when model not specified in profile
+                cli_model_defaults = {"claude": "sonnet", "gemini": "gemini-2.0-flash", "codex": "o3-mini"}
+                model = cli_model_defaults.get(self.CLI_NAME, "default")
             cli_command_str = command_template.format(
                 binary=shlex.quote(cli_path),
                 prompt_file=shlex.quote(str(prompt_file)),
                 continue_flag="",
-                model=model,
+                model=shlex.quote(model),  # Quote model to prevent command injection
             )
 
             # Split into list for safe subprocess execution (shell=False)
