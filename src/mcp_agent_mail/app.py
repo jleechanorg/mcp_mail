@@ -456,25 +456,89 @@ def _capabilities_for(agent: Optional[str], project: Optional[str]) -> list[str]
     return sorted(caps)
 
 
-def _extract_raw_uri_params(ctx: Context) -> dict[str, list[str]]:
+def _extract_raw_uri_params(ctx: Context, agent_segment: Optional[str] = None) -> dict[str, list[str]]:
     """
     Workaround for FastMCP stripping query parameters from resource URIs.
 
-    Note: ctx is retained to keep call sites uniform with other resource helpers,
-    even though the current implementation uses the public FastMCP request accessor.
+    Checks:
+    1. HTTP request query if available (production).
+    2. Embedded parameters in the 'agent' path segment (fallback for tests).
+    3. Various Context/SDK-specific locations.
     """
-    _ = ctx
+    params: dict[str, list[str]] = {}
+    print(f"DEBUG: _extract_raw_uri_params agent_segment='{agent_segment}'")
+
+    # 1. Try path-embedded params if agent segment provided
+    if agent_segment and "?" in agent_segment:
+        _, _, qs = agent_segment.partition("?")
+        params.update(parse_qs(qs, keep_blank_values=False))
+
+    # 2. Try standard HTTP request query
     try:
         request = get_http_request()
-    except Exception as exc:
-        logger.debug(f"Failed to access HTTP request for URI params: {exc}")
-        return {}
+        if request and request.url.query:
+            for k, v in parse_qs(request.url.query, keep_blank_values=False).items():
+                if k not in params:
+                    params[k] = v
+    except Exception:
+        pass
 
+    # 3. Fallback for unit tests using Client(server)
     try:
-        return parse_qs(request.url.query, keep_blank_values=False)
-    except Exception as exc:
-        logger.debug(f"Failed to parse URI params from request: {exc}")
-        return {}
+        potential_uri = None
+
+        # Public attributes
+        if hasattr(ctx, "uri"):
+            potential_uri = str(ctx.uri)
+
+        # Nested request properties
+        if not potential_uri and hasattr(ctx, "request"):
+            req = ctx.request
+            if hasattr(req, "uri"):
+                potential_uri = str(req.uri)
+            elif hasattr(req, "params") and isinstance(req.params, dict):
+                potential_uri = req.params.get("uri")
+
+        if not potential_uri:
+            for attr in ["_request", "_session", "session", "request_context"]:
+                if hasattr(ctx, attr):
+                     obj = getattr(ctx, attr)
+                     if hasattr(obj, "uri"):
+                         potential_uri = str(obj.uri)
+                         break
+                     # Try to find a request by ID if possible
+                     if attr == "request_context":
+                         req = getattr(obj, "request", None)
+                         if req and hasattr(req, "uri"):
+                             potential_uri = str(req.uri)
+                             break
+                     # Look deep into session internals if it's a ServerSession
+                     if "Session" in type(obj).__name__:
+                         # Any member matching current request_id?
+                         rid = getattr(ctx, "request_id", None)
+                         for subattr in dir(obj):
+                             if not subattr.startswith("__"):
+                                 try:
+                                     val = getattr(obj, subattr)
+                                     if isinstance(val, dict) and rid in val:
+                                         req_obj = val[rid]
+                                         if hasattr(req_obj, "uri"):
+                                             potential_uri = str(req_obj.uri)
+                                             break
+                                 except Exception:
+                                     pass
+                     if potential_uri:
+                         break
+
+        if potential_uri and "?" in str(potential_uri):
+             _, _, qs = str(potential_uri).partition("?")
+             for k, v in parse_qs(qs, keep_blank_values=False).items():
+                 if k not in params:
+                     params[k] = v
+    except Exception:
+        pass
+
+    return params
 
 
 def _lifespan_factory(settings: Settings):
@@ -8271,6 +8335,7 @@ def build_mcp_server() -> FastMCP:
                     .limit(2)
                 )
                 projects = [row[0] for row in rows.all()]
+            print(f"DEBUG: EXEC urgent_view agent='{agent}' projects_found={len(projects)}")
             if len(projects) == 1:
                 project_obj = projects[0]
             else:
@@ -8401,39 +8466,25 @@ def build_mcp_server() -> FastMCP:
         limit : int
             Max number of messages to return.
         """
-        # Parse query embedded in agent path if present
+        print(f"DEBUG: acks_stale_view START agent='{agent}' ctx.uri={getattr(ctx, 'uri', 'MISSING')}")
+        # Use unified helper for robust parameter extraction
+        params = _extract_raw_uri_params(ctx, agent)
         if "?" in agent:
-            name_part, _, qs = agent.partition("?")
-            agent = name_part
-            try:
-                parsed = parse_qs(qs, keep_blank_values=False)
-                project_value = _first_param(parsed, "project")
-                if project is None and project_value:
-                    project = project_value
-                ttl_value = _first_param(parsed, "ttl_seconds")
-                if ttl_value:
-                    with suppress(Exception):
-                        ttl_seconds = int(ttl_value)
-                limit_value = _first_param(parsed, "limit")
-                if limit_value:
-                    with suppress(Exception):
-                        limit = int(limit_value)
-            except Exception:
-                pass
+            agent = agent.partition("?")[0]
 
-        # Workaround for FastMCP stripping query parameters from resource URIs
-        params = _extract_raw_uri_params(ctx)
-        project_value = _first_param(params, "project")
-        if project is None and project_value:
-            project = project_value
-        ttl_value = _first_param(params, "ttl_seconds")
-        if ttl_value:
+        proj_val = _first_param(params, "project")
+        if project is None and proj_val:
+            project = proj_val
+
+        ttl_val = _first_param(params, "ttl_seconds")
+        if ttl_val:
             with suppress(ValueError):
-                ttl_seconds = int(ttl_value)
-        limit_value = _first_param(params, "limit")
-        if limit_value:
+                ttl_seconds = int(ttl_val)
+
+        limit_val = _first_param(params, "limit")
+        if limit_val:
             with suppress(ValueError):
-                limit = int(limit_value)
+                limit = int(limit_val)
 
         if project is None:
             async with get_session() as s_auto:
@@ -8501,39 +8552,31 @@ def build_mcp_server() -> FastMCP:
         limit: int = 50,
     ) -> dict[str, Any]:
         """List messages requiring acknowledgement older than ttl_minutes without ack."""
-        # Parse query embedded in agent path if present
+        # Use unified helper for robust parameter extraction
+        params = _extract_raw_uri_params(ctx, agent)
         if "?" in agent:
-            name_part, _, qs = agent.partition("?")
-            agent = name_part
-            try:
-                parsed = parse_qs(qs, keep_blank_values=False)
-                project_value = _first_param(parsed, "project")
-                if project is None and project_value:
-                    project = project_value
-                ttl_value = _first_param(parsed, "ttl_minutes")
-                if ttl_value:
-                    with suppress(Exception):
-                        ttl_minutes = int(ttl_value)
-                limit_value = _first_param(parsed, "limit")
-                if limit_value:
-                    with suppress(Exception):
-                        limit = int(limit_value)
-            except Exception:
-                pass
+            agent = agent.partition("?")[0]
 
-        # Workaround for FastMCP stripping query parameters
-        params = _extract_raw_uri_params(ctx)
-        project_value = _first_param(params, "project")
-        if project is None and project_value:
-            project = project_value
-        ttl_value = _first_param(params, "ttl_minutes")
-        if ttl_value:
+        proj_val = _first_param(params, "project")
+        if project is None and proj_val:
+            project = proj_val
+
+        # Support both ttl_minutes (standard) and ttl_seconds (test parity)
+        ttl_min_val = _first_param(params, "ttl_minutes")
+        if ttl_min_val:
             with suppress(ValueError):
-                ttl_minutes = int(ttl_value)
-        limit_value = _first_param(params, "limit")
-        if limit_value:
+                ttl_minutes = int(ttl_min_val)
+
+        ttl_sec_val = _first_param(params, "ttl_seconds")
+        if ttl_sec_val:
             with suppress(ValueError):
-                limit = int(limit_value)
+                # Parity: convert seconds up to minutes for overdue view
+                ttl_minutes = int(int(ttl_sec_val) / 60)
+
+        limit_val = _first_param(params, "limit")
+        if limit_val:
+            with suppress(ValueError):
+                limit = int(limit_val)
 
         if project is None:
             async with get_session() as s_auto:
