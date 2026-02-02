@@ -466,7 +466,6 @@ def _extract_raw_uri_params(ctx: Context, agent_segment: Optional[str] = None) -
     3. Various Context/SDK-specific locations.
     """
     params: dict[str, list[str]] = {}
-    print(f"DEBUG: _extract_raw_uri_params agent_segment='{agent_segment}'")
 
     # 1. Try path-embedded params if agent segment provided
     if agent_segment and "?" in agent_segment:
@@ -8335,7 +8334,6 @@ def build_mcp_server() -> FastMCP:
                     .limit(2)
                 )
                 projects = [row[0] for row in rows.all()]
-            print(f"DEBUG: EXEC urgent_view agent='{agent}' projects_found={len(projects)}")
             if len(projects) == 1:
                 project_obj = projects[0]
             else:
@@ -8466,7 +8464,6 @@ def build_mcp_server() -> FastMCP:
         limit : int
             Max number of messages to return.
         """
-        print(f"DEBUG: acks_stale_view START agent='{agent}' ctx.uri={getattr(ctx, 'uri', 'MISSING')}")
         # Use unified helper for robust parameter extraction
         params = _extract_raw_uri_params(ctx, agent)
         if "?" in agent:
