@@ -459,6 +459,11 @@ def _extract_raw_uri_params(ctx: Context) -> dict[str, list[str]]:
     """
     Workaround for FastMCP stripping query parameters from resource URIs.
     Inspects the raw request context to extract the original URI and parse its query parameters.
+    
+    WARNING: This function relies on FastMCP private internals (session._in_flight)
+    which may change across versions. The function is defensive and returns empty dict
+    if the internal structure changes, but callers should not depend on this working
+    across all FastMCP versions.
     """
     try:
         # FastMCP internal access to find the original URI in the in-flight request
@@ -469,11 +474,14 @@ def _extract_raw_uri_params(ctx: Context) -> dict[str, list[str]]:
         session = ctx.session
 
         # session._in_flight is a dict {request_id: Responder}
+        # NOTE: This is a private FastMCP internal that may change
         if not (hasattr(session, "_in_flight") and req_id in session._in_flight):
+            logger.debug("FastMCP internal structure changed: session._in_flight not available")
             return {}
 
         responder = session._in_flight[req_id]
         if not hasattr(responder, "request"):
+            logger.debug("FastMCP internal structure changed: responder.request not available")
             return {}
 
         raw_req = responder.request
@@ -502,6 +510,10 @@ def _extract_raw_uri_params(ctx: Context) -> dict[str, list[str]]:
             parsed = urlparse(raw_uri_str)
             return parse_qs(parsed.query, keep_blank_values=False)
 
+    except AttributeError as e:
+        # Likely a FastMCP version change - log at debug level
+        logger.debug(f"FastMCP internal structure changed, query params unavailable: {e}")
+        return {}
     except Exception as e:
         logger.warning(f"Failed to manually parse resource URI params: {e}")
 
@@ -622,6 +634,49 @@ def _coerce_param_bool(params: dict[str, list[str]], key: str, *, default: bool)
     if value is None:
         return default
     return _coerce_flag_to_bool(value, default=default)
+
+
+def _merge_query_params_from_context(
+    ctx: Context, 
+    kwargs: dict[str, Any], 
+    param_keys: list[str],
+    bool_params: Optional[list[str]] = None
+) -> None:
+    """
+    Helper function to extract query parameters from Context and merge them into kwargs.
+    
+    This centralizes the query parameter extraction pattern used across 13+ resource handlers,
+    reducing code duplication and making it easier to update when FastMCP internals change.
+    
+    NOTE: This helper is being gradually adopted across all resource handlers. As of this commit,
+    several handlers still use the inline pattern (params = _extract_raw_uri_params(ctx) followed
+    by manual _first_param calls). Both patterns are functionally equivalent and safe.
+    The inline pattern will be migrated to this helper in future updates.
+    
+    Args:
+        ctx: FastMCP Context object
+        kwargs: Dictionary to merge parameters into (modified in-place)
+        param_keys: List of string parameter keys to extract (e.g., ['project', 'agent'])
+        bool_params: Optional list of boolean parameter keys that need _coerce_param_bool
+    
+    The function safely handles missing or empty parameter lists and only updates kwargs
+    if the current value is None (for strings) or uses the current value as default (for bools).
+    """
+    params = _extract_raw_uri_params(ctx)
+    
+    # Handle string parameters
+    for key in param_keys:
+        # Only update if current value is None
+        if kwargs.get(key) is None:
+            value = _first_param(params, key)
+            if value is not None:
+                kwargs[key] = value
+    
+    # Handle boolean parameters
+    if bool_params:
+        for key in bool_params:
+            current = kwargs.get(key, False)
+            kwargs[key] = _coerce_param_bool(params, key, default=current)
 
 
 @dataclass(slots=True)
@@ -7494,11 +7549,11 @@ def build_mcp_server() -> FastMCP:
             except Exception:
                 pass
 
-        # Workaround for FastMCP stripping query parameters
-        params = _extract_raw_uri_params(ctx)
-        project_value = _first_param(params, "project")
-        if project is None and project_value:
-            project = project_value
+        # Workaround for FastMCP stripping query parameters - centralized helper
+        kwargs = {"project": project}
+        _merge_query_params_from_context(ctx, kwargs, ["project"])
+        project = kwargs["project"]
+        
         caps = _capabilities_for(agent, project)
         return {
             "generated_at": _iso(datetime.now(timezone.utc)),
@@ -7525,14 +7580,12 @@ def build_mcp_server() -> FastMCP:
             except Exception:
                 pass
 
-        # Workaround for FastMCP stripping query parameters
-        params = _extract_raw_uri_params(ctx)
-        agent_value = _first_param(params, "agent")
-        if agent is None and agent_value:
-            agent = agent_value
-        project_value = _first_param(params, "project")
-        if project is None and project_value:
-            project = project_value
+        # Workaround for FastMCP stripping query parameters - centralized helper
+        kwargs = {"agent": agent, "project": project}
+        _merge_query_params_from_context(ctx, kwargs, ["agent", "project"])
+        agent = kwargs["agent"]
+        project = kwargs["project"]
+        
         try:
             win = int(window_seconds)
         except Exception:
@@ -7895,9 +7948,10 @@ def build_mcp_server() -> FastMCP:
         if "active_only" in query_params:
             active_only = _coerce_flag_to_bool(query_params["active_only"], default=active_only)
 
-        # Workaround for FastMCP stripping query parameters
-        params = _extract_raw_uri_params(ctx)
-        active_only = _coerce_param_bool(params, "active_only", default=active_only)
+        # Workaround for FastMCP stripping query parameters - centralized helper
+        kwargs = {"active_only": active_only}
+        _merge_query_params_from_context(ctx, kwargs, [], bool_params=["active_only"])
+        active_only = kwargs["active_only"]
 
         project = await _get_project_by_identifier(slug_value)
         await ensure_schema()
@@ -8062,12 +8116,11 @@ def build_mcp_server() -> FastMCP:
             except Exception:
                 pass
 
-        # Workaround for FastMCP stripping query parameters
-        params = _extract_raw_uri_params(ctx)
-        project_value = _first_param(params, "project")
-        if project is None and project_value:
-            project = project_value
-        include_bodies = _coerce_param_bool(params, "include_bodies", default=include_bodies)
+        # Workaround for FastMCP stripping query parameters - centralized helper
+        kwargs = {"project": project, "include_bodies": include_bodies}
+        _merge_query_params_from_context(ctx, kwargs, ["project"], bool_params=["include_bodies"])
+        project = kwargs["project"]
+        include_bodies = kwargs["include_bodies"]
 
         logger.debug(
             f"thread_resource called: thread_id={thread_id!r}, project={project!r}, include_bodies={include_bodies!r}"
