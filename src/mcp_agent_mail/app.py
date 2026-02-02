@@ -7880,8 +7880,8 @@ def build_mcp_server() -> FastMCP:
             "agents": agent_data,
         }
 
-    @mcp.resource("resource://file_reservations/{slug}", mime_type="application/json")
-    async def file_reservations_resource(slug: str, ctx: Context, active_only: bool = False) -> list[dict[str, Any]]:
+    @mcp.resource("resource://file_reservations/{slug}{?active_only}", mime_type="application/json")
+    async def file_reservations_resource(slug: str, active_only: bool = False) -> list[dict[str, Any]]:
         """
         List file_reservations for a project, optionally filtering to active-only.
 
@@ -7923,15 +7923,7 @@ def build_mcp_server() -> FastMCP:
         {"jsonrpc":"2.0","id":"r4b","method":"resources/read","params":{"uri":"resource://claims/backend-abc123?active_only=false"}}
         ```
         """
-        slug_value, query_params = _split_slug_and_query(slug)
-        if "active_only" in query_params:
-            active_only = _coerce_flag_to_bool(query_params["active_only"], default=active_only)
-
-        # Workaround for FastMCP stripping query parameters
-        params = _extract_raw_uri_params(ctx)
-        active_only = _coerce_param_bool(params, "active_only", default=active_only)
-
-        project = await _get_project_by_identifier(slug_value)
+        project = await _get_project_by_identifier(slug)
         await ensure_schema()
         if project.id is None:
             raise ValueError("Project must have an id before listing file_reservations.")
@@ -8039,10 +8031,9 @@ def build_mcp_server() -> FastMCP:
         payload["from"] = sender.name
         return payload
 
-    @mcp.resource("resource://thread/{thread_id*}", mime_type="application/json")
+    @mcp.resource("resource://thread/{thread_id*}{?project,include_bodies}", mime_type="application/json")
     async def thread_resource(
         thread_id: str,
-        ctx: Context,
         project: Optional[str] = None,
         include_bodies: bool = False,
     ) -> dict[str, Any]:
@@ -8080,27 +8071,6 @@ def build_mcp_server() -> FastMCP:
         {"jsonrpc":"2.0","id":"r6b","method":"resources/read","params":{"uri":"resource://thread/1234?project=/abs/path/backend"}}
         ```
         """
-        # Robust query parsing: FastMCP with greedy patterns may include query string in path segment.
-        # Extract query parameters from thread_id if present, as FastMCP may not extract them automatically.
-        if "?" in thread_id:
-            id_part, _, qs = thread_id.partition("?")
-            thread_id = id_part
-            try:
-                parsed = parse_qs(qs, keep_blank_values=False)
-                project_value = _first_param(parsed, "project")
-                if project is None and project_value:
-                    project = project_value
-                include_bodies = _coerce_param_bool(parsed, "include_bodies", default=include_bodies)
-            except Exception:
-                pass
-
-        # Workaround for FastMCP stripping query parameters
-        params = _extract_raw_uri_params(ctx)
-        project_value = _first_param(params, "project")
-        if project is None and project_value:
-            project = project_value
-        include_bodies = _coerce_param_bool(params, "include_bodies", default=include_bodies)
-
         logger.debug(
             f"thread_resource called: thread_id={thread_id!r}, project={project!r}, include_bodies={include_bodies!r}"
         )
@@ -8540,41 +8510,14 @@ def build_mcp_server() -> FastMCP:
             "messages": out,
         }
 
-    @mcp.resource("resource://views/ack-overdue/{agent}", mime_type="application/json")
+    @mcp.resource("resource://views/ack-overdue/{agent}{?project,ttl_minutes,limit}", mime_type="application/json")
     async def ack_overdue_view(
         agent: str,
-        ctx: Context,
         project: Optional[str] = None,
         ttl_minutes: int = 60,
         limit: int = 50,
     ) -> dict[str, Any]:
         """List messages requiring acknowledgement older than ttl_minutes without ack."""
-        # Use unified helper for robust parameter extraction
-        params = _extract_raw_uri_params(ctx, agent)
-        if "?" in agent:
-            agent = agent.partition("?")[0]
-
-        proj_val = _first_param(params, "project")
-        if project is None and proj_val:
-            project = proj_val
-
-        # Support both ttl_minutes (standard) and ttl_seconds (test parity)
-        ttl_min_val = _first_param(params, "ttl_minutes")
-        if ttl_min_val:
-            with suppress(ValueError):
-                ttl_minutes = int(ttl_min_val)
-
-        ttl_sec_val = _first_param(params, "ttl_seconds")
-        if ttl_sec_val:
-            with suppress(ValueError):
-                # Parity: convert seconds up to minutes for overdue view
-                ttl_minutes = int(int(ttl_sec_val) / 60)
-
-        limit_val = _first_param(params, "limit")
-        if limit_val:
-            with suppress(ValueError):
-                limit = int(limit_val)
-
         if project is None:
             async with get_session() as s_auto:
                 rows = await s_auto.execute(
