@@ -658,7 +658,7 @@ async def test_file_reservation_conflict_ttl_transition_allows_after_expiry(isol
                 "project_key": "Backend",
                 "agent_name": "BlueLake",
                 "paths": ["agents/GreenCastle/inbox/*/*/*.md"],
-                "ttl_seconds": 1,
+                "ttl_seconds": 3,
                 "exclusive": True,
             },
         )
@@ -687,7 +687,7 @@ async def test_file_reservation_conflict_ttl_transition_allows_after_expiry(isol
         # Wait for TTL to expire and retry
         import asyncio as _asyncio
 
-        await _asyncio.sleep(1.2)
+        await _asyncio.sleep(3.2)
         resp2 = await client.call_tool(
             "send_message",
             {

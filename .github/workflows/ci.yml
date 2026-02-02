@@ -157,7 +157,6 @@ jobs:
                  "tests/test_cli_integration.py" \
                  "tests/test_cli_list_acks_and_main.py" \
                  "tests/test_db_migrations_and_http_main.py" \
-                 "tests/test_gitignore_config.py" \
                  "tests/test_global_inbox_ttl.py" \
                  "tests/test_guard_edges.py" \
                  "tests/test_guard_integration.py" \

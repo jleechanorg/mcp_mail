@@ -6,8 +6,6 @@ Configuration sources (in order of precedence):
 3. .env file in current directory (for development)
 """
 
-from __future__ import annotations
-
 import json
 import os
 from dataclasses import dataclass

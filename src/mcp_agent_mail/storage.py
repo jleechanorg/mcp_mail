@@ -5,8 +5,6 @@ This module now only provides stub functions for backwards compatibility.
 All message storage is handled via SQLite database.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import tempfile
