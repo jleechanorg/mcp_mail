@@ -167,11 +167,15 @@ def build_cli_command(
     # Build command using template from profile
     command_template = profile.get("command_template", "{binary} -p {prompt_file}")
 
+    # Get model from profile or use sensible default (templates may include {model})
+    model = profile.get("model") or "sonnet"
+
     # Format the command template
     command_str = command_template.format(
         binary=shlex.quote(binary_path),
         prompt_file=shlex.quote(str(prompt_file)),
         continue_flag="",
+        model=model,
     )
 
     # Parse into list (shell=False for security)
