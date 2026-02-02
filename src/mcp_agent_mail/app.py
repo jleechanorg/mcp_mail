@@ -17,7 +17,7 @@ from difflib import SequenceMatcher
 from functools import wraps
 from pathlib import Path
 from typing import Any, Optional, cast
-from urllib.parse import parse_qs, parse_qsl
+from urllib.parse import parse_qs, parse_qsl, urlparse
 
 from fastmcp import Context, FastMCP
 from fastmcp.server.dependencies import get_http_request
@@ -459,22 +459,66 @@ def _capabilities_for(agent: Optional[str], project: Optional[str]) -> list[str]
 def _extract_raw_uri_params(ctx: Context) -> dict[str, list[str]]:
     """
     Workaround for FastMCP stripping query parameters from resource URIs.
-
-    Note: ctx is retained to keep call sites uniform with other resource helpers,
-    even though the current implementation uses the public FastMCP request accessor.
+    
+    Tries HTTP request extraction first (for HTTP transport), then falls back
+    to Context inspection (for MCP protocol transport used in tests).
     """
-    _ = ctx
+    # Try HTTP request first (works for HTTP transport)
     try:
         request = get_http_request()
-    except Exception as exc:
-        logger.debug(f"Failed to access HTTP request for URI params: {exc}")
-        return {}
-
-    try:
         return parse_qs(request.url.query, keep_blank_values=False)
+    except Exception:
+        pass
+    
+    # Fall back to Context inspection (works for MCP protocol transport)
+    try:
+        from urllib.parse import urlparse
+        
+        # FastMCP internal access to find the original URI in the in-flight request
+        if not (ctx and hasattr(ctx, "request_context") and hasattr(ctx, "session")):
+            return {}
+
+        req_id = ctx.request_context.request_id
+        session = ctx.session
+
+        # session._in_flight is a dict {request_id: Responder}
+        if not (hasattr(session, "_in_flight") and req_id in session._in_flight):
+            return {}
+
+        responder = session._in_flight[req_id]
+        if not hasattr(responder, "request"):
+            return {}
+
+        raw_req = responder.request
+        actual_req = raw_req
+        if hasattr(raw_req, "root"):
+            actual_req = raw_req.root
+
+        raw_uri_str = None
+
+        # actual_req.params is typically a model or dict containing 'uri'
+        if hasattr(actual_req, "params") and actual_req.params:
+            params_obj = actual_req.params
+            if isinstance(params_obj, dict):
+                raw_uri_str = str(params_obj.get("uri", ""))
+            elif hasattr(params_obj, "uri"):
+                raw_uri_str = str(params_obj.uri)
+            elif hasattr(params_obj, "model_dump"):
+                try:
+                    dump = params_obj.model_dump()
+                    if isinstance(dump, dict) and "uri" in dump:
+                        raw_uri_str = str(dump["uri"])
+                except Exception:
+                    pass
+
+        if raw_uri_str:
+            parsed = urlparse(raw_uri_str)
+            return parse_qs(parsed.query, keep_blank_values=False)
+
     except Exception as exc:
-        logger.debug(f"Failed to parse URI params from request: {exc}")
-        return {}
+        logger.debug(f"Failed to extract URI params from Context: {exc}")
+
+    return {}
 
 
 def _lifespan_factory(settings: Settings):
