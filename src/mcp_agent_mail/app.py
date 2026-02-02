@@ -501,39 +501,39 @@ def _extract_raw_uri_params(ctx: Context, agent_segment: Optional[str] = None) -
         if not potential_uri:
             for attr in ["_request", "_session", "session", "request_context"]:
                 if hasattr(ctx, attr):
-                     obj = getattr(ctx, attr)
-                     if hasattr(obj, "uri"):
-                         potential_uri = str(obj.uri)
-                         break
-                     # Try to find a request by ID if possible
-                     if attr == "request_context":
-                         req = getattr(obj, "request", None)
-                         if req and hasattr(req, "uri"):
-                             potential_uri = str(req.uri)
-                             break
-                     # Look deep into session internals if it's a ServerSession
-                     if "Session" in type(obj).__name__:
-                         # Any member matching current request_id?
-                         rid = getattr(ctx, "request_id", None)
-                         for subattr in dir(obj):
-                             if not subattr.startswith("__"):
-                                 try:
-                                     val = getattr(obj, subattr)
-                                     if isinstance(val, dict) and rid in val:
-                                         req_obj = val[rid]
-                                         if hasattr(req_obj, "uri"):
-                                             potential_uri = str(req_obj.uri)
-                                             break
-                                 except Exception:
-                                     pass
-                     if potential_uri:
-                         break
+                    obj = getattr(ctx, attr)
+                    if hasattr(obj, "uri"):
+                        potential_uri = str(obj.uri)
+                        break
+                    # Try to find a request by ID if possible
+                    if attr == "request_context":
+                        req = getattr(obj, "request", None)
+                        if req and hasattr(req, "uri"):
+                            potential_uri = str(req.uri)
+                            break
+                    # Look deep into session internals if it's a ServerSession
+                    if "Session" in type(obj).__name__:
+                        # Any member matching current request_id?
+                        rid = getattr(ctx, "request_id", None)
+                        for subattr in dir(obj):
+                            if not subattr.startswith("__"):
+                                try:
+                                    val = getattr(obj, subattr)
+                                    if isinstance(val, dict) and rid in val:
+                                        req_obj = val[rid]
+                                        if hasattr(req_obj, "uri"):
+                                            potential_uri = str(req_obj.uri)
+                                            break
+                                except Exception:
+                                    pass
+                    if potential_uri:
+                        break
 
         if potential_uri and "?" in str(potential_uri):
-             _, _, qs = str(potential_uri).partition("?")
-             for k, v in parse_qs(qs, keep_blank_values=False).items():
-                 if k not in params:
-                     params[k] = v
+            _, _, qs = str(potential_uri).partition("?")
+            for k, v in parse_qs(qs, keep_blank_values=False).items():
+                if k not in params:
+                    params[k] = v
     except Exception:
         pass
 

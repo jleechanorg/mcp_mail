@@ -32,6 +32,7 @@ async def test_ack_overdue_and_stale_detail_fields(isolated_env):
         stale = await client.read_resource(stale_uri)
         assert stale and stale[0].text
         import json
+
         stale_data = json.loads(stale[0].text)
         assert "project" in stale_data and "agent" in stale_data
         assert stale_data["agent"] == "RedRiver"
