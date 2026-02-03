@@ -572,7 +572,6 @@ def _extract_raw_uri_params(ctx: Context, agent_segment: Optional[str] = None) -
         logger.debug("FastMCP internal structure changed, query params unavailable: %s", e)
     except Exception as e:
         logger.warning("Failed to manually parse resource URI params: %s", e)
-
     return params
 
 
