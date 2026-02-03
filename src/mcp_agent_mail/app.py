@@ -732,6 +732,8 @@ def _merge_query_params_from_context(
         for key in bool_params:
             current = kwargs.get(key, False)
             kwargs[key] = _coerce_param_bool(params, key, default=current)
+
+
 @dataclass(slots=True)
 class FileReservationStatus:
     reservation: FileReservation
