@@ -20,7 +20,8 @@ from typing import Any, Optional, cast
 from urllib.parse import parse_qs, parse_qsl, urlparse
 
 from fastmcp import Context, FastMCP
-from fastmcp.tools.tool import ToolResult  # type: ignore
+from fastmcp.server.dependencies import get_http_request
+from fastmcp.tools.tool import ToolResult
 from git import Repo
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
 from sqlalchemy import Column, Integer, MetaData, Table, asc, bindparam, delete, desc, func, or_, select, text, update
@@ -455,69 +456,124 @@ def _capabilities_for(agent: Optional[str], project: Optional[str]) -> list[str]
     return sorted(caps)
 
 
-def _extract_raw_uri_params(ctx: Context) -> dict[str, list[str]]:
+def _extract_raw_uri_params(ctx: Context, agent_segment: Optional[str] = None) -> dict[str, list[str]]:
     """
     Workaround for FastMCP stripping query parameters from resource URIs.
-    Inspects the raw request context to extract the original URI and parse its query parameters.
-    
-    WARNING: This function relies on FastMCP private internals (session._in_flight)
-    which may change across versions. The function is defensive and returns empty dict
-    if the internal structure changes, but callers should not depend on this working
-    across all FastMCP versions.
+
+    Checks:
+    1. HTTP request query if available (production).
+    2. Embedded parameters in the 'agent' path segment (fallback for tests).
+    3. Various Context/SDK-specific locations.
+    4. FastMCP private internals (best-effort fallback).
     """
+    params: dict[str, list[str]] = {}
+
+    # 1. Try path-embedded params if agent segment provided
+    if agent_segment and "?" in agent_segment:
+        _, _, qs = agent_segment.partition("?")
+        params.update(parse_qs(qs, keep_blank_values=False))
+
+    # 2. Try standard HTTP request query
     try:
-        # FastMCP internal access to find the original URI in the in-flight request
-        if not (ctx and hasattr(ctx, "request_context") and hasattr(ctx, "session")):
-            return {}
+        request = get_http_request()
+        if request and request.url.query:
+            for k, v in parse_qs(request.url.query, keep_blank_values=False).items():
+                if k not in params:
+                    params[k] = v
+    except Exception:
+        pass
 
-        req_id = ctx.request_context.request_id
-        session = ctx.session
+    # 3. Fallback for unit tests using Client(server)
+    try:
+        potential_uri = None
 
-        # session._in_flight is a dict {request_id: Responder}
-        # NOTE: This is a private FastMCP internal that may change
-        if not (hasattr(session, "_in_flight") and req_id in session._in_flight):
-            logger.debug("FastMCP internal structure changed: session._in_flight not available")
-            return {}
+        # Public attributes
+        if hasattr(ctx, "uri"):
+            potential_uri = str(ctx.uri)
 
-        responder = session._in_flight[req_id]
-        if not hasattr(responder, "request"):
-            logger.debug("FastMCP internal structure changed: responder.request not available")
-            return {}
+        # Nested request properties
+        if not potential_uri and hasattr(ctx, "request"):
+            req = ctx.request
+            if hasattr(req, "uri"):
+                potential_uri = str(req.uri)
+            elif hasattr(req, "params") and isinstance(req.params, dict):
+                potential_uri = req.params.get("uri")
 
-        raw_req = responder.request
-        actual_req = raw_req
-        if hasattr(raw_req, "root"):
-            actual_req = raw_req.root
+        if not potential_uri:
+            for attr in ["_request", "_session", "session", "request_context"]:
+                if hasattr(ctx, attr):
+                    obj = getattr(ctx, attr)
+                    if hasattr(obj, "uri"):
+                        potential_uri = str(obj.uri)
+                        break
+                    # Try to find a request by ID if possible
+                    if attr == "request_context":
+                        req = getattr(obj, "request", None)
+                        if req and hasattr(req, "uri"):
+                            potential_uri = str(req.uri)
+                            break
+                    # Look deep into session internals if it's a ServerSession
+                    if "Session" in type(obj).__name__:
+                        # Any member matching current request_id?
+                        rid = getattr(ctx, "request_id", None)
+                        for subattr in dir(obj):
+                            if not subattr.startswith("__"):
+                                try:
+                                    val = getattr(obj, subattr)
+                                    if isinstance(val, dict) and rid in val:
+                                        req_obj = val[rid]
+                                        if hasattr(req_obj, "uri"):
+                                            potential_uri = str(req_obj.uri)
+                                            break
+                                except Exception:
+                                    pass
+                    if potential_uri:
+                        break
 
-        raw_uri_str = None
+        if potential_uri and "?" in str(potential_uri):
+            _, _, qs = str(potential_uri).partition("?")
+            for k, v in parse_qs(qs, keep_blank_values=False).items():
+                if k not in params:
+                    params[k] = v
+    except Exception:
+        pass
 
-        # actual_req.params is typically a model or dict containing 'uri'
-        if hasattr(actual_req, "params") and actual_req.params:
-            params_obj = actual_req.params
-            if isinstance(params_obj, dict):
-                raw_uri_str = str(params_obj.get("uri", ""))
-            elif hasattr(params_obj, "uri"):
-                raw_uri_str = str(params_obj.uri)
-            elif hasattr(params_obj, "model_dump"):
-                try:
-                    dump = params_obj.model_dump()
-                    if isinstance(dump, dict) and "uri" in dump:
-                        raw_uri_str = str(dump["uri"])
-                except Exception:
-                    pass
+    # 4. Best-effort parsing via FastMCP private internals
+    try:
+        if ctx and hasattr(ctx, "request_context") and hasattr(ctx, "session"):
+            req_id = ctx.request_context.request_id
+            session = ctx.session
+            if hasattr(session, "_in_flight") and req_id in session._in_flight:
+                responder = session._in_flight[req_id]
+                if hasattr(responder, "request"):
+                    raw_req = responder.request
+                    actual_req = raw_req.root if hasattr(raw_req, "root") else raw_req
+                    raw_uri_str = None
+                    if hasattr(actual_req, "params") and actual_req.params:
+                        params_obj = actual_req.params
+                        if isinstance(params_obj, dict):
+                            raw_uri_str = str(params_obj.get("uri", ""))
+                        elif hasattr(params_obj, "uri"):
+                            raw_uri_str = str(params_obj.uri)
+                        elif hasattr(params_obj, "model_dump"):
+                            try:
+                                dump = params_obj.model_dump()
+                                if isinstance(dump, dict) and "uri" in dump:
+                                    raw_uri_str = str(dump["uri"])
+                            except Exception:
+                                pass
 
-        if raw_uri_str:
-            parsed = urlparse(raw_uri_str)
-            return parse_qs(parsed.query, keep_blank_values=False)
-
+                    if raw_uri_str:
+                        parsed = urlparse(raw_uri_str)
+                        for k, v in parse_qs(parsed.query, keep_blank_values=False).items():
+                            if k not in params:
+                                params[k] = v
     except AttributeError as e:
-        # Likely a FastMCP version change - log at debug level
-        logger.debug(f"FastMCP internal structure changed, query params unavailable: {e}")
-        return {}
+        logger.debug("FastMCP internal structure changed, query params unavailable: %s", e)
     except Exception as e:
-        logger.warning(f"Failed to manually parse resource URI params: {e}")
+        logger.warning("Failed to manually parse resource URI params: %s", e)
 
-    return {}
+    return params
 
 
 def _lifespan_factory(settings: Settings):
@@ -637,33 +693,33 @@ def _coerce_param_bool(params: dict[str, list[str]], key: str, *, default: bool)
 
 
 def _merge_query_params_from_context(
-    ctx: Context, 
-    kwargs: dict[str, Any], 
+    ctx: Context,
+    kwargs: dict[str, Any],
     param_keys: list[str],
-    bool_params: Optional[list[str]] = None
+    bool_params: Optional[list[str]] = None,
 ) -> None:
     """
     Helper function to extract query parameters from Context and merge them into kwargs.
-    
+
     This centralizes the query parameter extraction pattern used across 13+ resource handlers,
     reducing code duplication and making it easier to update when FastMCP internals change.
-    
+
     NOTE: This helper is being gradually adopted across all resource handlers. As of this commit,
     several handlers still use the inline pattern (params = _extract_raw_uri_params(ctx) followed
     by manual _first_param calls). Both patterns are functionally equivalent and safe.
     The inline pattern will be migrated to this helper in future updates.
-    
+
     Args:
         ctx: FastMCP Context object
         kwargs: Dictionary to merge parameters into (modified in-place)
         param_keys: List of string parameter keys to extract (e.g., ['project', 'agent'])
         bool_params: Optional list of boolean parameter keys that need _coerce_param_bool
-    
+
     The function safely handles missing or empty parameter lists and only updates kwargs
     if the current value is None (for strings) or uses the current value as default (for bools).
     """
     params = _extract_raw_uri_params(ctx)
-    
+
     # Handle string parameters
     for key in param_keys:
         # Only update if current value is None
@@ -671,14 +727,12 @@ def _merge_query_params_from_context(
             value = _first_param(params, key)
             if value is not None:
                 kwargs[key] = value
-    
+
     # Handle boolean parameters
     if bool_params:
         for key in bool_params:
             current = kwargs.get(key, False)
             kwargs[key] = _coerce_param_bool(params, key, default=current)
-
-
 @dataclass(slots=True)
 class FileReservationStatus:
     reservation: FileReservation
@@ -7553,7 +7607,6 @@ def build_mcp_server() -> FastMCP:
         kwargs = {"project": project}
         _merge_query_params_from_context(ctx, kwargs, ["project"])
         project = kwargs["project"]
-        
         caps = _capabilities_for(agent, project)
         return {
             "generated_at": _iso(datetime.now(timezone.utc)),
@@ -7585,7 +7638,6 @@ def build_mcp_server() -> FastMCP:
         _merge_query_params_from_context(ctx, kwargs, ["agent", "project"])
         agent = kwargs["agent"]
         project = kwargs["project"]
-        
         try:
             win = int(window_seconds)
         except Exception:
@@ -7901,7 +7953,7 @@ def build_mcp_server() -> FastMCP:
             "agents": agent_data,
         }
 
-    @mcp.resource("resource://file_reservations/{slug}", mime_type="application/json")
+    @mcp.resource("resource://file_reservations/{slug}{?active_only}", mime_type="application/json")
     async def file_reservations_resource(slug: str, ctx: Context, active_only: bool = False) -> list[dict[str, Any]]:
         """
         List file_reservations for a project, optionally filtering to active-only.
@@ -8061,7 +8113,7 @@ def build_mcp_server() -> FastMCP:
         payload["from"] = sender.name
         return payload
 
-    @mcp.resource("resource://thread/{thread_id*}", mime_type="application/json")
+    @mcp.resource("resource://thread/{thread_id*}{?project,include_bodies}", mime_type="application/json")
     async def thread_resource(
         thread_id: str,
         ctx: Context,
@@ -8121,7 +8173,6 @@ def build_mcp_server() -> FastMCP:
         _merge_query_params_from_context(ctx, kwargs, ["project"], bool_params=["include_bodies"])
         project = kwargs["project"]
         include_bodies = kwargs["include_bodies"]
-
         logger.debug(
             f"thread_resource called: thread_id={thread_id!r}, project={project!r}, include_bodies={include_bodies!r}"
         )
@@ -8485,39 +8536,24 @@ def build_mcp_server() -> FastMCP:
         limit : int
             Max number of messages to return.
         """
-        # Parse query embedded in agent path if present
+        # Use unified helper for robust parameter extraction
+        params = _extract_raw_uri_params(ctx, agent)
         if "?" in agent:
-            name_part, _, qs = agent.partition("?")
-            agent = name_part
-            try:
-                parsed = parse_qs(qs, keep_blank_values=False)
-                project_value = _first_param(parsed, "project")
-                if project is None and project_value:
-                    project = project_value
-                ttl_value = _first_param(parsed, "ttl_seconds")
-                if ttl_value:
-                    with suppress(Exception):
-                        ttl_seconds = int(ttl_value)
-                limit_value = _first_param(parsed, "limit")
-                if limit_value:
-                    with suppress(Exception):
-                        limit = int(limit_value)
-            except Exception:
-                pass
+            agent = agent.partition("?")[0]
 
-        # Workaround for FastMCP stripping query parameters from resource URIs
-        params = _extract_raw_uri_params(ctx)
-        project_value = _first_param(params, "project")
-        if project is None and project_value:
-            project = project_value
-        ttl_value = _first_param(params, "ttl_seconds")
-        if ttl_value:
+        proj_val = _first_param(params, "project")
+        if project is None and proj_val:
+            project = proj_val
+
+        ttl_val = _first_param(params, "ttl_seconds")
+        if ttl_val:
             with suppress(ValueError):
-                ttl_seconds = int(ttl_value)
-        limit_value = _first_param(params, "limit")
-        if limit_value:
+                ttl_seconds = int(ttl_val)
+
+        limit_val = _first_param(params, "limit")
+        if limit_val:
             with suppress(ValueError):
-                limit = int(limit_value)
+                limit = int(limit_val)
 
         if project is None:
             async with get_session() as s_auto:
@@ -8576,7 +8612,7 @@ def build_mcp_server() -> FastMCP:
             "messages": out,
         }
 
-    @mcp.resource("resource://views/ack-overdue/{agent}", mime_type="application/json")
+    @mcp.resource("resource://views/ack-overdue/{agent}{?project,ttl_minutes,limit}", mime_type="application/json")
     async def ack_overdue_view(
         agent: str,
         ctx: Context,
@@ -8586,39 +8622,23 @@ def build_mcp_server() -> FastMCP:
     ) -> dict[str, Any]:
         """List messages requiring acknowledgement older than ttl_minutes without ack."""
         # Parse query embedded in agent path if present
+        params = _extract_raw_uri_params(ctx, agent)
         if "?" in agent:
-            name_part, _, qs = agent.partition("?")
-            agent = name_part
-            try:
-                parsed = parse_qs(qs, keep_blank_values=False)
-                project_value = _first_param(parsed, "project")
-                if project is None and project_value:
-                    project = project_value
-                ttl_value = _first_param(parsed, "ttl_minutes")
-                if ttl_value:
-                    with suppress(Exception):
-                        ttl_minutes = int(ttl_value)
-                limit_value = _first_param(parsed, "limit")
-                if limit_value:
-                    with suppress(Exception):
-                        limit = int(limit_value)
-            except Exception:
-                pass
+            agent = agent.partition("?")[0]
 
-        # Workaround for FastMCP stripping query parameters
-        params = _extract_raw_uri_params(ctx)
         project_value = _first_param(params, "project")
         if project is None and project_value:
             project = project_value
+
         ttl_value = _first_param(params, "ttl_minutes")
         if ttl_value:
             with suppress(ValueError):
                 ttl_minutes = int(ttl_value)
+
         limit_value = _first_param(params, "limit")
         if limit_value:
             with suppress(ValueError):
                 limit = int(limit_value)
-
         if project is None:
             async with get_session() as s_auto:
                 rows = await s_auto.execute(
@@ -8831,8 +8851,20 @@ def build_mcp_server() -> FastMCP:
         if since_value:
             since_ts = since_value
         if project is None:
-            raise ValueError("project parameter is required for outbox resource")
-        project_obj = await _get_project_by_identifier(project)
+            async with get_session() as s_auto:
+                rows = await s_auto.execute(
+                    select(Project)
+                    .join(Agent, Agent.project_id == Project.id)
+                    .where(func.lower(Agent.name) == agent.lower(), cast(Any, Agent.is_active).is_(True))
+                    .limit(2)
+                )
+                projects = [row[0] for row in rows.all()]
+            if len(projects) == 1:
+                project_obj = projects[0]
+            else:
+                raise ValueError("project parameter is required for outbox resource")
+        else:
+            project_obj = await _get_project_by_identifier(project)
         agent_obj = await _get_agent(project_obj, agent)
         items = await _list_outbox(project_obj, agent_obj, limit, include_bodies, since_ts)
         out: list[dict[str, Any]] = []
