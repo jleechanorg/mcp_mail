@@ -288,9 +288,13 @@ class BaseCLITest:
                 if cleaned:
                     tokens.add(cleaned.lower())
 
+        # Handle both underscore and hyphen variants:
+        # - mcp__mcp_agent_mail__send_message (underscore format)
+        # - mcp__mcp-agent-mail__send_message (hyphen format)
+        # - mcp__mcpagentmail__send_message (no separator format)
         derived = set(
             re.findall(
-                r"mcp__mcp(?:_)?agent(?:_)?mail__([a-zA-Z_][a-zA-Z0-9_]*)",
+                r"mcp__mcp[-_]?agent[-_]?mail__([a-zA-Z_][a-zA-Z0-9_]*)",
                 output.lower(),
             )
         )
