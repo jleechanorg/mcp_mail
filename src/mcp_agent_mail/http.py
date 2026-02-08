@@ -1344,7 +1344,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
                         if not recipient_agents:
                             logger.warning(
-                                "slack_no_recipients", project=(project.slug if project else app_module.DEFAULT_PROJECT_KEY)
+                                "slack_no_recipients",
+                                project=(project.slug if project else app_module.DEFAULT_PROJECT_KEY),
                             )
                             return JSONResponse({"ok": True, "message": "No active recipients"})
 

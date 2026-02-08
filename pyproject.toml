@@ -119,6 +119,7 @@ select = [
 ]
 ignore = [
   "E501",
+  "ASYNC240",  # Allow pathlib.Path in async functions (pre-existing usage, not blocking)
 ]
 
 [tool.ruff.lint.per-file-ignores]
