@@ -621,7 +621,9 @@ def serve_http(
         console.print("[bold red]❌ Error: Python 3.14+ is not supported[/]")
         console.print("[yellow]MCP Mail requires Python 3.11, 3.12, or 3.13[/]")
         console.print("[yellow]Reason: Upstream dependency (beartype) incompatibility with Python 3.14[/]")
-        console.print(f"[yellow]Current version: Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}[/]")
+        console.print(
+            f"[yellow]Current version: Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}[/]"
+        )
         console.print("\n[cyan]Please use one of these Python versions:[/]")
         console.print("  • python3.13")
         console.print("  • python3.12")
