@@ -29,11 +29,11 @@ from rich.table import Table
 from sqlalchemy import asc, bindparam, desc, func, select, text
 from sqlalchemy.engine import make_url
 
-from .app import build_mcp_server
+# NOTE: .app and .http imports are deferred to serve_http() to allow Python version
+# check to run before importing fastmcp/beartype dependencies (which fail on Python 3.14+)
 from .config import get_settings
 from .db import ensure_schema, get_session
 from .guard import install_guard as install_guard_script, uninstall_guard as uninstall_guard_script
-from .http import build_http_app
 from .models import Agent, FileReservation, Message, MessageRecipient, Product, ProductProjectLink, Project
 from .share import (
     DEFAULT_CHUNK_SIZE,
@@ -629,6 +629,11 @@ def serve_http(
         console.print("  • python3.12")
         console.print("  • python3.11")
         raise typer.Exit(code=1)
+
+    # Import fastmcp/beartype-dependent modules AFTER version check
+    # to prevent import-time crashes on Python 3.14+
+    from .app import build_mcp_server
+    from .http import build_http_app
 
     settings = get_settings()
     resolved_host = host or settings.http.host

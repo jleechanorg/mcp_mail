@@ -90,3 +90,29 @@ def test_cli_list_projects(isolated_env):
     assert result.exit_code == 0
     assert "demo" in result.stdout
     assert "BlueLake" not in result.stdout
+
+
+def test_cli_serve_http_rejects_python_314(monkeypatch):
+    """Test that serve-http exits with error on Python 3.14+."""
+    runner = CliRunner()
+
+    # Mock sys.version_info to simulate Python 3.14
+    original_version_info = sys.version_info
+
+    class FakeVersionInfo:
+        major = 3
+        minor = 14
+        micro = 0
+
+        def __ge__(self, other):
+            if isinstance(other, tuple):
+                return (self.major, self.minor) >= other
+            return NotImplemented
+
+    monkeypatch.setattr("mcp_agent_mail.cli.sys.version_info", FakeVersionInfo())
+
+    result = runner.invoke(app, ["serve-http"])
+    assert result.exit_code == 1
+    assert "Python 3.14+ is not supported" in result.stdout
+    assert "beartype" in result.stdout
+    assert "python3.13" in result.stdout or "python3.12" in result.stdout or "python3.11" in result.stdout
