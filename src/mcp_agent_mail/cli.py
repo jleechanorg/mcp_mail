@@ -33,6 +33,7 @@ from sqlalchemy.engine import make_url
 from .config import get_settings
 from .db import ensure_schema, get_session
 from .guard import install_guard as install_guard_script, uninstall_guard as uninstall_guard_script
+
 # Note: .http import deferred to serve_http() to allow Python version check first
 from .models import Agent, FileReservation, Message, MessageRecipient, Product, ProductProjectLink, Project
 from .share import (

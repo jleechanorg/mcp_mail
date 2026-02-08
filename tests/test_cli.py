@@ -54,30 +54,30 @@ def test_cli_serve_http_uses_settings(isolated_env, monkeypatch):
 def test_cli_serve_http_rejects_python_314(monkeypatch):
     """Test that serve-http exits with error on Python 3.14+."""
     runner = CliRunner()
-    
+
     # Mock sys.version_info to simulate Python 3.14
     import sys
     original_version = sys.version_info
-    
+
     try:
         # Create a mock version_info that looks like Python 3.14
         class MockVersionInfo:
             major = 3
             minor = 14
             micro = 0
-            
+
             def __ge__(self, other):
                 if isinstance(other, tuple):
                     return (self.major, self.minor) >= other[:2]
                 return NotImplemented
-        
+
         monkeypatch.setattr("mcp_agent_mail.cli.sys.version_info", MockVersionInfo())
-        
+
         result = runner.invoke(app, ["serve-http"])
-        
+
         # Should exit with error code 1
         assert result.exit_code == 1
-        
+
         # Should print the compatibility message
         assert "Python 3.14+ is not supported" in result.output
         assert "beartype" in result.output
