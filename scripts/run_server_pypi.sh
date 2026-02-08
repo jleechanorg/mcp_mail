@@ -15,13 +15,14 @@ echo "🔄 Installing mcp_mail from PyPI..."
 TEMP_ENV=$(mktemp -d -t mcp_mail-XXXXXX)
 trap 'rm -rf "$TEMP_ENV"' EXIT
 
-# Find Python 3.11+ (prefer the default python3 if it meets the requirement)
+# Find Python 3.11-3.13 (prefer the default python3 if it meets the requirement)
 PYTHON_BIN=""
 MIN_VERSION=311  # e.g. 3.11 -> 311, 3.12 -> 312
+MAX_VERSION=313  # Python 3.14+ not supported (beartype incompatibility)
 
 if command -v python3 >/dev/null 2>&1; then
   PY_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}{sys.version_info.minor:02d}")')
-  if [[ "$PY_VER" -ge "$MIN_VERSION" ]]; then
+  if [[ "$PY_VER" -ge "$MIN_VERSION" ]] && [[ "$PY_VER" -le "$MAX_VERSION" ]]; then
     PYTHON_BIN=$(command -v python3)
   fi
 fi
@@ -38,7 +39,8 @@ if [[ -z "$PYTHON_BIN" ]]; then
 fi
 
 if [[ -z "$PYTHON_BIN" ]]; then
-  echo "❌ Error: Python 3.11 or higher is required"
+  echo "❌ Error: Python 3.11, 3.12, or 3.13 is required"
+  echo "Python 3.14+ is not supported due to upstream dependency incompatibility"
   exit 1
 fi
 
