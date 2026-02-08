@@ -33,7 +33,7 @@ bash -lc "cd /Users/jleechan/mcp_agent_mail && ./scripts/run_server_local_build.
 This script:
 - Uses the wheel file from `dist/` (built with `uv build`)
 - Installs in an isolated temporary virtual environment
-- Uses Python 3.11-3.13 (avoiding Python 3.14 RC due to Pydantic compatibility issues)
+- Uses Python 3.11-3.13 (Python 3.14+ not supported due to beartype dependency incompatibility with collections.abc.ByteString removal)
 - Runs the server from the locally built package
 
 ## General Notes

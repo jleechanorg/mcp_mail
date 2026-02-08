@@ -8,6 +8,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -615,6 +616,18 @@ def serve_http(
     path: Optional[str] = typer.Option(None, help="HTTP path where the MCP endpoint is exposed."),
 ) -> None:
     """Run the MCP server over the Streamable HTTP transport."""
+    # Check Python version compatibility
+    if sys.version_info >= (3, 14):
+        console.print("[bold red]❌ Error: Python 3.14+ is not supported[/]")
+        console.print("[yellow]MCP Mail requires Python 3.11, 3.12, or 3.13[/]")
+        console.print("[yellow]Reason: Upstream dependency (beartype) incompatibility with Python 3.14[/]")
+        console.print(f"[yellow]Current version: Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}[/]")
+        console.print("\n[cyan]Please use one of these Python versions:[/]")
+        console.print("  • python3.13")
+        console.print("  • python3.12")
+        console.print("  • python3.11")
+        raise typer.Exit(code=1)
+
     settings = get_settings()
     resolved_host = host or settings.http.host
     resolved_port = port or settings.http.port

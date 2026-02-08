@@ -7,7 +7,7 @@ name = "mcp_mail"
 version = "0.1.18"
 description = "Coordinated multi-agent messaging and coordination MCP server."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 license = { text = "MIT" }
 authors = [
   { name = "mcp-agent-mail maintainers" },
