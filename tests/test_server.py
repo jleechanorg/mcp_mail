@@ -1,8 +1,8 @@
 import contextlib
 import json
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
+import anyio
 import pytest
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
@@ -79,11 +79,12 @@ async def test_messaging_flow(isolated_env):
         text_payload = resource_blocks[0].text
         assert "BlueLake" in text_payload
 
-        storage_root = Path(get_settings().storage.root).expanduser().resolve()
+        storage_root = await anyio.Path(get_settings().storage.root).expanduser()
+        storage_root = await storage_root.resolve()
         profile = storage_root / "projects" / "backend" / "agents" / "BlueLake" / "profile.json"
-        assert not profile.exists()
+        assert not await profile.exists()
         messages_dir = storage_root / "projects" / "backend" / "messages"
-        message_files = list(messages_dir.rglob("*.md")) if messages_dir.exists() else []
+        message_files = [path async for path in messages_dir.rglob("*.md")] if await messages_dir.exists() else []
         assert not message_files
 
 
@@ -504,10 +505,11 @@ async def test_search_and_summarize(isolated_env):
 
 @pytest.mark.asyncio
 async def test_attachment_conversion(isolated_env):
-    storage_root = Path(get_settings().storage.root).expanduser().resolve()
+    storage_root = await anyio.Path(get_settings().storage.root).expanduser()
+    storage_root = await storage_root.resolve()
     image_path = storage_root.parent / "temp.png"
     image = Image.new("RGB", (2, 2), color=(255, 0, 0))
-    image.save(image_path)
+    image.save(str(image_path))
 
     server = build_mcp_server()
     async with Client(server) as client:
@@ -528,16 +530,16 @@ async def test_attachment_conversion(isolated_env):
                 "sender_name": "OrangeMountain",
                 "to": ["OrangeMountain"],
                 "subject": "Image",
-                "body_md": "Here is an image ![pic](%s)" % image_path,
+                "body_md": "Here is an image ![pic](%s)" % str(image_path),
                 "attachment_paths": [str(image_path)],
             },
         )
         attachments = (result.data.get("deliveries") or [{}])[0].get("payload", {}).get("attachments")
         assert attachments
         project_root = storage_root / "projects" / "backend"
-        attachment_files = list((project_root / "attachments").rglob("*.webp"))
+        attachment_files = [path async for path in (project_root / "attachments").rglob("*.webp")]
         assert not attachment_files
-    image_path.unlink(missing_ok=True)
+    await image_path.unlink(missing_ok=True)
 
 
 @pytest.mark.asyncio
@@ -586,10 +588,11 @@ async def test_server_level_attachment_policy_override(isolated_env, monkeypatch
     with contextlib.suppress(Exception):
         _config.clear_settings_cache()
 
-    storage_root = Path(get_settings().storage.root).expanduser().resolve()
+    storage_root = await anyio.Path(get_settings().storage.root).expanduser()
+    storage_root = await storage_root.resolve()
     image_path = storage_root.parent / "temp2.png"
     image = Image.new("RGB", (2, 2), color=(0, 255, 0))
-    image.save(image_path)
+    image.save(str(image_path))
 
     server = build_mcp_server()
     async with Client(server) as client:
@@ -611,14 +614,14 @@ async def test_server_level_attachment_policy_override(isolated_env, monkeypatch
                 "sender_name": "WhiteCat",
                 "to": ["WhiteCat"],
                 "subject": "ServerOverride",
-                "body_md": "Here ![pic](%s)" % image_path,
+                "body_md": "Here ![pic](%s)" % str(image_path),
                 "attachment_paths": [str(image_path)],
                 # Do not set convert_images; rely on server default
             },
         )
         attachments = (result.data.get("deliveries") or [{}])[0].get("payload", {}).get("attachments")
         assert attachments and any(att.get("type") in {"file", "inline"} for att in attachments)
-    image_path.unlink(missing_ok=True)
+    await image_path.unlink(missing_ok=True)
 
 
 @pytest.mark.asyncio

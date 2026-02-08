@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Optional, cast
 from urllib.parse import parse_qs, parse_qsl
 
+import anyio
 from fastmcp import Context, FastMCP
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.tools.tool import ToolResult
@@ -1078,16 +1079,13 @@ def _canonical_project_pair(a_id: int, b_id: int) -> tuple[int, int]:
     return (a_id, b_id) if a_id < b_id else (b_id, a_id)
 
 
-async def _read_file_preview(path: Path, *, max_chars: int) -> str:
-    def _read() -> str:
-        try:
-            with path.open("r", encoding="utf-8", errors="ignore") as handle:
-                data = handle.read(max_chars + 1024)
-        except Exception:
-            return ""
-        return (data or "").strip()[:max_chars]
-
-    return await asyncio.to_thread(_read)
+async def _read_file_preview(path: anyio.Path, *, max_chars: int) -> str:
+    try:
+        async with await path.open("r", encoding="utf-8", errors="ignore") as handle:
+            data = await handle.read(max_chars + 1024)
+    except Exception:
+        return ""
+    return (data or "").strip()[:max_chars]
 
 
 async def _build_project_profile(
@@ -1100,19 +1098,20 @@ async def _build_project_profile(
         f"Agents: {', '.join(agent_names) if agent_names else 'None registered'}",
     ]
 
-    base_path = Path(project.human_key)
-    if base_path.exists():
+    base_path = anyio.Path(project.human_key)
+    if await base_path.exists():
         total_chars = 0
-        seen_files: set[Path] = set()
+        seen_files: set[str] = set()
         for rel_name in _PROJECT_PROFILE_FILENAMES:
             candidate = base_path / rel_name
-            if candidate in seen_files or not candidate.exists() or not candidate.is_file():
+            candidate_key = str(candidate)
+            if candidate_key in seen_files or not await candidate.exists() or not await candidate.is_file():
                 continue
             preview = await _read_file_preview(candidate, max_chars=_PROJECT_PROFILE_PER_FILE_CHARS)
             if not preview:
                 continue
             pieces.append(f"===== {rel_name} =====\n{preview}")
-            seen_files.add(candidate)
+            seen_files.add(candidate_key)
             total_chars += len(preview)
             if total_chars >= _PROJECT_PROFILE_MAX_TOTAL_CHARS:
                 break
@@ -5915,7 +5914,9 @@ def build_mcp_server() -> FastMCP:
             except Exception:
                 pass
         project = await _get_project_by_identifier(project_key)
-        repo_path = Path(code_repo_path).expanduser().resolve()
+        resolved_repo_path = await anyio.Path(code_repo_path).expanduser()
+        resolved_repo_path = await resolved_repo_path.resolve()
+        repo_path = Path(resolved_repo_path)
         hook_path = await install_guard_script(settings, project.slug, repo_path)
         await ctx.info(f"Installed pre-commit guard for project '{project.human_key}' at {hook_path}.")
         return {"hook": str(hook_path)}
@@ -5939,7 +5940,9 @@ def build_mcp_server() -> FastMCP:
                 )
             except Exception:
                 pass
-        repo_path = Path(code_repo_path).expanduser().resolve()
+        resolved_repo_path = await anyio.Path(code_repo_path).expanduser()
+        resolved_repo_path = await resolved_repo_path.resolve()
+        repo_path = Path(resolved_repo_path)
         removed = await uninstall_guard_script(repo_path)
         if removed:
             await ctx.info(f"Removed pre-commit guard at {repo_path / '.git/hooks/pre-commit'}.")

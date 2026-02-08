@@ -29,11 +29,9 @@ from rich.table import Table
 from sqlalchemy import asc, bindparam, desc, func, select, text
 from sqlalchemy.engine import make_url
 
-from .app import build_mcp_server
 from .config import get_settings
 from .db import ensure_schema, get_session
 from .guard import install_guard as install_guard_script, uninstall_guard as uninstall_guard_script
-from .http import build_http_app
 from .models import Agent, FileReservation, Message, MessageRecipient, Product, ProductProjectLink, Project
 from .share import (
     DEFAULT_CHUNK_SIZE,
@@ -59,6 +57,17 @@ from .utils import safe_filesystem_component, slugify
 warnings.filterwarnings("ignore", category=UserWarning, module="bleach")
 
 console = Console()
+
+
+def _ensure_supported_python_version() -> None:
+    if sys.version_info >= (3, 14):
+        error_console = Console(stderr=True)
+        error_console.print("[bold red]❌ Error:[/bold red] Python 3.14+ is not supported.")
+        error_console.print("[yellow]MCP Mail requires Python 3.11, 3.12, or 3.13.[/yellow]")
+        error_console.print(
+            "[dim]Reason: the beartype dependency imports collections.abc.ByteString, which was removed in Python 3.14.[/dim]"
+        )
+        raise typer.Exit(code=1)
 
 
 DEFAULT_ENV_PATH = Path(".env")
@@ -616,19 +625,10 @@ def serve_http(
     path: Optional[str] = typer.Option(None, help="HTTP path where the MCP endpoint is exposed."),
 ) -> None:
     """Run the MCP server over the Streamable HTTP transport."""
-    # Check Python version compatibility
-    if sys.version_info >= (3, 14):
-        console.print("[bold red]❌ Error: Python 3.14+ is not supported[/]")
-        console.print("[yellow]MCP Mail requires Python 3.11, 3.12, or 3.13[/]")
-        console.print("[yellow]Reason: Upstream dependency (beartype) incompatibility with Python 3.14[/]")
-        console.print(
-            f"[yellow]Current version: Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}[/]"
-        )
-        console.print("\n[cyan]Please use one of these Python versions:[/]")
-        console.print("  • python3.13")
-        console.print("  • python3.12")
-        console.print("  • python3.11")
-        raise typer.Exit(code=1)
+    _ensure_supported_python_version()
+
+    from .app import build_mcp_server
+    from .http import build_http_app
 
     settings = get_settings()
     resolved_host = host or settings.http.host
