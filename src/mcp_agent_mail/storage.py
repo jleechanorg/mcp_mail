@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Iterable, Sequence
 
+import anyio
+
 from .config import Settings
 
 logger = logging.getLogger(__name__)
@@ -55,7 +57,9 @@ async def ensure_archive(settings: Settings, slug: str, *, project_key: str | No
 
     Returns a dummy ProjectArchive for backwards compatibility.
     """
-    root = Path(settings.storage.root).expanduser().resolve() / "projects" / slug
+    resolved_root = await anyio.Path(settings.storage.root).expanduser()
+    resolved_root = await resolved_root.resolve()
+    root = Path(resolved_root) / "projects" / slug
     return ProjectArchive(
         settings=settings,
         slug=slug,
@@ -68,7 +72,9 @@ async def ensure_archive(settings: Settings, slug: str, *, project_key: str | No
 
 async def ensure_archive_root(settings: Settings, project_key: str | None, slug: str) -> tuple[Path, Any]:
     """Stub function - archive functionality has been removed."""
-    root = Path(settings.storage.root).expanduser().resolve()
+    resolved_root = await anyio.Path(settings.storage.root).expanduser()
+    resolved_root = await resolved_root.resolve()
+    root = Path(resolved_root)
     return root, None
 
 

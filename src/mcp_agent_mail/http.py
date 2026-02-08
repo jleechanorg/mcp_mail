@@ -9,35 +9,25 @@ import importlib
 import json
 import logging
 import re
+import sys
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
+from types import ModuleType
 from typing import Any, cast
 
+import anyio
 import structlog
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
+from rich.console import Console
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError, NoResultFound
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.types import Receive, Scope, Send
 
-from .app import (
-    DEFAULT_PROJECT_KEY,
-    _create_message,
-    _ensure_project,
-    _expire_stale_file_reservations,
-    _get_agent_by_name_optional,
-    _get_default_project,
-    _message_frontmatter,
-    _tool_metrics_snapshot,
-    build_mcp_server,
-    get_project_sibling_data,
-    refresh_project_sibling_suggestions,
-    update_project_sibling_status,
-)
 from .config import Settings, get_settings
 from .db import ensure_schema, get_session
 from .models import Agent
@@ -115,6 +105,29 @@ async def _project_from_thread_id(thread_id: str | None) -> tuple[int, str, str]
 
 
 __all__ = ["build_http_app", "main"]
+
+_APP_MODULE: ModuleType | None = None
+
+
+def _ensure_supported_python_version() -> None:
+    if sys.version_info >= (3, 14):
+        error_console = Console(stderr=True)
+        error_console.print("[bold red]❌ Error:[/bold red] Python 3.14+ is not supported.")
+        error_console.print("[yellow]MCP Mail requires Python 3.11, 3.12, or 3.13.[/yellow]")
+        error_console.print(
+            "[dim]Reason: the beartype dependency imports collections.abc.ByteString, which was removed in Python 3.14.[/dim]"
+        )
+        raise SystemExit(1)
+
+
+def _get_app_module() -> ModuleType:
+    global _APP_MODULE
+    if _APP_MODULE is None:
+        _ensure_supported_python_version()
+        from . import app as app_module
+
+        _APP_MODULE = app_module
+    return _APP_MODULE
 
 
 def _decode_jwt_header_segment(token: str) -> dict[str, object] | None:
@@ -488,10 +501,13 @@ async def readiness_check() -> None:
 
 
 def build_http_app(settings: Settings, server=None) -> FastAPI:
+    _ensure_supported_python_version()
+    app_module = _get_app_module()
+
     # Configure logging once
     _configure_logging(settings)
     if server is None:
-        server = build_mcp_server()
+        server = app_module.build_mcp_server()
 
     # Build MCP HTTP sub-app with stateless mode for ASGI test transports
     mcp_http_app = server.http_app(path="/", stateless_http=True, json_response=True)
@@ -520,7 +536,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     released_total = 0
                     for pid in pids:
                         with contextlib.suppress(Exception):
-                            stale = await _expire_stale_file_reservations(pid)
+                            stale = await app_module._expire_stale_file_reservations(pid)
                             released_total += len(stale)
                     try:
                         rich_console = importlib.import_module("rich.console")
@@ -705,7 +721,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             log = structlog.get_logger("tool.metrics")
             while True:
                 try:
-                    snapshot = _tool_metrics_snapshot()
+                    snapshot = app_module._tool_metrics_snapshot()
                     if snapshot:
                         log.info("tool_metrics_snapshot", tools=snapshot)
                 except Exception:
@@ -714,13 +730,13 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
         async def _worker_retention_quota() -> None:
             import datetime as _dt
-            from pathlib import Path as _Path
 
             while True:
                 from contextlib import suppress as _suppress
 
                 with _suppress(Exception):
-                    storage_root = _Path(settings.storage.root).expanduser().resolve()
+                    storage_root = await anyio.Path(settings.storage.root).expanduser()
+                    storage_root = await storage_root.resolve()
                     cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(
                         days=int(settings.retention_max_age_days)
                     )
@@ -732,39 +748,46 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     import fnmatch as _fnmatch
 
                     ignore_patterns = list(getattr(settings, "retention_ignore_project_patterns", []) or [])
-                    for proj_dir in storage_root.iterdir() if storage_root.exists() else []:
-                        if not proj_dir.is_dir():
-                            continue
-                        proj_name = proj_dir.name
-                        # Skip test/demo projects in real server runs
-                        if any(_fnmatch.fnmatch(proj_name, pat) for pat in ignore_patterns):
-                            continue
-                        msg_root = proj_dir / "messages"
-                        if msg_root.exists():
-                            for ydir in msg_root.iterdir():
-                                for mdir in ydir.iterdir() if ydir.is_dir() else []:
-                                    for f in mdir.iterdir() if mdir.is_dir() else []:
-                                        if f.suffix.lower() == ".md":
-                                            with _suppress(Exception):
-                                                ts = _dt.datetime.fromtimestamp(f.stat().st_mtime, _dt.timezone.utc)
-                                                if ts < cutoff:
-                                                    old_messages += 1
-                        # Count per-agent inbox files (agents/*/inbox/YYYY/MM/*.md)
-                        inbox_root = proj_dir / "agents"
-                        if inbox_root.exists():
-                            count_inbox = 0
-                            for f in inbox_root.rglob("inbox/*/*/*.md"):
-                                with _suppress(Exception):
-                                    if f.is_file():
-                                        count_inbox += 1
-                            per_project_inbox_counts[proj_name] = count_inbox
-                        att_root = proj_dir / "attachments"
-                        if att_root.exists():
-                            for sub in att_root.rglob("*.webp"):
-                                with _suppress(Exception):
-                                    sz = sub.stat().st_size
-                                    total_attach_bytes += sz
-                                    per_project_attach[proj_name] = per_project_attach.get(proj_name, 0) + sz
+                    if await storage_root.exists():
+                        async for proj_dir in storage_root.iterdir():
+                            if not await proj_dir.is_dir():
+                                continue
+                            proj_name = proj_dir.name
+                            # Skip test/demo projects in real server runs
+                            if any(_fnmatch.fnmatch(proj_name, pat) for pat in ignore_patterns):
+                                continue
+                            msg_root = proj_dir / "messages"
+                            if await msg_root.exists():
+                                async for ydir in msg_root.iterdir():
+                                    if not await ydir.is_dir():
+                                        continue
+                                    async for mdir in ydir.iterdir():
+                                        if not await mdir.is_dir():
+                                            continue
+                                        async for f in mdir.iterdir():
+                                            if f.suffix.lower() == ".md":
+                                                with _suppress(Exception):
+                                                    stat = await f.stat()
+                                                    ts = _dt.datetime.fromtimestamp(stat.st_mtime, _dt.timezone.utc)
+                                                    if ts < cutoff:
+                                                        old_messages += 1
+                            # Count per-agent inbox files (agents/*/inbox/YYYY/MM/*.md)
+                            inbox_root = proj_dir / "agents"
+                            if await inbox_root.exists():
+                                count_inbox = 0
+                                async for f in inbox_root.rglob("inbox/*/*/*.md"):
+                                    with _suppress(Exception):
+                                        if await f.is_file():
+                                            count_inbox += 1
+                                per_project_inbox_counts[proj_name] = count_inbox
+                            att_root = proj_dir / "attachments"
+                            if await att_root.exists():
+                                async for sub in att_root.rglob("*.webp"):
+                                    with _suppress(Exception):
+                                        stat = await sub.stat()
+                                        sz = stat.st_size
+                                        total_attach_bytes += sz
+                                        per_project_attach[proj_name] = per_project_attach.get(proj_name, 0) + sz
                     structlog.get_logger("maintenance").info(
                         "retention_quota_report",
                         old_messages=old_messages,
@@ -1012,12 +1035,12 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
             if not project:
                 # Fall back to sync_project_name for new Slack-originated threads
-                project = await _ensure_project(settings.slack.sync_project_name)
+                project = await app_module._ensure_project(settings.slack.sync_project_name)
 
             sender_name = message_info["sender_name"]
             # Agent names are globally unique. Treat Slack-derived senders as a shared/global
             # identity: reuse the same agent across projects to avoid cross-project mutation.
-            sender_agent = await _get_agent_by_name_optional(sender_name)
+            sender_agent = await app_module._get_agent_by_name_optional(sender_name)
             if sender_agent:
                 logger.debug(
                     "slack_bridge_agent_reused",
@@ -1050,7 +1073,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     except IntegrityError:
                         await session.rollback()
                         # Race: another request created this globally-unique agent first.
-                        sender_agent = await _get_agent_by_name_optional(sender_name)
+                        sender_agent = await app_module._get_agent_by_name_optional(sender_name)
                         if not sender_agent:
                             raise
 
@@ -1069,7 +1092,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 return JSONResponse({"ok": True, "message": "No active recipients"})
 
             recipients_list = [(agent, "to") for agent in recipient_agents]
-            message = await _create_message(
+            message = await app_module._create_message(
                 project=project,
                 sender=sender_agent,
                 subject=message_info["subject"],
@@ -1084,7 +1107,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             to_agents = [r[0] for r in recipients_list if r[1] == "to"]
             cc_agents = [r[0] for r in recipients_list if r[1] == "cc"]
             bcc_agents = [r[0] for r in recipients_list if r[1] == "bcc"]
-            frontmatter = _message_frontmatter(
+            frontmatter = app_module._message_frontmatter(
                 message=message,
                 project=project,
                 sender=sender_agent,
@@ -1120,9 +1143,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
             slack_client_ref = None
             try:
-                from .app import _slack_client as _global_slack_client
-
-                slack_client_ref = _global_slack_client
+                slack_client_ref = app_module._slack_client
             except Exception:
                 slack_client_ref = None
 
@@ -1261,7 +1282,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                             if thread_project:
                                 # Use original message's project for thread replies
                                 _project_id, slug, human_key = thread_project
-                                project = await _ensure_project(human_key)
+                                project = await app_module._ensure_project(human_key)
                                 logger.info(
                                     "slack_reply_using_thread_project",
                                     thread_id=thread_id,
@@ -1270,13 +1291,13 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         if not project:
                             # New message or thread not found - use slack-sync or default
                             if settings.slack.sync_project_name:
-                                project = await _ensure_project(settings.slack.sync_project_name)
+                                project = await app_module._ensure_project(settings.slack.sync_project_name)
                             else:
-                                project = await _get_default_project()
+                                project = await app_module._get_default_project()
 
                         # Get or create SlackBridge agent
                         sender_name = message_info["sender_name"]
-                        sender_agent = await _get_agent_by_name_optional(sender_name)
+                        sender_agent = await app_module._get_agent_by_name_optional(sender_name)
 
                         if not sender_agent:
                             # Auto-create SlackBridge system agent; tolerate concurrent creation
@@ -1323,13 +1344,14 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
                         if not recipient_agents:
                             logger.warning(
-                                "slack_no_recipients", project=(project.slug if project else DEFAULT_PROJECT_KEY)
+                                "slack_no_recipients",
+                                project=(project.slug if project else app_module.DEFAULT_PROJECT_KEY),
                             )
                             return JSONResponse({"ok": True, "message": "No active recipients"})
 
                         # Create message
                         recipients_list = [(agent, "to") for agent in recipient_agents]
-                        message = await _create_message(
+                        message = await app_module._create_message(
                             project=project,
                             sender=sender_agent,
                             subject=message_info["subject"],
@@ -1345,7 +1367,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         to_agents = [r[0] for r in recipients_list if r[1] == "to"]
                         cc_agents = [r[0] for r in recipients_list if r[1] == "cc"]
                         bcc_agents = [r[0] for r in recipients_list if r[1] == "bcc"]
-                        frontmatter = _message_frontmatter(
+                        frontmatter = app_module._message_frontmatter(
                             message=message,
                             project=project,
                             sender=sender_agent,
@@ -1357,7 +1379,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
                         async def _persist_archive() -> None:
                             try:
-                                archive_project = project or await _get_default_project()
+                                archive_project = project or await app_module._get_default_project()
                                 archive = await ensure_archive(settings, archive_project.slug)
                                 await write_message_bundle(
                                     archive=archive,
@@ -1374,13 +1396,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         _ = _archive_task
 
                         # Capture thread mapping so outbound replies stay in the same Slack thread
-                        slack_client_ref = None
-                        try:
-                            from .app import _slack_client as _global_slack_client  # lazy import to avoid cycles
-
-                            slack_client_ref = _global_slack_client
-                        except Exception:
-                            slack_client_ref = None
+                        slack_client_ref = app_module._slack_client
 
                         if (
                             slack_client_ref
@@ -1720,8 +1736,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
                 sibling_map: dict[int, dict[str, Any]] = {}
                 if include_projects:
-                    await refresh_project_sibling_suggestions()
-                    sibling_map = await get_project_sibling_data()
+                    await app_module.refresh_project_sibling_suggestions()
+                    sibling_map = await app_module.get_project_sibling_data()
 
                 async with get_session() as session:
                     # Fetch recent messages with sender/project and computed recipient list
@@ -1871,8 +1887,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         async def mail_projects_list() -> HTMLResponse:
             """Projects list view (moved from /mail)"""
             await ensure_schema()
-            await refresh_project_sibling_suggestions()
-            sibling_map = await get_project_sibling_data()
+            await app_module.refresh_project_sibling_suggestions()
+            sibling_map = await app_module.get_project_sibling_data()
             async with get_session() as session:
                 rows = await session.execute(
                     text("SELECT id, slug, human_key, created_at FROM projects ORDER BY created_at DESC")
@@ -1999,7 +2015,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             }[action]
 
             try:
-                suggestion = await update_project_sibling_status(project_id, other_id, target_status)
+                suggestion = await app_module.update_project_sibling_status(project_id, other_id, target_status)
             except ValueError as exc:
                 return JSONResponse({"error": str(exc)}, status_code=status.HTTP_400_BAD_REQUEST)
             except NoResultFound:
@@ -3011,7 +3027,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         async def archive_guide() -> HTMLResponse:
             """Display the archive access guide and overview."""
             settings = get_settings()
-            storage_root = str(Path(settings.storage.root).expanduser().resolve())
+            storage_root = await anyio.Path(settings.storage.root).expanduser()
+            storage_root = str(await storage_root.resolve())
 
             # Get basic stats
             from pathlib import Path as P
@@ -3093,7 +3110,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             limit = max(1, min(limit, 500))  # Between 1 and 500
 
             settings = get_settings()
-            repo_root = Path(settings.storage.root).expanduser().resolve()
+            repo_root = await anyio.Path(settings.storage.root).expanduser()
+            repo_root = Path(await repo_root.resolve())
 
             from git import Repo as GitRepo
 
@@ -3109,7 +3127,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         async def archive_commit(sha: str) -> HTMLResponse:
             """Display detailed commit information with diffs."""
             settings = get_settings()
-            repo_root = Path(settings.storage.root).expanduser().resolve()
+            repo_root = await anyio.Path(settings.storage.root).expanduser()
+            repo_root = Path(await repo_root.resolve())
 
             from git import Repo as GitRepo
 
@@ -3135,7 +3154,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 return await _render("error.html", message="Invalid project identifier")
 
             settings = get_settings()
-            repo_root = Path(settings.storage.root).expanduser().resolve()
+            repo_root = await anyio.Path(settings.storage.root).expanduser()
+            repo_root = Path(await repo_root.resolve())
 
             from git import Repo as GitRepo
 
@@ -3233,7 +3253,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 return await _render("error.html", message="Invalid project identifier")
 
             settings = get_settings()
-            repo_root = Path(settings.storage.root).expanduser().resolve()
+            repo_root = await anyio.Path(settings.storage.root).expanduser()
+            repo_root = Path(await repo_root.resolve())
 
             from git import Repo as GitRepo
 
@@ -3363,6 +3384,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
 def main() -> None:
     """Run the HTTP transport using settings-specified host/port."""
+    _ensure_supported_python_version()
 
     parser = argparse.ArgumentParser(description="Run the MCP Agent Mail HTTP transport")
     parser.add_argument("--host", help="Override HTTP host", default=None)

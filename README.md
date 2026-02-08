@@ -3,7 +3,7 @@
 # MCP Mail (Forked from mcp_agent_mail)
 
 [![PyPI version](https://badge.fury.io/py/mcp-mail.svg)](https://pypi.org/project/mcp-mail/)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11-3.13](https://img.shields.io/badge/python-3.11--3.13-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **A mail-like coordination layer for coding agents**
@@ -71,6 +71,22 @@ scripts/run_server_with_token.sh
 
 **This Fork**: [jleechanorg/mcp_mail](https://github.com/jleechanorg/mcp_mail) •
 **Original**: [Dicklesworthstone/mcp_agent_mail](https://github.com/Dicklesworthstone/mcp_agent_mail)
+
+### ⚠️ Python Compatibility
+
+**Supported Python Versions:** 3.11, 3.12, 3.13
+
+**Not Supported:** Python 3.14+
+
+MCP Mail requires Python 3.11-3.13 due to an upstream dependency incompatibility with Python 3.14. The `beartype` library (a transitive dependency) uses `collections.abc.ByteString`, which was removed in Python 3.14.
+
+**What happens if I try to use Python 3.14?**
+- The launcher scripts will automatically skip Python 3.14 and select 3.13, 3.12, or 3.11
+- If only Python 3.14 is available, you'll see a clear error message with instructions
+- The server includes a startup guard that detects Python 3.14 and exits gracefully
+
+**When will Python 3.14 be supported?**
+We're monitoring upstream dependencies (beartype and related packages) for Python 3.14 compatibility. Once the dependency chain is updated, we'll re-enable Python 3.14 support.
 
 </div>
 
@@ -348,7 +364,7 @@ curl -fsSL https://raw.githubusercontent.com/jleechanorg/mcp_mail/main/scripts/i
 What this does:
 
 - Installs uv if missing and updates your PATH for this session
-- Creates a Python 3.14 virtual environment and installs dependencies with uv
+- Creates a Python 3.11-3.13 virtual environment and installs dependencies with uv
 - Runs the auto-detect integration to wire up supported agent tools
 - Starts the MCP HTTP server on port 8765 and prints a masked bearer token
 - Creates helper scripts under `scripts/` (including `run_server_with_token.sh`)
@@ -371,7 +387,7 @@ uv run python -m mcp_agent_mail.cli config set-port 9000
 
 ### If you want to do it yourself
 
-Clone the repo, set up and install with uv in a python 3.14 venv (install uv if you don't have it already), and then run `scripts/automatically_detect_all_installed_coding_agents_and_install_mcp_agent_mail_in_all.sh`. This will automatically set things up for your various installed coding agent tools and start the MCP server on port 8765. If you want to run the MCP server again in the future, simply run `scripts/run_server_with_token.sh`:
+Clone the repo, set up and install with uv in a Python 3.11-3.13 venv (install uv if you don't have it already), and then run `scripts/automatically_detect_all_installed_coding_agents_and_install_mcp_agent_mail_in_all.sh`. This will automatically set things up for your various installed coding agent tools and start the MCP server on port 8765. If you want to run the MCP server again in the future, simply run `scripts/run_server_with_token.sh`:
 
 ```bash
 # Install uv (if you don't have it already)
@@ -382,9 +398,10 @@ export PATH="$HOME/.local/bin:$PATH"
 git clone https://github.com/jleechanorg/mcp_mail
 cd mcp_mail
 
-# Create a Python 3.14 virtual environment and install dependencies
-uv python install 3.14
-uv venv -p 3.14
+# Create a Python 3.11-3.13 virtual environment and install dependencies
+# Note: Python 3.14+ is NOT supported due to upstream dependency incompatibilities
+uv python install 3.13
+uv venv -p 3.13
 source .venv/bin/activate
 uv sync
 

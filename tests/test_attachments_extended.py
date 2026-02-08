@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 from pathlib import Path
 
+import anyio
 import pytest
 from fastmcp import Client
 from PIL import Image
@@ -17,7 +18,9 @@ async def test_attachments_keep_originals_and_manifest(isolated_env, monkeypatch
     monkeypatch.setenv("KEEP_ORIGINAL_IMAGES", "true")
     with contextlib.suppress(Exception):
         _config.clear_settings_cache()
-    storage_root = Path(get_settings().storage.root).expanduser().resolve()
+    resolved_root = await anyio.Path(get_settings().storage.root).expanduser()
+    resolved_root = await resolved_root.resolve()
+    storage_root = Path(resolved_root)
     img_path = storage_root.parent / "img_o.png"
     img = Image.new("RGB", (4, 4), color=(0, 0, 255))
     img.save(img_path)
@@ -59,7 +62,9 @@ async def test_attachment_inline_vs_file_threshold(isolated_env, monkeypatch):
     monkeypatch.setenv("INLINE_IMAGE_MAX_BYTES", "1048576")
     with contextlib.suppress(Exception):
         _config.clear_settings_cache()
-    storage_root = Path(get_settings().storage.root).expanduser().resolve()
+    resolved_root = await anyio.Path(get_settings().storage.root).expanduser()
+    resolved_root = await resolved_root.resolve()
+    storage_root = Path(resolved_root)
     img_path = storage_root.parent / "img_t.png"
     img = Image.new("RGB", (8, 8), color=(255, 0, 0))
     img.save(img_path)
