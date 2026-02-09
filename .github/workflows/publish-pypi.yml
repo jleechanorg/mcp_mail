@@ -4,27 +4,24 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      force_publish:
+        description: 'Force publish (skip delta detection)'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-
-      - name: Install uv
-        run: curl -LsSf https://astral.sh/uv/install.sh | sh
-
-      - name: Build package
-        run: |
-          export PATH="$HOME/.local/bin:$PATH"
-          uv build
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
+    name: Publish mcp-mail to PyPI
+    uses: jleechanorg/.github/.github/workflows/pypi-delta-publish.yml@4293a35
+    with:
+      package_name: 'mcp-mail'
+      package_dir: '.'
+      python_version: '3.13'
+      build_tool: 'uv'
+      watch_paths: 'src/,pyproject.toml,uv.lock,README.md,LICENSE'
+      force_publish: ${{ github.event_name == 'workflow_dispatch' && inputs.force_publish == 'true' }}
+    secrets:
+      pypi_token: ${{ secrets.PYPI_API_TOKEN }}
