@@ -15,15 +15,15 @@
 PROJECT_ROOT="$PWD"
 
 # Source directory for project files
-SOURCE_DIR="$PROJECT_ROOT/src"
+SOURCE_DIR="$PROJECT_ROOT/src/mcp_agent_mail"
 
 # Coverage output directory
 COVERAGE_DIR="/tmp/$PROJECT_NAME/coverage"
 
-# Check if virtual environment exists
-if [ ! -d "$PROJECT_ROOT/.venv" ] && [ ! -d "$PROJECT_ROOT/venv" ]; then
-    echo "Error: Virtual environment not found at $PROJECT_ROOT/.venv or $PROJECT_ROOT/venv"
-    echo "Please create it with: python3 -m venv .venv"
+# Check if uv is available (mcp_mail uses uv instead of venv)
+if ! command -v uv &> /dev/null; then
+    echo "Error: uv not found"
+    echo "Please install uv: https://github.com/astral-sh/uv"
     exit 1
 fi
 
@@ -53,7 +53,7 @@ print_warning() {
 
 # Check if we're in the right directory
 if [ ! -d "$SOURCE_DIR" ]; then
-    print_error "src directory not found. Please run this script from the project root."
+    print_error "Source directory $SOURCE_DIR not found. Please run this script from the project root."
     exit 1
 fi
 
@@ -78,19 +78,12 @@ done
 # Create coverage output directory
 mkdir -p "$COVERAGE_DIR"
 
-# Change to source directory
-cd "$SOURCE_DIR"
+# Change to project root (not source directory)
+cd "$PROJECT_ROOT"
 
-# Activate virtual environment
-print_status "Activating virtual environment..."
-if [ -f "$PROJECT_ROOT/.venv/bin/activate" ]; then
-    source "$PROJECT_ROOT/.venv/bin/activate"
-elif [ -f "$PROJECT_ROOT/venv/bin/activate" ]; then
-    source "$PROJECT_ROOT/venv/bin/activate"
-else
-    print_error "Virtual environment activation script not found"
-    exit 1
-fi
+# Verify uv is available
+print_status "Using uv for dependency management..."
+uv --version
 
 print_status "🧪 Running coverage analysis..."
 print_status "Setting TESTING=true for faster AI model usage"
@@ -106,13 +99,13 @@ else
     print_status "Skipping integration tests (use --integration to include them)"
 fi
 
-# Check if coverage is installed
+# Check if coverage is installed via uv
 print_status "Checking coverage installation..."
 
-# Check if coverage is importable (venv already activated)
-if ! python -c "import coverage" 2>/dev/null; then
+# Check if coverage is importable via uv
+if ! uv run python -c "import coverage" 2>/dev/null; then
     print_warning "Coverage tool not found. Installing..."
-    if ! pip install coverage; then
+    if ! uv pip install coverage; then
         print_error "Failed to install coverage"
         exit 1
     fi
@@ -164,7 +157,7 @@ start_time=$(date +%s)
 print_status "⏱️  Starting coverage analysis at $(date)"
 
 # Clear any previous coverage data
-coverage erase
+uv run coverage erase
 
 # Initialize counters
 total_tests=0
@@ -178,7 +171,7 @@ for test_file in "${test_files[@]}"; do
         total_tests=$((total_tests + 1))
         echo -n "[$total_tests/${#test_files[@]}] Running: $test_file ... "
 
-        if TESTING=true coverage run --append --source=. "$test_file" >/dev/null 2>&1; then
+        if TESTING=true uv run coverage run --append --source=. "$test_file" >/dev/null 2>&1; then
             passed_tests=$((passed_tests + 1))
             echo -e "${GREEN}✓${NC}"
         else
@@ -202,7 +195,7 @@ coverage_start_time=$(date +%s)
 
 # Generate terminal coverage report
 print_status "Generating text coverage report..."
-coverage report > "$COVERAGE_DIR/coverage_report.txt"
+uv run coverage report > "$COVERAGE_DIR/coverage_report.txt"
 coverage_report_exit_code=$?
 
 # Display key coverage metrics
@@ -221,7 +214,7 @@ if [ $coverage_report_exit_code -eq 0 ]; then
     # Show key file coverage
     echo
     echo "Key Files Coverage:"
-    grep -E "(main\.py|gemini_service\.py|game_state\.py|firestore_service\.py)" "$COVERAGE_DIR/coverage_report.txt" | head -10
+    grep -E "(main\.py|llm_service\.py|game_state\.py|firestore_service\.py)" "$COVERAGE_DIR/coverage_report.txt" | head -10
 
     echo "----------------------------------------"
 
@@ -237,7 +230,7 @@ fi
 # Generate HTML report if enabled
 if [ "$generate_html" = true ]; then
     print_status "🌐 Generating HTML coverage report..."
-    if coverage html --directory="$COVERAGE_DIR"; then
+    if uv run coverage html --directory="$COVERAGE_DIR"; then
         print_success "HTML coverage report generated in $COVERAGE_DIR/"
         print_status "Open $COVERAGE_DIR/index.html in your browser to view detailed coverage"
 

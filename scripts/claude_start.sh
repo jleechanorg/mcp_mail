@@ -421,10 +421,10 @@ if MCP_LIST=$(claude mcp list 2>/dev/null); then
 
     if [ "$MCP_SERVERS" -eq 0 ]; then
         echo -e "${YELLOW}⚠️ No MCP servers detected${NC}"
-        if [ -f "./claude_mcp.sh" ]; then
-            echo -e "${BLUE}💡 To install MCP servers, run: ./claude_mcp.sh${NC}"
+        if [ -f "./scripts/install_mcp_servers.sh" ]; then
+            echo -e "${BLUE}💡 To install MCP servers, run: ./scripts/install_mcp_servers.sh claude${NC}"
         else
-            echo -e "${BLUE}💡 To setup MCP servers, you can install claude_mcp.sh script${NC}"
+            echo -e "${BLUE}💡 To setup MCP servers, visit: https://github.com/jleechanorg/your-project.com/tree/main/scripts${NC}"
         fi
         echo -e "${YELLOW}📝 Continuing with Claude startup (MCP features will be limited)...${NC}"
     else

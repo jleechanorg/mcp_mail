@@ -2448,6 +2448,35 @@ uv run python -m mcp_agent_mail.cli acks pending /abs/path/backend BlueLake --li
 uv run python -m mcp_agent_mail.cli clear-and-reset-everything --force
 ```
 
+## Development Scripts
+
+This repository includes scaffolded development scripts from [claude-commands](https://github.com/jleechanorg/claude-commands) for code quality, testing, and workflow automation. All scripts have been adapted for this project's Python/uv stack.
+
+**Quick Reference:**
+
+```bash
+# Code quality & linting
+./scripts/run_lint.sh                    # Check code quality (Ruff + Bandit)
+./scripts/run_lint.sh src/mcp_agent_mail fix  # Auto-fix issues
+
+# Testing & coverage
+./scripts/coverage.sh                    # Full coverage analysis with HTML report
+./scripts/run_tests_with_coverage.sh     # Run tests with coverage tracking
+./scripts/run_tests_with_coverage.sh --integration  # Include integration tests
+
+# Codebase analysis
+./scripts/loc.sh                         # Detailed lines of code analysis
+./scripts/loc_simple.sh                  # Quick LOC count
+
+# Git workflows
+./scripts/sync_branch.sh                 # Sync feature branch with main
+./scripts/push.sh                        # Safe push with validation
+./create_worktree.sh                     # Create Git worktree for parallel work
+./integrate.sh                           # Automated branch integration
+```
+
+**Full documentation:** See [SCAFFOLDING.md](SCAFFOLDING.md) for complete script documentation, adaptations, and integration guides.
+
 ## Client integrations
 
 Use the automated installer to wire up supported tools automatically (e.g., Claude Code, Cline, Windsurf, OpenCode). Run `scripts/automatically_detect_all_installed_coding_agents_and_install_mcp_agent_mail_in_all.sh` or the one-liner in the Quickstart above.
