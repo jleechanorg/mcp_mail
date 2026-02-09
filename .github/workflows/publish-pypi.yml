@@ -22,6 +22,6 @@ jobs:
       python_version: '3.13'
       build_tool: 'uv'
       watch_paths: 'src/,pyproject.toml,uv.lock,README.md,LICENSE'
-      force_publish: ${{ github.event_name == 'workflow_dispatch' && inputs.force_publish }}
+      force_publish: ${{ github.event_name == 'workflow_dispatch' && inputs.force_publish == 'true' }}
     secrets:
       pypi_token: ${{ secrets.PYPI_API_TOKEN }}
