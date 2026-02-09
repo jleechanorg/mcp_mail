@@ -15,13 +15,13 @@ on:
 jobs:
   publish:
     name: Publish mcp-mail to PyPI
-    uses: jleechanorg/.github/.github/workflows/pypi-delta-publish.yml@main
+    uses: jleechanorg/.github/.github/workflows/pypi-delta-publish.yml@4293a35
     with:
       package_name: 'mcp-mail'
       package_dir: '.'
       python_version: '3.13'
       build_tool: 'uv'
       watch_paths: 'src/,pyproject.toml,uv.lock,README.md,LICENSE'
-      force_publish: ${{ github.event.inputs.force_publish || false }}
+      force_publish: ${{ inputs.force_publish || false }}
     secrets:
       pypi_token: ${{ secrets.PYPI_API_TOKEN }}
