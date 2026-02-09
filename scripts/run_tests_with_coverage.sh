@@ -39,17 +39,17 @@ print_warning() {
 }
 
 # Auto-detect source directory for testing
-SOURCE_DIR="${PROJECT_SRC_DIR:-src}"
+SOURCE_DIR="${PROJECT_SRC_DIR:-src/mcp_agent_mail}"
 if [[ ! -d "$SOURCE_DIR" ]]; then
     # Try common source directory patterns
-    for dir in lib app mvp_site source code; do
+    for dir in src lib app source code; do
         if [[ -d "$dir" ]]; then
             SOURCE_DIR="$dir"
             break
         fi
     done
     # Fallback to current directory if no common patterns found
-    if [[ -z "$SOURCE_DIR" || ! -d "$SOURCE_DIR" ]]; then
+    if [[ -z "$SOURCE_DIR" ]]; then
         SOURCE_DIR="."
         print_warning "No common source directory found, using current directory"
     fi
@@ -99,47 +99,38 @@ else
     print_status "Skipping integration tests (use --integration to include them)"
 fi
 
-# Check if coverage is installed
-print_status "Checking coverage installation..."
+# Check if uv is available (mcp_mail uses uv)
+print_status "Checking uv installation..."
 
-# Try to activate virtual environment from multiple possible locations
-activate_venv() {
-    local venv_paths=(
-        "./.venv/bin/activate"
-        "../.venv/bin/activate"
-        "./venv/bin/activate"
-        "../venv/bin/activate"
-        "$HOME/venv/bin/activate"
-        # PROJECT_ROOT variable not defined in this context
-    )
+if ! command -v uv &> /dev/null; then
+    print_error "uv not found. Please install uv: https://github.com/astral-sh/uv"
+    exit 1
+fi
 
-    for venv_path in "${venv_paths[@]}"; do
-        if [[ -f "$venv_path" ]]; then
-            print_status "Activating virtual environment: $venv_path"
-            if source "$venv_path"; then
-                return 0
-            fi
-        fi
-    done
+print_status "uv is available - using 'uv run' for all commands"
 
-    print_warning "No virtual environment found. Using system Python or uv."
-    print_status "Searched paths: ${venv_paths[*]}"
-    return 0  # Solo developer: graceful fallback to system Python
-}
+# Check if pytest and coverage are available via uv
+if ! uv run python -c "import pytest" 2>/dev/null; then
+    print_warning "pytest not found. Installing..."
+    if ! uv pip install pytest pytest-cov; then
+        print_error "Failed to install pytest"
+        exit 1
+    fi
+    print_success "pytest installed successfully"
+else
+    print_status "pytest already installed"
+fi
 
-# Activate virtual environment (optional - fallback to system Python)
-activate_venv
-
-# Then check if coverage is importable
-if ! python -c "import coverage" 2>/dev/null; then
-    print_warning "Coverage tool not found. Installing..."
-    if ! pip install coverage; then
+# Check if coverage is available (needed for uv run coverage commands)
+if ! uv run python -c "import coverage" 2>/dev/null; then
+    print_warning "coverage not found. Installing..."
+    if ! uv pip install coverage; then
         print_error "Failed to install coverage"
         exit 1
     fi
-    print_success "Coverage installed successfully"
+    print_success "coverage installed successfully"
 else
-    print_status "Coverage already installed"
+    print_status "coverage already installed"
 fi
 
 # Find all test files in tests subdirectory, excluding venv, prototype, manual_tests, and test_integration
@@ -191,7 +182,7 @@ start_time=$(date +%s)
 print_status "⏱️  Starting coverage analysis at $(date)"
 
 # Clear any previous coverage data
-activate_venv && python -m coverage erase
+uv run coverage erase
 
 # Initialize counters
 total_tests=0
@@ -205,7 +196,7 @@ for test_file in "${test_files[@]}"; do
         total_tests=$((total_tests + 1))
         echo -n "[$total_tests/${#test_files[@]}] Running: $test_file ... "
 
-        if TESTING=true activate_venv && python -m coverage run --append --source=. "$test_file" >/dev/null 2>&1; then
+        if TESTING=true uv run coverage run --append --source=. "$test_file" >/dev/null 2>&1; then
             passed_tests=$((passed_tests + 1))
             print_success "✓"
         else
@@ -228,7 +219,7 @@ print_status "📊 Generating coverage report..."
 coverage_start_time=$(date +%s)
 
 # Generate terminal coverage report
-activate_venv && python -m coverage report > coverage_report.txt
+uv run coverage report > coverage_report.txt
 coverage_report_exit_code=$?
 
 # Display key coverage metrics
@@ -247,7 +238,7 @@ if [ $coverage_report_exit_code -eq 0 ]; then
     # Show key file coverage
     echo
     echo "Key Files Coverage:"
-    grep -E "(main\.py|gemini_service\.py|game_state\.py|firestore_service\.py)" coverage_report.txt | head -10
+    grep -E "(main\.py|llm_service\.py|game_state\.py|firestore_service\.py)" coverage_report.txt | head -10
 
     echo "----------------------------------------"
 
@@ -263,7 +254,7 @@ fi
 # Generate HTML report if enabled
 if [ "$generate_html" = true ]; then
     print_status "🌐 Generating HTML coverage report..."
-    if activate_venv && python -m coverage html --directory="$COVERAGE_DIR"; then
+    if uv run coverage html --directory="$COVERAGE_DIR"; then
         print_success "HTML coverage report generated in $COVERAGE_DIR/"
         print_status "Open $COVERAGE_DIR/index.html in your browser to view detailed coverage"
     else
