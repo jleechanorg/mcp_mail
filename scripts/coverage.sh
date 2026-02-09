@@ -14,6 +14,10 @@
 # Store project root before changing directories
 PROJECT_ROOT="$PWD"
 
+# Get project name from git repository
+PROJECT_NAME=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")" | tr -cd '[:alnum:]._-')
+PROJECT_NAME=${PROJECT_NAME:-mcp_mail}
+
 # Source directory for project files
 SOURCE_DIR="$PROJECT_ROOT/src/mcp_agent_mail"
 

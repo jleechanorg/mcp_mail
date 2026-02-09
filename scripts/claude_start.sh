@@ -424,7 +424,7 @@ if MCP_LIST=$(claude mcp list 2>/dev/null); then
         if [ -f "./scripts/install_mcp_servers.sh" ]; then
             echo -e "${BLUE}💡 To install MCP servers, run: ./scripts/install_mcp_servers.sh claude${NC}"
         else
-            echo -e "${BLUE}💡 To setup MCP servers, visit: https://github.com/jleechanorg/your-project.com/tree/main/scripts${NC}"
+            echo -e "${BLUE}💡 To setup MCP servers, visit: https://github.com/jleechanorg/mcp_mail/tree/main/scripts${NC}"
         fi
         echo -e "${YELLOW}📝 Continuing with Claude startup (MCP features will be limited)...${NC}"
     else

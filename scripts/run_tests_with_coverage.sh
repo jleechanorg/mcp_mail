@@ -109,7 +109,7 @@ fi
 
 print_status "uv is available - using 'uv run' for all commands"
 
-# Check if pytest is available via uv
+# Check if pytest and coverage are available via uv
 if ! uv run python -c "import pytest" 2>/dev/null; then
     print_warning "pytest not found. Installing..."
     if ! uv pip install pytest pytest-cov; then
@@ -119,6 +119,18 @@ if ! uv run python -c "import pytest" 2>/dev/null; then
     print_success "pytest installed successfully"
 else
     print_status "pytest already installed"
+fi
+
+# Check if coverage is available (needed for uv run coverage commands)
+if ! uv run python -c "import coverage" 2>/dev/null; then
+    print_warning "coverage not found. Installing..."
+    if ! uv pip install coverage; then
+        print_error "Failed to install coverage"
+        exit 1
+    fi
+    print_success "coverage installed successfully"
+else
+    print_status "coverage already installed"
 fi
 
 # Find all test files in tests subdirectory, excluding venv, prototype, manual_tests, and test_integration

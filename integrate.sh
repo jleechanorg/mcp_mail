@@ -259,9 +259,9 @@ else
     rm -f "$err_file"
 fi
 
-# Stop test server for current branch if running
+# Stop test server for current branch if running (if test_server_manager.sh exists)
 current_branch=$(git branch --show-current)
-if [ "$current_branch" != "main" ]; then
+if [ "$current_branch" != "main" ] && [ -f "./test_server_manager.sh" ]; then
     echo "🛑 Stopping test server for branch '$current_branch'..."
     ./test_server_manager.sh stop "$current_branch" 2>/dev/null || true
 fi
