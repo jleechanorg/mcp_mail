@@ -15,7 +15,7 @@ on:
 jobs:
   publish:
     name: Publish mcp-mail to PyPI
-    uses: jleechanorg/.github/.github/workflows/pypi-delta-publish.yml@4293a35
+    uses: jleechanorg/.github/.github/workflows/pypi-delta-publish.yml@4293a35b18ab9366789470d9802ac365f7738c8d
     with:
       package_name: 'mcp-mail'
       package_dir: '.'
