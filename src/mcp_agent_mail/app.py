@@ -1586,10 +1586,12 @@ async def _get_or_create_agent(
                     # Name exists in another project
                     if mode == "strict" and not force_reclaim:
                         # In strict mode, require explicit force_reclaim
+                        # Note: project assignment is metadata only, not access control; the agent
+                        # exists globally and can be reassigned with force_reclaim=True.
                         conflict_info = await _build_conflict_info(sanitized)
                         raise ToolExecutionError(
                             "NAME_TAKEN",
-                            f"Agent name '{sanitized}' is already in use. Set force_reclaim=True to override and retire the existing agent(s).",
+                            f"Agent '{sanitized}' exists in another project. Use force_reclaim=True to reassign.",
                             recoverable=True,
                             data={
                                 "name": sanitized,
@@ -1908,35 +1910,20 @@ async def _retire_conflicting_agents(
 
 
 async def _get_agent(project: Project, name: str) -> Agent:
-    await ensure_schema()
-    async with get_session() as session:
-        result = await session.execute(
-            select(Agent).where(
-                Agent.project_id == project.id,
-                func.lower(Agent.name) == name.lower(),
-                cast(Any, Agent.is_active).is_(True),
-            )
-        )
-        agent = result.scalars().first()
-        if not agent:
-            raise NoResultFound(
-                f"Agent '{name}' not registered for project '{project.human_key}'. "
-                "Tip: Use resource://agents to discover registered agents globally."
-            )
-        return agent
+    """Get agent by name (globally unique). Project param kept for API compatibility.
+
+    Projects are informational metadata only and do not restrict agent visibility.
+    Any agent can be found by name regardless of which project_key was provided.
+    """
+    return await _get_agent_by_name(name)
 
 
 async def _get_agent_optional(project: Project, name: str) -> Agent | None:
-    await ensure_schema()
-    async with get_session() as session:
-        result = await session.execute(
-            select(Agent).where(
-                Agent.project_id == project.id,
-                func.lower(Agent.name) == name.lower(),
-                cast(Any, Agent.is_active).is_(True),
-            )
-        )
-        return result.scalars().first()
+    """Get agent by name (globally unique), returning None if not found.
+
+    Projects are informational metadata only and do not restrict agent visibility.
+    """
+    return await _get_agent_by_name_optional(name)
 
 
 async def _get_agent_by_name(name: str) -> Agent:
@@ -3538,7 +3525,7 @@ def build_mcp_server() -> FastMCP:
         inbox_include_bodies: bool = False,
     ) -> dict[str, Any]:
         """
-        Create or update an agent identity within a project.
+        Create or update an agent identity. Project is informational metadata only.
 
         IMPORTANT: Global Namespace
         ---------------------------
