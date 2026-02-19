@@ -247,3 +247,5 @@ test_slack_webhook.py
 .mcp_mail/*.db
 .mcp_mail/*.db-shm
 .mcp_mail/*.db-wal
+
+.mcp.json

@@ -144,13 +144,19 @@ def _build_engine(settings: DatabaseSettings) -> AsyncEngine:
             "check_same_thread": False,  # Required for async SQLite
         }
 
+    # SQLite needs pool_size > 1 because the codebase uses nested get_session() calls
+    # (e.g. send_message holds a session while _create_placeholder_agent opens another).
+    # pool_size=1 causes deadlocks; 5 is sufficient for nesting without unbounded growth.
+    pool_kwargs: dict[str, int] = (
+        {"pool_size": 5, "max_overflow": 0} if is_sqlite else {"pool_size": 10, "max_overflow": 10}
+    )
+
     engine = create_async_engine(
         settings.url,
         echo=settings.echo,
         future=True,
         pool_pre_ping=True,
-        pool_size=10,
-        max_overflow=10,
+        **pool_kwargs,
         connect_args=connect_args,
     )
 
@@ -369,11 +375,14 @@ def _setup_fts(connection) -> None:
     )
 
     # MIGRATION: Check for duplicate agent names before enforcing global uniqueness
-    # This handles upgrading from per-project uniqueness to global uniqueness
-    _check_and_fix_duplicate_agent_names(connection)
+    # This handles upgrading from per-project uniqueness to global uniqueness.
+    index_exists = connection.exec_driver_sql(
+        "SELECT 1 FROM sqlite_master WHERE type='index' AND name='uq_agents_name_ci'"
+    ).fetchone()
+    if not index_exists:
+        _check_and_fix_duplicate_agent_names(connection)
 
     # Case-insensitive unique index on ACTIVE agent names for global uniqueness
-    connection.exec_driver_sql("DROP INDEX IF EXISTS uq_agents_name_ci")
     connection.exec_driver_sql(
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_agents_name_ci ON agents(lower(name)) WHERE is_active = 1"
     )

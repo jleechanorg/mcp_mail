@@ -393,6 +393,8 @@ def _instrument_tool(
         # Preserve annotations so FastMCP can infer output schema
         with suppress(Exception):
             wrapper.__annotations__ = getattr(func, "__annotations__", {})
+        with suppress(Exception):
+            wrapper.__signature__ = signature
         return wrapper
 
     return decorator
@@ -713,6 +715,11 @@ def _project_workspace_path(project: Project) -> Optional[Path]:
     return None
 
 
+def _clamp_limit(limit: int, max_val: int = 1000) -> int:
+    """Clamp a user-supplied limit to [1, max_val]."""
+    return min(max(limit, 1), max_val)
+
+
 def _parse_json_safely(text: str) -> dict[str, Any] | None:
     """Best-effort JSON extraction supporting code fences and stray text.
 
@@ -900,8 +907,15 @@ async def _ensure_project(human_key: str) -> Project:
             return project
         project = Project(slug=slug, human_key=human_key)
         session.add(project)
-        await session.commit()
-        await session.refresh(project)
+        try:
+            await session.commit()
+            await session.refresh(project)
+        except IntegrityError:
+            await session.rollback()
+            result = await session.execute(select(Project).where(Project.slug == slug))
+            project = result.scalar_one_or_none()
+            if project is None:
+                raise  # IntegrityError was from a different constraint
         # Create global inbox agent for new project
         await _ensure_global_inbox_agent(project, session)
         return project
@@ -982,8 +996,20 @@ async def _ensure_global_inbox_agent(project: Project, session: AsyncSession | N
         task_description=f"Global inbox for project '{project.slug}'.",
     )
     session.add(agent)
-    await session.commit()
-    await session.refresh(agent)
+    try:
+        await session.commit()
+        await session.refresh(agent)
+    except IntegrityError:
+        await session.rollback()
+        result = await session.execute(
+            select(Agent).where(
+                Agent.project_id == project.id,
+                Agent.name == global_inbox_name,
+            )
+        )
+        agent = result.scalar_one_or_none()
+        if agent is None:
+            raise  # IntegrityError was from a different constraint
     return agent
 
 
@@ -3076,8 +3102,9 @@ def build_mcp_server() -> FastMCP:
             seen: set[str] = set()
             ordered: list[str] = []
             for item in items:
-                if item not in seen:
-                    seen.add(item)
+                key = item.strip().lower()
+                if key not in seen:
+                    seen.add(key)
                     ordered.append(item)
             return ordered
 
@@ -3091,7 +3118,9 @@ def build_mcp_server() -> FastMCP:
         global_inbox_agent = await _get_agent_by_name_optional(global_inbox_name)
         # Only add to cc if sender is not the global inbox itself
         should_cc_global_inbox = (
-            global_inbox_agent is not None and sender.name != global_inbox_name and global_inbox_name not in cc_names
+            global_inbox_agent is not None
+            and sender.name != global_inbox_name
+            and global_inbox_name.lower() not in {n.lower() for n in cc_names}
         )
 
         if to_names or cc_names or bcc_names:
@@ -4714,7 +4743,7 @@ def build_mcp_server() -> FastMCP:
                 Panel = _rp.Panel
                 Console().print(
                     Panel.fit(
-                        f"project={project_key}\nagent={agent_name}\nlimit={limit}\nurgent_only={urgent_only}",
+                        f"project={project_key}\nagent={agent_name}\nlimit={_clamp_limit(limit)}\nurgent_only={urgent_only}",
                         title="tool: fetch_inbox",
                         border_style="green",
                     )
@@ -4728,7 +4757,7 @@ def build_mcp_server() -> FastMCP:
             # Get project from agent's association (no fallback to avoid reading wrong inbox)
             project = await _require_project_for_agent(agent, "fetch inbox")
 
-            items = await _list_inbox(project, agent, limit, urgent_only, include_bodies, since_ts)
+            items = await _list_inbox(project, agent, _clamp_limit(limit), urgent_only, include_bodies, since_ts)
             await ctx.info(f"Fetched {len(items)} messages for '{agent.name}'. urgent_only={urgent_only}")
             return items
         except Exception as exc:
@@ -5075,7 +5104,8 @@ def build_mcp_server() -> FastMCP:
                     LIMIT :limit
                 """)
 
-                fts_limit = limit * 2 if agent_filter else limit
+                clamped_limit = _clamp_limit(limit)
+                fts_limit = clamped_limit * 2 if agent_filter else clamped_limit
                 try:
                     fts_result = await session.execute(
                         fts_stmt,
@@ -5191,7 +5221,7 @@ def build_mcp_server() -> FastMCP:
                         -x["relevance_score"],  # Then by relevance (higher first)
                     )
                 )
-                results = results[:limit]
+                results = results[:clamped_limit]
 
                 await ctx.info(
                     f"Found {len(results)} messages matching query '{query}' "
@@ -5481,7 +5511,7 @@ def build_mcp_server() -> FastMCP:
                     LIMIT :limit
                     """
                 ),
-                {"project_id": project.id, "query": query, "limit": limit},
+                {"project_id": project.id, "query": query, "limit": _clamp_limit(limit)},
             )
             rows = result.mappings().all()
         await ctx.info(f"Search '{query}' returned {len(rows)} messages for project '{project.human_key}'.")
@@ -6811,7 +6841,7 @@ def build_mcp_server() -> FastMCP:
                     LIMIT :limit
                     """
                 ).bindparams(bindparam("proj_ids", expanding=True)),
-                {"proj_ids": proj_ids, "query": query, "limit": limit},
+                {"proj_ids": proj_ids, "query": query, "limit": _clamp_limit(limit)},
             )
             rows = result.mappings().all()
         items = [
@@ -6867,7 +6897,7 @@ def build_mcp_server() -> FastMCP:
                 ag = await _get_agent(project, agent_name)
             except Exception:
                 continue
-            proj_items = await _list_inbox(project, ag, limit, urgent_only, include_bodies, since_ts)
+            proj_items = await _list_inbox(project, ag, _clamp_limit(limit), urgent_only, include_bodies, since_ts)
             for item in proj_items:
                 item["project_id"] = item.get("project_id") or project.id
                 messages.append(item)
@@ -6878,7 +6908,7 @@ def build_mcp_server() -> FastMCP:
             return ts.timestamp() if ts else 0.0
 
         messages.sort(key=_dt_key, reverse=True)
-        return messages[: max(0, int(limit))]
+        return messages[: _clamp_limit(limit)]
 
     @mcp.tool(name="summarize_thread_product")
     @_instrument_tool("summarize_thread_product", cluster=CLUSTER_PRODUCT, capabilities={"summarization", "search"})

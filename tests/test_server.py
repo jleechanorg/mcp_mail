@@ -89,6 +89,106 @@ async def test_messaging_flow(isolated_env):
 
 
 @pytest.mark.asyncio
+async def test_send_message_deduplicates_recipient_names_case_insensitively(isolated_env):
+    server = build_mcp_server()
+
+    async with Client(server) as client:
+        await client.call_tool("ensure_project", {"human_key": "/backend"})
+        await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "Backend",
+                "program": "codex",
+                "model": "gpt-5",
+                "name": "AliceAgent",
+            },
+        )
+        await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "Backend",
+                "program": "codex",
+                "model": "gpt-5",
+                "name": "SenderAgent",
+            },
+        )
+
+        sent = await client.call_tool(
+            "send_message",
+            {
+                "project_key": "Backend",
+                "sender_name": "SenderAgent",
+                "to": ["AliceAgent", "aliceagent"],
+                "subject": "Case-insensitive dedup",
+                "body_md": "hello",
+            },
+        )
+        deliveries = sent.data.get("deliveries") or []
+        assert deliveries
+        assert deliveries[0]["payload"]["subject"] == "Case-insensitive dedup"
+
+        inbox = await client.call_tool(
+            "fetch_inbox",
+            {
+                "project_key": "Backend",
+                "agent_name": "AliceAgent",
+                "limit": 10,
+            },
+        )
+        messages = inbox.structured_content.get("result")
+        assert isinstance(messages, list)
+        assert len(messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_inbox_limit_is_clamped(isolated_env):
+    server = build_mcp_server()
+
+    async with Client(server) as client:
+        await client.call_tool("ensure_project", {"human_key": "/backend"})
+        await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "Backend",
+                "program": "codex",
+                "model": "gpt-5",
+                "name": "ClampSender",
+            },
+        )
+        await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "Backend",
+                "program": "codex",
+                "model": "gpt-5",
+                "name": "ClampRecipient",
+            },
+        )
+
+        for i in range(5):
+            await client.call_tool(
+                "send_message",
+                {
+                    "project_key": "Backend",
+                    "sender_name": "ClampSender",
+                    "to": ["ClampRecipient"],
+                    "subject": f"m-{i}",
+                    "body_md": "x",
+                },
+            )
+
+        zero_limit = await client.call_tool(
+            "fetch_inbox",
+            {
+                "project_key": "Backend",
+                "agent_name": "ClampRecipient",
+                "limit": 0,
+            },
+        )
+        assert len(zero_limit.structured_content.get("result", [])) == 1
+
+
+@pytest.mark.asyncio
 async def test_file_reservation_conflicts_and_release(isolated_env):
     server = build_mcp_server()
 

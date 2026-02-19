@@ -26,8 +26,7 @@ classifiers = [
 ]
 dependencies = [
   "fastmcp>=2.14.0,<3",
-  "pydantic==2.12.3",
-  "pydantic-core==2.41.4",
+  "pydantic>=2.10.0,<3",
   "uvicorn[standard]>=0.32.0",
   "fastapi>=0.110.0",
   "jinja2>=3.1.4",
@@ -53,9 +52,6 @@ dependencies = [
   "attrs>=24.2.0",
   "authlib>=1.6.5,<2",
   "litellm>=1.40.0,<2",
-  "pytest>=8.4.2",
-  "pytest-asyncio>=0.23.8",
-  "ruff>=0.14.1",
 ]
 
 [project.optional-dependencies]
@@ -170,8 +166,12 @@ markers = [
 
 [dependency-groups]
 dev = [
+    "ruff>=0.5.7",
+    "pytest>=8.3.3",
     "pytest-asyncio>=1.2.0",
     "pytest-cov>=7.0.0",
     "pytest-timeout>=2.4.0",
+    "bandit>=1.8.0",
+    "safety>=3.0.0",
     "jleechanorg-orchestration>=0.1.18",
 ]

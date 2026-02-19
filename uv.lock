@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.11, <3.14"
 
 [[package]]
@@ -1562,13 +1562,9 @@ dependencies = [
     { name = "orjson" },
     { name = "pillow" },
     { name = "pydantic" },
-    { name = "pydantic-core" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
     { name = "python-decouple" },
     { name = "redis", extra = ["hiredis"] },
     { name = "rich" },
-    { name = "ruff" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "sqlmodel" },
     { name = "structlog" },
@@ -1592,10 +1588,14 @@ dev = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "bandit" },
     { name = "jleechanorg-orchestration" },
+    { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "pytest-timeout" },
+    { name = "ruff" },
+    { name = "safety" },
 ]
 
 [package.metadata]
@@ -1618,16 +1618,12 @@ requires-dist = [
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11.1" },
     { name = "orjson", specifier = ">=3.10.7,<4" },
     { name = "pillow", specifier = ">=10.4.0" },
-    { name = "pydantic", specifier = "==2.12.3" },
-    { name = "pydantic-core", specifier = "==2.41.4" },
-    { name = "pytest", specifier = ">=8.4.2" },
+    { name = "pydantic", specifier = ">=2.10.0,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.3" },
-    { name = "pytest-asyncio", specifier = ">=0.23.8" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0.0" },
     { name = "python-decouple", specifier = ">=3.8" },
     { name = "redis", extras = ["hiredis"], specifier = ">=5.3.0" },
     { name = "rich", specifier = ">=13.9.1" },
-    { name = "ruff", specifier = ">=0.14.1" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5.7" },
     { name = "safety", marker = "extra == 'dev'", specifier = ">=3.0.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.35" },
@@ -1643,10 +1639,14 @@ provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "bandit", specifier = ">=1.8.0" },
     { name = "jleechanorg-orchestration", specifier = ">=0.1.18" },
+    { name = "pytest", specifier = ">=8.3.3" },
     { name = "pytest-asyncio", specifier = ">=1.2.0" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "pytest-timeout", specifier = ">=2.4.0" },
+    { name = "ruff", specifier = ">=0.5.7" },
+    { name = "safety", specifier = ">=3.0.0" },
 ]
 
 [[package]]
