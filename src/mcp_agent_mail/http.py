@@ -31,20 +31,7 @@ from starlette.types import Receive, Scope, Send
 from .config import Settings, get_settings
 from .db import ensure_schema, get_session
 from .models import Agent
-from .storage import (
-    collect_lock_status,
-    ensure_archive,
-    get_agent_communication_graph,
-    get_archive_tree,
-    get_commit_detail,
-    get_file_content,
-    get_historical_inbox_snapshot,
-    get_message_commit_sha,
-    get_recent_commits,
-    get_timeline_commits,
-    is_archive_enabled,
-    write_message_bundle,
-)
+from .storage import collect_lock_status
 
 # Slack webhook dedupe cache (in-memory best-effort)
 # NOTE: We use a plain deque (no maxlen) and manage eviction manually to keep
@@ -1107,7 +1094,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             to_agents = [r[0] for r in recipients_list if r[1] == "to"]
             cc_agents = [r[0] for r in recipients_list if r[1] == "cc"]
             bcc_agents = [r[0] for r in recipients_list if r[1] == "bcc"]
-            frontmatter = app_module._message_frontmatter(
+            app_module._message_frontmatter(
                 message=message,
                 project=project,
                 sender=sender_agent,
@@ -1117,29 +1104,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 attachments=[],
             )
 
-            async def _persist_archive() -> None:
-                if not is_archive_enabled(settings):
-                    logger.debug(
-                        "slack_archive_write_skipped",
-                        reason="archive_disabled",
-                        source=source,
-                    )
-                    return
-                try:
-                    archive = await ensure_archive(settings, project.slug)
-                    await write_message_bundle(
-                        archive=archive,
-                        message=frontmatter,
-                        body_md=message.body_md,
-                        sender=sender_agent.name,
-                        recipients=[agent.name for agent in recipient_agents],
-                        extra_paths=[],
-                    )
-                except Exception as exc:  # pragma: no cover - defensive logging
-                    logger.error("slack_archive_write_failed", error=str(exc), source=source)
-
-            _archive_task = asyncio.create_task(_persist_archive())
-            _ = _archive_task
+            logger.debug("slack_archive_write_skipped", reason="archive_removed", source=source)
 
             slack_client_ref = None
             try:
@@ -1367,7 +1332,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         to_agents = [r[0] for r in recipients_list if r[1] == "to"]
                         cc_agents = [r[0] for r in recipients_list if r[1] == "cc"]
                         bcc_agents = [r[0] for r in recipients_list if r[1] == "bcc"]
-                        frontmatter = app_module._message_frontmatter(
+                        app_module._message_frontmatter(
                             message=message,
                             project=project,
                             sender=sender_agent,
@@ -1377,23 +1342,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                             attachments=[],
                         )
 
-                        async def _persist_archive() -> None:
-                            try:
-                                archive_project = project or await app_module._get_default_project()
-                                archive = await ensure_archive(settings, archive_project.slug)
-                                await write_message_bundle(
-                                    archive=archive,
-                                    message=frontmatter,
-                                    body_md=message.body_md,
-                                    sender=sender_agent.name,
-                                    recipients=[agent.name for agent in recipient_agents],
-                                    extra_paths=[],
-                                )
-                            except Exception as exc:
-                                logger.error("slack_archive_write_failed", error=str(exc))
-
-                        _archive_task = asyncio.create_task(_persist_archive())
-                        _ = _archive_task
+                        logger.debug("slack_archive_write_skipped", reason="archive_removed")
 
                         # Capture thread mapping so outbound replies stay in the same Slack thread
                         slack_client_ref = app_module._slack_client
@@ -2283,15 +2232,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             if body_html:
                 body_html = _html_cleaner.clean(body_html)
 
-            # Get commit SHA for provenance badge
+            # Archive commit provenance has been removed.
             commit_sha = None
-            try:
-                settings = get_settings()
-                if is_archive_enabled(settings):
-                    archive = await ensure_archive(settings, prow[1], project_key=prow[2])
-                    commit_sha = await get_message_commit_sha(archive, mid)
-            except Exception:
-                pass  # Commit SHA is optional
 
             return await _render(
                 "mail_message.html",
@@ -2815,7 +2757,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     # Extract project info consistently
                     project_id = int(prow[0])
                     project_slug = prow[1]
-                    project_human_key = prow[2]
+                    prow[2]
 
                     # Get or create "HumanOverseer" agent (with race condition protection)
                     overseer_name = "HumanOverseer"
@@ -2941,45 +2883,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                             detail=f"None of the specified recipients exist in this project. Available agents can be seen at /mail/{project_slug}",
                         )
 
-                    settings = get_settings()
-                    if is_archive_enabled(settings):
-                        archive = await ensure_archive(settings, project_slug, project_key=project_human_key)
-
-                    # Build message dict for Git (when enabled)
-                    message_dict = {
-                        "id": message_id,
-                        "thread_id": thread_id,
-                        "project": project_human_key,
-                        "project_slug": project_slug,
-                        "from": overseer_name,
-                        "to": valid_recipients,
-                        "cc": [],
-                        "bcc": [],
-                        "subject": subject,
-                        "importance": "high",
-                        "ack_required": False,
-                        "created": now.isoformat(),
-                        "attachments": [],
-                    }
-
-                    if is_archive_enabled(settings):
-                        try:
-                            # Write message bundle (canonical + outbox + inboxes) to Git
-                            await write_message_bundle(
-                                archive,
-                                message_dict,
-                                full_body,
-                                overseer_name,
-                                valid_recipients,
-                                extra_paths=None,
-                                commit_text=f"Human Overseer message: {subject}",
-                            )
-                        except Exception as git_error:
-                            # Rollback database transaction if Git write fails
-                            await session.rollback()
-                            raise HTTPException(
-                                status_code=500, detail=f"Failed to write message to Git archive: {git_error!s}"
-                            ) from git_error
+                    get_settings()
 
                     # Update HumanOverseer activity timestamp (after successful Git write, before commit)
                     await session.execute(
@@ -3023,268 +2927,46 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             # Should match safe slug pattern
             return bool(re.match(r"^[a-z0-9_-]+$", slug, re.IGNORECASE))
 
-        @fastapi_app.get("/mail/archive/guide", response_class=HTMLResponse)
+        @fastapi_app.get("/mail/storage-disabled/guide", response_class=HTMLResponse)
         async def archive_guide() -> HTMLResponse:
-            """Display the archive access guide and overview."""
-            settings = get_settings()
-            storage_root = await anyio.Path(settings.storage.root).expanduser()
-            storage_root = str(await storage_root.resolve())
+            """Archive UI has been removed."""
+            return await _render("error.html", message="Archive storage has been removed.")
 
-            # Get basic stats
-            from pathlib import Path as P
-
-            from git import Repo as GitRepo
-
-            repo_root = P(storage_root)
-            if (repo_root / ".git").exists():
-                try:
-                    repo = GitRepo(str(repo_root))
-                    # Use efficient commit counting with limit to prevent DoS
-                    commit_count = sum(1 for _ in repo.iter_commits(max_count=10000))
-                    total_commits = "10,000+" if commit_count == 10000 else f"{commit_count:,}"
-                    last_commit = next(repo.iter_commits(max_count=1), None)
-                    last_commit_time = last_commit.authored_datetime.strftime("%b %d, %Y") if last_commit else "Never"
-
-                    # Count projects (with limit for performance)
-                    projects_dir = repo_root / "projects"
-                    if projects_dir.exists():
-                        # Use islice to avoid loading all dirs into memory
-                        from itertools import islice
-
-                        project_count = sum(1 for p in islice(projects_dir.iterdir(), 100) if p.is_dir())
-                    else:
-                        project_count = 0
-
-                    # Estimate size with timeout (run blocking 'du' in a worker thread)
-                    import asyncio as _asyncio
-                    import subprocess as _subprocess
-
-                    try:
-
-                        def _run_du():
-                            return _subprocess.run(
-                                ["du", "-sh", str(repo_root)],
-                                capture_output=True,
-                                text=True,
-                                timeout=5.0,
-                            )
-
-                        result = await _asyncio.to_thread(_run_du)
-                        repo_size = result.stdout.split()[0] if getattr(result, "returncode", 1) == 0 else "Unknown"
-                    except (_subprocess.TimeoutExpired, FileNotFoundError, PermissionError, OSError):
-                        # du not available, took too long, or other OS error
-                        repo_size = "Unknown"
-                    except Exception:
-                        # Catch-all for unexpected errors
-                        repo_size = "Unknown"
-                except Exception:
-                    total_commits = "0"
-                    project_count = 0
-                    repo_size = "Unknown"
-                    last_commit_time = "Unknown"
-            else:
-                total_commits = "0"
-                project_count = 0
-                repo_size = "0 MB"
-                last_commit_time = "Never"
-
-            # Get list of projects for picker
-            async with get_session() as session:
-                rows = await session.execute(text("SELECT slug, human_key FROM projects ORDER BY human_key"))
-                projects = [{"slug": r[0], "human_key": r[1]} for r in rows.fetchall()]
-
-            return await _render(
-                "archive_guide.html",
-                storage_root=storage_root,
-                total_commits=total_commits,
-                project_count=project_count,
-                repo_size=repo_size,
-                last_commit_time=last_commit_time,
-                projects=projects,
-            )
-
-        @fastapi_app.get("/mail/archive/activity", response_class=HTMLResponse)
+        @fastapi_app.get("/mail/storage-disabled/activity", response_class=HTMLResponse)
         async def archive_activity(limit: int = 50) -> HTMLResponse:
-            """Display recent commits across all projects."""
-            # Validate and cap limit to prevent DoS
-            limit = max(1, min(limit, 500))  # Between 1 and 500
+            """Archive UI has been removed."""
+            _ = limit
+            return await _render("error.html", message="Archive storage has been removed.")
 
-            settings = get_settings()
-            repo_root = await anyio.Path(settings.storage.root).expanduser()
-            repo_root = Path(await repo_root.resolve())
-
-            from git import Repo as GitRepo
-
-            if not (repo_root / ".git").exists():
-                return await _render("archive_activity.html", commits=[])
-
-            repo = GitRepo(str(repo_root))
-            commits = await get_recent_commits(repo, limit=limit)
-
-            return await _render("archive_activity.html", commits=commits)
-
-        @fastapi_app.get("/mail/archive/commit/{sha}", response_class=HTMLResponse)
+        @fastapi_app.get("/mail/storage-disabled/commit/{sha}", response_class=HTMLResponse)
         async def archive_commit(sha: str) -> HTMLResponse:
-            """Display detailed commit information with diffs."""
-            settings = get_settings()
-            repo_root = await anyio.Path(settings.storage.root).expanduser()
-            repo_root = Path(await repo_root.resolve())
+            """Archive UI has been removed."""
+            _ = sha
+            return await _render("error.html", message="Archive storage has been removed.")
 
-            from git import Repo as GitRepo
-
-            if not (repo_root / ".git").exists():
-                return await _render("error.html", message="Archive repository not found")
-
-            try:
-                repo = GitRepo(str(repo_root))
-                commit = await get_commit_detail(repo, sha)
-                return await _render("archive_commit.html", commit=commit)
-            except ValueError:
-                # Validation errors (bad SHA, etc.)
-                return await _render("error.html", message="Invalid commit identifier")
-            except Exception:
-                # Don't leak error details
-                return await _render("error.html", message="Commit not found")
-
-        @fastapi_app.get("/mail/archive/timeline", response_class=HTMLResponse)
+        @fastapi_app.get("/mail/storage-disabled/timeline", response_class=HTMLResponse)
         async def archive_timeline(project: str | None = None) -> HTMLResponse:
-            """Display communication timeline with Mermaid.js visualization."""
-            # Validate project slug if provided
-            if project and not _validate_project_slug(project):
-                return await _render("error.html", message="Invalid project identifier")
+            """Archive UI has been removed."""
+            _ = project
+            return await _render("error.html", message="Archive storage has been removed.")
 
-            settings = get_settings()
-            repo_root = await anyio.Path(settings.storage.root).expanduser()
-            repo_root = Path(await repo_root.resolve())
-
-            from git import Repo as GitRepo
-
-            if not (repo_root / ".git").exists():
-                return await _render("error.html", message="Archive repository not found")
-
-            # Default to first project if not specified
-            if not project:
-                async with get_session() as session:
-                    row = (
-                        await session.execute(text("SELECT slug, human_key FROM projects ORDER BY id LIMIT 1"))
-                    ).fetchone()
-                    if row:
-                        project = row[0]
-                    else:
-                        return await _render("error.html", message="No projects found")
-
-            # Get project name
-            project_name = project
-            async with get_session() as session:
-                row = (
-                    await session.execute(text("SELECT human_key FROM projects WHERE slug = :s"), {"s": project})
-                ).fetchone()
-                if row:
-                    project_name = row[0]
-
-            repo = GitRepo(str(repo_root))
-            commits = await get_timeline_commits(repo, project, limit=100)
-
-            return await _render("archive_timeline.html", commits=commits, project=project, project_name=project_name)
-
-        @fastapi_app.get("/mail/archive/browser", response_class=HTMLResponse)
+        @fastapi_app.get("/mail/storage-disabled/browser", response_class=HTMLResponse)
         async def archive_browser(project: str | None = None, path: str = "") -> HTMLResponse:
-            """Browse archive files and directories."""
-            if not project:
-                # Show project selector - requires project parameter
-                return await _render("error.html", message="Please select a project to browse")
+            """Archive UI has been removed."""
+            _ = (project, path)
+            return await _render("error.html", message="Archive storage has been removed.")
 
-            # Validate project slug
-            if not _validate_project_slug(project):
-                return await _render("error.html", message="Invalid project identifier")
-
-            async with get_session() as session:
-                human_row = (
-                    await session.execute(
-                        text("SELECT human_key FROM projects WHERE slug = :s OR human_key = :s"), {"s": project}
-                    )
-                ).fetchone()
-                project_human_key = human_row[0] if human_row else None
-
-            settings = get_settings()
-            if not is_archive_enabled(settings):
-                return await _render("error.html", message="Archive storage is disabled")
-            archive = await ensure_archive(settings, project, project_key=project_human_key)
-            tree = await get_archive_tree(archive, path)
-
-            return await _render("archive_browser.html", tree=tree, project=project, path=path)
-
-        @fastapi_app.get("/mail/archive/browser/{project}/file")
+        @fastapi_app.get("/mail/storage-disabled/browser/{project}/file")
         async def archive_browser_file(project: str, path: str) -> JSONResponse:
-            """Get file content from archive."""
-            # Validate project slug
-            if not _validate_project_slug(project):
-                raise HTTPException(status_code=400, detail="Invalid project identifier")
+            """Archive UI has been removed."""
+            _ = (project, path)
+            raise HTTPException(status_code=404, detail="Archive storage has been removed")
 
-            try:
-                async with get_session() as session:
-                    human_row = (
-                        await session.execute(
-                            text("SELECT human_key FROM projects WHERE slug = :s OR human_key = :s"), {"s": project}
-                        )
-                    ).fetchone()
-                    project_human_key = human_row[0] if human_row else None
-                settings = get_settings()
-                if not is_archive_enabled(settings):
-                    raise HTTPException(status_code=404, detail="Archive storage is disabled")
-                archive = await ensure_archive(settings, project, project_key=project_human_key)
-                content = await get_file_content(archive, path)
-
-                if content is None:
-                    raise HTTPException(status_code=404, detail="File not found")
-
-                return JSONResponse(content=content)
-            except ValueError as err:
-                # Path validation errors
-                raise HTTPException(status_code=400, detail="Invalid file path") from err
-            except Exception as err:
-                raise HTTPException(status_code=404, detail="File not found") from err
-
-        @fastapi_app.get("/mail/archive/network", response_class=HTMLResponse)
+        @fastapi_app.get("/mail/storage-disabled/network", response_class=HTMLResponse)
         async def archive_network(project: str | None = None) -> HTMLResponse:
-            """Display agent communication network graph."""
-            # Validate project slug if provided
-            if project and not _validate_project_slug(project):
-                return await _render("error.html", message="Invalid project identifier")
-
-            settings = get_settings()
-            repo_root = await anyio.Path(settings.storage.root).expanduser()
-            repo_root = Path(await repo_root.resolve())
-
-            from git import Repo as GitRepo
-
-            if not (repo_root / ".git").exists():
-                return await _render("error.html", message="Archive repository not found")
-
-            # Default to first project
-            if not project:
-                async with get_session() as session:
-                    row = (
-                        await session.execute(text("SELECT slug, human_key FROM projects ORDER BY id LIMIT 1"))
-                    ).fetchone()
-                    if row:
-                        project = row[0]
-                    else:
-                        return await _render("error.html", message="No projects found")
-
-            # Get project name
-            project_name = project
-            async with get_session() as session:
-                row = (
-                    await session.execute(text("SELECT human_key FROM projects WHERE slug = :s"), {"s": project})
-                ).fetchone()
-                if row:
-                    project_name = row[0]
-
-            repo = GitRepo(str(repo_root))
-            graph = await get_agent_communication_graph(repo, project, limit=200)
-
-            return await _render("archive_network.html", graph=graph, project=project, project_name=project_name)
+            """Archive UI has been removed."""
+            _ = project
+            return await _render("error.html", message="Archive storage has been removed.")
 
         @fastapi_app.get("/api/projects/{project}/agents")
         async def api_project_agents(project: str) -> JSONResponse:
@@ -3310,66 +2992,16 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
             return JSONResponse({"agents": agents})
 
-        @fastapi_app.get("/mail/archive/time-travel", response_class=HTMLResponse)
+        @fastapi_app.get("/mail/storage-disabled/time-travel", response_class=HTMLResponse)
         async def archive_time_travel() -> HTMLResponse:
-            """Display time-travel interface."""
-            # Get all projects
-            async with get_session() as session:
-                rows = await session.execute(text("SELECT slug FROM projects ORDER BY human_key"))
-                projects = [r[0] for r in rows.fetchall()]
+            """Archive UI has been removed."""
+            return await _render("error.html", message="Archive storage has been removed.")
 
-            return await _render("archive_time_travel.html", projects=projects)
-
-        @fastapi_app.get("/mail/archive/time-travel/snapshot")
+        @fastapi_app.get("/mail/storage-disabled/time-travel/snapshot")
         async def archive_time_travel_snapshot(project: str, agent: str, timestamp: str) -> JSONResponse:
-            """Get historical inbox snapshot."""
-            # Validate project slug
-            if not _validate_project_slug(project):
-                raise HTTPException(status_code=400, detail="Invalid project identifier")
-
-            # Validate agent name (alphanumeric only)
-            if not agent or not re.match(r"^[A-Za-z0-9]+$", agent):
-                raise HTTPException(status_code=400, detail="Invalid agent name format")
-
-            # Validate timestamp format (basic ISO 8601 check)
-            if not timestamp or not re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}", timestamp):
-                raise HTTPException(
-                    status_code=400, detail="Invalid timestamp format. Use ISO 8601 format (YYYY-MM-DDTHH:MM)"
-                )
-
-            try:
-                # Get project archive
-                settings = get_settings()
-                if not is_archive_enabled(settings):
-                    raise HTTPException(status_code=404, detail="Archive storage is disabled")
-                async with get_session() as session:
-                    human_row = (
-                        await session.execute(
-                            text("SELECT human_key FROM projects WHERE slug = :s OR human_key = :s"), {"s": project}
-                        )
-                    ).fetchone()
-                    project_human_key = human_row[0] if human_row else None
-                repo = await ensure_archive(settings, project, project_key=project_human_key)
-
-                # Get historical snapshot
-                snapshot = await get_historical_inbox_snapshot(repo, agent, timestamp, limit=200)
-
-                return JSONResponse(snapshot)
-
-            except Exception as e:
-                # Log error but return empty result rather than failing
-                structlog.get_logger("archive").warning(
-                    "time_travel_failed", project=project, agent=agent, timestamp=timestamp, error=str(e)
-                )
-                return JSONResponse(
-                    {
-                        "messages": [],
-                        "snapshot_time": None,
-                        "commit_sha": None,
-                        "requested_time": timestamp,
-                        "error": f"Unable to retrieve historical snapshot: {e!s}",
-                    }
-                )
+            """Archive UI has been removed."""
+            _ = (project, agent, timestamp)
+            raise HTTPException(status_code=404, detail="Archive storage has been removed")
 
     try:
         _register_mail_ui()
