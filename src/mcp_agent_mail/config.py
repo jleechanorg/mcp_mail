@@ -2,7 +2,7 @@
 
 Configuration sources (in order of precedence):
 1. Environment variables
-2. ~/.mcp_mail/credentials.json (for secrets, recommended for PyPI installs)
+2. ~/.mcp_agent_mail_git_mailbox_repo/credentials.json (for secrets, recommended for PyPI installs)
 3. .env file in current directory (for development)
 """
 
@@ -16,10 +16,10 @@ from typing import Final, Literal, cast
 from decouple import Config as DecoupleConfig, RepositoryEnv
 
 # User-level credentials file (preferred for PyPI installs)
-_USER_CREDENTIALS_PATH: Final[Path] = Path.home() / ".mcp_mail" / "credentials.json"
+_USER_CREDENTIALS_PATH: Final[Path] = Path.home() / ".mcp_agent_mail_git_mailbox_repo" / "credentials.json"
 _DOTENV_PATH: Final[Path] = Path(".env")
 
-# Load user credentials from ~/.mcp_mail/credentials.json
+# Load user credentials from ~/.mcp_agent_mail_git_mailbox_repo/credentials.json
 _user_credentials: dict[str, str] = {}
 if _USER_CREDENTIALS_PATH.exists():
     try:
@@ -106,11 +106,9 @@ class DatabaseSettings:
 
 @dataclass(slots=True, frozen=True)
 class StorageSettings:
-    """Filesystem/Git storage configuration."""
+    """Filesystem storage configuration."""
 
     root: str
-    git_author_name: str
-    git_author_email: str
     inline_image_max_bytes: int
     convert_images: bool
     keep_original_images: bool
@@ -313,16 +311,17 @@ def get_settings() -> Settings:
     )
 
     database_settings = DatabaseSettings(
-        # Store SQLite database inside .mcp_mail/ alongside Git archive
-        url=_decouple_config("DATABASE_URL", default="sqlite+aiosqlite:///./.mcp_mail/storage.sqlite3"),
+        # Store SQLite database under the upstream mailbox root by default
+        url=_decouple_config(
+            "DATABASE_URL",
+            default=f"sqlite+aiosqlite:///{Path.home() / '.mcp_agent_mail_git_mailbox_repo' / 'storage.sqlite3'}",
+        ),
         echo=_bool(_decouple_config("DATABASE_ECHO", default="false"), default=False),
     )
 
     storage_settings = StorageSettings(
-        # Default to project-local storage (committed to git) for transparency
-        root=_decouple_config("STORAGE_ROOT", default=".mcp_mail"),
-        git_author_name=_decouple_config("GIT_AUTHOR_NAME", default="mcp-agent"),
-        git_author_email=_decouple_config("GIT_AUTHOR_EMAIL", default="mcp-agent@example.com"),
+        # Default to upstream mailbox root in the user's home directory
+        root=_decouple_config("STORAGE_ROOT", default=str(Path.home() / ".mcp_agent_mail_git_mailbox_repo")),
         inline_image_max_bytes=_int(
             _decouple_config("INLINE_IMAGE_MAX_BYTES", default=str(64 * 1024)), default=64 * 1024
         ),
