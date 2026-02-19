@@ -201,11 +201,7 @@ async def test_agent_names_strict_mode_raises_errors(isolated_env, monkeypatch):
 
         # Verify the error is about the name being taken globally
         error_msg = str(exc_info.value).lower()
-        assert (
-            "already in use" in error_msg
-            or "name_taken" in error_msg
-            or "exists in another project" in error_msg
-        )
+        assert "already in use" in error_msg or "name_taken" in error_msg or "exists in another project" in error_msg
 
 
 @pytest.mark.asyncio

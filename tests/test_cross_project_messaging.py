@@ -3,6 +3,7 @@
 Projects are informational labels (e.g., repo paths). They do NOT isolate agents —
 any agent can message any other agent regardless of project_key.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -142,7 +143,9 @@ async def test_cross_project_reply(isolated_env):
             },
         )
         send_data = _extract_result(send_result)
-        deliveries = send_data.get("deliveries") if isinstance(send_data, dict) else getattr(send_data, "deliveries", [])
+        deliveries = (
+            send_data.get("deliveries") if isinstance(send_data, dict) else getattr(send_data, "deliveries", [])
+        )
         mid = deliveries[0]["payload"]["id"]
 
         # Fern replies from project-b — should work cross-project
@@ -156,7 +159,11 @@ async def test_cross_project_reply(isolated_env):
             },
         )
         reply_data = _extract_result(reply_result)
-        thread_id = reply_data.get("thread_id") if isinstance(reply_data, dict) else getattr(reply_data, "thread_id", None)
-        deliveries_reply = reply_data.get("deliveries") if isinstance(reply_data, dict) else getattr(reply_data, "deliveries", [])
+        thread_id = (
+            reply_data.get("thread_id") if isinstance(reply_data, dict) else getattr(reply_data, "thread_id", None)
+        )
+        deliveries_reply = (
+            reply_data.get("deliveries") if isinstance(reply_data, dict) else getattr(reply_data, "deliveries", [])
+        )
         assert thread_id, "Reply should have thread_id"
         assert deliveries_reply, "Reply should have deliveries"
