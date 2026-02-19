@@ -23,8 +23,6 @@ import anyio
 from fastmcp import Context, FastMCP
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.tools.tool import ToolResult
-from git import Repo
-from git.exc import InvalidGitRepositoryError, NoSuchPathError
 from sqlalchemy import Column, Integer, MetaData, Table, asc, bindparam, delete, desc, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, NoResultFound, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -87,10 +85,7 @@ DEFAULT_PROJECT_KEY = "global"
 
 
 async def _ensure_archive_if_enabled(settings: Settings, project: Project) -> ProjectArchive | None:
-    """Initialize and return the project archive when archive storage is enabled.
-
-    NOTE: Archive storage has been removed. This always returns None.
-    """
+    """Legacy compatibility shim; always returns None."""
     return None
 
 
@@ -707,28 +702,6 @@ def _latest_filesystem_activity(paths: Sequence[Path]) -> Optional[datetime]:
     return max(mtimes)
 
 
-def _latest_git_activity(repo: Optional[Repo], matches: Sequence[Path]) -> Optional[datetime]:
-    if repo is None:
-        return None
-    repo_root = Path(repo.working_tree_dir or "").resolve()
-    commit_times: list[datetime] = []
-    for match in matches:
-        try:
-            rel_path = match.resolve().relative_to(repo_root)
-        except Exception:
-            continue
-        try:
-            commit = next(repo.iter_commits(paths=str(rel_path), max_count=1))
-        except StopIteration:
-            continue
-        except Exception:
-            continue
-        commit_times.append(datetime.fromtimestamp(commit.committed_date, tz=timezone.utc))
-    if not commit_times:
-        return None
-    return max(commit_times)
-
-
 def _project_workspace_path(project: Project) -> Optional[Path]:
     try:
         candidate = Path(project.human_key).expanduser()
@@ -737,25 +710,6 @@ def _project_workspace_path(project: Project) -> Optional[Path]:
     with suppress(OSError):
         if candidate.exists():
             return candidate
-    return None
-
-
-def _open_repo_if_available(workspace: Optional[Path]) -> Optional[Repo]:
-    if workspace is None:
-        return None
-    try:
-        repo = Repo(workspace, search_parent_directories=True)
-    except (InvalidGitRepositoryError, NoSuchPathError):
-        return None
-    except Exception:
-        return None
-    try:
-        root = Path(repo.working_tree_dir or "")
-    except Exception:
-        return None
-    with suppress(Exception):
-        workspace.resolve().relative_to(root.resolve())
-        return repo
     return None
 
 
@@ -2237,8 +2191,6 @@ async def _collect_file_reservation_statuses(
             read_map = {row[0]: _ensure_utc(row[1]) for row in read_result}
 
     workspace = _project_workspace_path(project)
-    repo = _open_repo_if_available(workspace) if workspace is not None else None
-
     statuses: list[FileReservationStatus] = []
     for reservation, agent in rows:
         agent_id = agent.id or -1
@@ -2247,22 +2199,17 @@ async def _collect_file_reservation_statuses(
 
         matches: list[Path] = []
         fs_activity: Optional[datetime] = None
-        git_activity: Optional[datetime] = None
 
         if workspace is not None:
             matches = _collect_matching_paths(workspace, reservation.path_pattern)
             if matches:
                 fs_activity = _latest_filesystem_activity(matches)
-                git_activity = _latest_git_activity(repo, matches)
 
         agent_inactive = agent_last_active is None or (moment - agent_last_active).total_seconds() > inactivity_seconds
         recent_mail = last_mail is not None and (moment - last_mail).total_seconds() <= activity_grace
         recent_fs = fs_activity is not None and (moment - fs_activity).total_seconds() <= activity_grace
-        recent_git = git_activity is not None and (moment - git_activity).total_seconds() <= activity_grace
 
-        stale = bool(
-            reservation.released_ts is None and agent_inactive and not (recent_mail or recent_fs or recent_git)
-        )
+        stale = bool(reservation.released_ts is None and agent_inactive and not (recent_mail or recent_fs))
         reasons: list[str] = []
         if agent_inactive:
             reasons.append(f"agent_inactive>{inactivity_seconds}s")
@@ -2277,12 +2224,9 @@ async def _collect_file_reservation_statuses(
                 reasons.append("filesystem_activity_recent")
             else:
                 reasons.append(f"no_recent_filesystem_activity>{activity_grace}s")
-            if recent_git:
-                reasons.append("git_activity_recent")
-            else:
-                reasons.append(f"no_recent_git_activity>{activity_grace}s")
         else:
             reasons.append("path_pattern_unmatched")
+        reasons.append("git_activity_not_tracked")
 
         statuses.append(
             FileReservationStatus(
@@ -2293,7 +2237,7 @@ async def _collect_file_reservation_statuses(
                 last_agent_activity=agent_last_active,
                 last_mail_activity=last_mail,
                 last_fs_activity=fs_activity,
-                last_git_activity=git_activity,
+                last_git_activity=None,
             )
         )
     return statuses
@@ -3217,7 +3161,7 @@ def build_mcp_server() -> FastMCP:
                     }
                 }
 
-        # Body processing - attachments tracked as metadata only (archive storage removed)
+        # Body processing - attachments tracked as metadata only
         processed_body = body_md
         attachments_meta: list[dict[str, object]] = []
         # Detect inline data URI images in body
@@ -3508,9 +3452,7 @@ def build_mcp_server() -> FastMCP:
         - Accepts any string as the project identifier (human_key).
         - Computes a stable slug from `human_key` (lowercased, safe characters) so
           multiple agents can refer to the same project consistently.
-        - Ensures the DB row exists and, when archive storage is enabled, initializes
-          the on-disk archive (e.g., `messages/`, `agents/`, `file_reservations/`
-          directories).
+        - Ensures the DB row exists.
 
         CRITICAL: Project Identity Rules
         ---------------------------------
@@ -3566,8 +3508,7 @@ def build_mcp_server() -> FastMCP:
         Idempotency
         -----------
         - Safe to call multiple times. If the project already exists, the existing
-          record is returned and the archive is ensured on disk when archive storage
-          is enabled (no destructive changes).
+          record is returned (no destructive changes).
         """
         await ctx.info(f"Ensuring project for key '{human_key}'.")
         project = await _ensure_project(human_key)
@@ -3597,7 +3538,7 @@ def build_mcp_server() -> FastMCP:
         inbox_include_bodies: bool = False,
     ) -> dict[str, Any]:
         """
-        Create or update an agent identity within a project and persist its profile to Git when enabled.
+        Create or update an agent identity within a project.
 
         IMPORTANT: Global Namespace
         ---------------------------
@@ -3617,10 +3558,7 @@ def build_mcp_server() -> FastMCP:
         - If `name` is omitted, a random adjective+noun name is auto-generated (e.g., "BlueLake").
         - Reusing the same `name` updates the profile (program/model/task) and
           refreshes `last_active_ts`.
-        - Registration succeeds even when archive storage is disabled; in that case
-          Git profile writes are skipped.
-        - When archive storage is enabled, a `profile.json` file is written under
-          `agents/<Name>/` in the project archive.
+        - Registration writes database records only.
         - Providing a name that is active in another project automatically retires that identity so you can claim the handle.
 
         CRITICAL: Agent Naming Rules
@@ -3775,13 +3713,13 @@ def build_mcp_server() -> FastMCP:
         - Deletes all messages sent by the agent
         - Deletes all message recipient records for the agent
         - Deletes all file reservations held by the agent
-        - Writes a deletion marker to the Git archive at agents/<Name>/deleted.json
+        - No filesystem marker files are written.
 
         WARNING
         -------
         This operation is DESTRUCTIVE and IRREVERSIBLE. All messages and reservations
         associated with this agent will be permanently deleted from the database.
-        A deletion marker will be preserved in the Git archive for audit purposes.
+        Deletion is reflected in the database.
 
         Parameters
         ----------
@@ -3935,7 +3873,7 @@ def build_mcp_server() -> FastMCP:
         attachments_policy: str = "auto",
     ) -> dict[str, Any]:
         """
-        Create a new, unique agent identity and persist its profile to Git.
+        Create a new, unique agent identity.
 
         How this differs from `register_agent`
         --------------------------------------
@@ -4054,7 +3992,7 @@ def build_mcp_server() -> FastMCP:
         --------------
         - Stores message (and recipients) in the database; updates sender's activity
         - Records attachment metadata for inline data URIs and explicit attachment paths
-        - Does not copy files or convert images (archive storage is removed)
+        - Does not copy files or convert images
 
         Parameters
         ----------
@@ -6091,7 +6029,7 @@ def build_mcp_server() -> FastMCP:
         ---------
         - Conflicts are reported if an overlapping active exclusive reservation exists held by another agent
         - Glob matching is symmetric (`fnmatchcase(a,b)` or `fnmatchcase(b,a)`), including exact matches
-        - The database is the source of truth; archive artifacts are disabled when archive storage is removed
+        - The database is the source of truth
         - TTL must be >= 60 seconds (enforced by the server settings/policy)
 
         Do / Don't
@@ -7186,7 +7124,7 @@ def build_mcp_server() -> FastMCP:
                     },
                     {
                         "name": "whois",
-                        "summary": "Return enriched profile info plus recent archive commits for an agent.",
+                        "summary": "Return enriched profile info for an agent.",
                         "use_when": "Dashboarding, routing coordination messages, or auditing activity.",
                         "related": ["register_agent"],
                         "expected_frequency": "Ad hoc when context about an agent is required.",
@@ -7510,7 +7448,7 @@ def build_mcp_server() -> FastMCP:
 
     @mcp.resource("resource://tooling/locks", mime_type="application/json")
     def tooling_locks_resource() -> dict[str, Any]:
-        """Return lock metadata from the shared archive storage."""
+        """Return lock metadata from runtime coordination state."""
 
         settings_local = get_settings()
         return collect_lock_status(settings_local)

@@ -50,7 +50,7 @@ from .share import (
     sign_manifest,
     summarize_snapshot,
 )
-from .storage import ensure_archive, ensure_runtime_project_root, is_archive_enabled
+from .storage import ensure_runtime_project_root, is_archive_enabled
 from .utils import safe_filesystem_component, slugify
 
 # Suppress annoying bleach CSS sanitizer warning from dependencies
@@ -2043,6 +2043,20 @@ def file_reservations_list(
     console.print(table)
 
 
+def _get_git_branch(repo_path: Path) -> str:
+    """Return the current git branch name, or 'unknown' on failure."""
+    try:
+        cp = subprocess.run(
+            ["git", "-C", str(repo_path), "rev-parse", "--abbrev-ref", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return cp.stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
 @app.command("amctl-env")
 def amctl_env(
     project_path: Path = typer.Option(
@@ -2064,18 +2078,7 @@ def amctl_env(
     slug = slugify(str(p))
     project_uid = hashlib.sha256(str(p).encode()).hexdigest()[:16]
     # Determine branch
-    branch = ""
-    if True:
-        try:
-            from git import Repo as _Repo
-
-            repo = _Repo(str(p), search_parent_directories=True)
-            try:
-                branch = repo.active_branch.name
-            except Exception:
-                branch = repo.git.rev_parse("--abbrev-ref", "HEAD").strip()
-        except Exception:
-            branch = "unknown"
+    branch = _get_git_branch(p)
     # Compute cache key and artifact dir
     settings = get_settings()
     cache_key = f"am-cache-{project_uid}-{agent_name}-{branch}"
@@ -2116,29 +2119,14 @@ def am_run(
     # Generate project identity from path
     slug = slugify(str(p))
     project_uid = hashlib.sha256(str(p).encode()).hexdigest()[:16]
-    branch = ""
-    if not branch:
-        try:
-            from git import Repo as _Repo
-
-            repo = _Repo(str(p), search_parent_directories=True)
-            try:
-                branch = repo.active_branch.name
-            except Exception:
-                branch = repo.git.rev_parse("--abbrev-ref", "HEAD").strip()
-        except Exception:
-            branch = "unknown"
+    branch = _get_git_branch(p)
     settings = get_settings()
     guard_mode = (os.environ.get("AGENT_MAIL_GUARD_MODE", "block") or "block").strip().lower()
     worktrees_enabled = bool(settings.worktrees_enabled) and is_archive_enabled(settings)
 
     async def _ensure_slot_paths() -> Path:
-        if is_archive_enabled(settings):
-            archive = await ensure_archive(settings, slug, project_key=str(p))
-            slot_dir = archive.root / "build_slots" / safe_filesystem_component(slot)
-        else:
-            runtime_project_root = await ensure_runtime_project_root(settings, slug)
-            slot_dir = runtime_project_root / "build_slots" / safe_filesystem_component(slot)
+        runtime_project_root = await ensure_runtime_project_root(settings, slug)
+        slot_dir = runtime_project_root / "build_slots" / safe_filesystem_component(slot)
         slot_dir.mkdir(parents=True, exist_ok=True)
         return slot_dir
 
@@ -2296,18 +2284,13 @@ def mail_status(
 
     normalized_remote: Optional[str] = None
     try:
-        from git import Repo as _Repo  # local import to avoid CLI startup cost
-
-        repo = _Repo(str(p), search_parent_directories=True)
-        try:
-            url = repo.git.remote("get-url", remote_name).strip() or None
-        except Exception:
-            try:
-                r = next((r for r in repo.remotes if r.name == remote_name), None)
-                url = next(iter(r.urls), None) if r and r.urls else None
-            except Exception:
-                url = None
-        normalized_remote = _norm_remote(url)
+        cp = subprocess.run(
+            ["git", "-C", str(p), "remote", "get-url", remote_name],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        normalized_remote = _norm_remote(cp.stdout.strip() or None)
     except Exception:
         normalized_remote = None
 
