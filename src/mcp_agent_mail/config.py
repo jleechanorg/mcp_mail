@@ -2,7 +2,8 @@
 
 Configuration sources (in order of precedence):
 1. Environment variables
-2. ~/.mcp_agent_mail_git_mailbox_repo/credentials.json (for secrets, recommended for PyPI installs)
+2. ~/.mcp_agent_mail_git_mailbox_repo/credentials.json (preferred)
+   Falls back to ~/.mcp_mail/credentials.json (legacy, for backward compatibility)
 3. .env file in current directory (for development)
 """
 
@@ -17,13 +18,15 @@ from decouple import Config as DecoupleConfig, RepositoryEnv
 
 # User-level credentials file (preferred for PyPI installs)
 _USER_CREDENTIALS_PATH: Final[Path] = Path.home() / ".mcp_agent_mail_git_mailbox_repo" / "credentials.json"
+_LEGACY_CREDENTIALS_PATH: Final[Path] = Path.home() / ".mcp_mail" / "credentials.json"
 _DOTENV_PATH: Final[Path] = Path(".env")
 
-# Load user credentials from ~/.mcp_agent_mail_git_mailbox_repo/credentials.json
+# Load user credentials: prefer new path, fall back to legacy ~/.mcp_mail/
 _user_credentials: dict[str, str] = {}
-if _USER_CREDENTIALS_PATH.exists():
+_credentials_path = _USER_CREDENTIALS_PATH if _USER_CREDENTIALS_PATH.exists() else _LEGACY_CREDENTIALS_PATH
+if _credentials_path.exists():
     try:
-        with _USER_CREDENTIALS_PATH.open() as f:
+        with _credentials_path.open() as f:
             _user_credentials = json.load(f)
     except (json.JSONDecodeError, OSError):
         pass  # Silently ignore malformed credentials file

@@ -1091,19 +1091,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 attachments=[],
             )
 
-            to_agents = [r[0] for r in recipients_list if r[1] == "to"]
-            cc_agents = [r[0] for r in recipients_list if r[1] == "cc"]
-            bcc_agents = [r[0] for r in recipients_list if r[1] == "bcc"]
-            app_module._message_frontmatter(
-                message=message,
-                project=project,
-                sender=sender_agent,
-                to_agents=to_agents,
-                cc_agents=cc_agents,
-                bcc_agents=bcc_agents,
-                attachments=[],
-            )
-
             logger.debug("slack_archive_write_skipped", reason="archive_removed", source=source)
 
             slack_client_ref = None
@@ -1325,20 +1312,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                             importance="normal",
                             ack_required=False,
                             thread_id=message_info.get("thread_id"),
-                            attachments=[],
-                        )
-
-                        # Write message to archive in background to avoid webhook timeout
-                        to_agents = [r[0] for r in recipients_list if r[1] == "to"]
-                        cc_agents = [r[0] for r in recipients_list if r[1] == "cc"]
-                        bcc_agents = [r[0] for r in recipients_list if r[1] == "bcc"]
-                        app_module._message_frontmatter(
-                            message=message,
-                            project=project,
-                            sender=sender_agent,
-                            to_agents=to_agents,
-                            cc_agents=cc_agents,
-                            bcc_agents=bcc_agents,
                             attachments=[],
                         )
 
@@ -2757,7 +2730,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     # Extract project info consistently
                     project_id = int(prow[0])
                     project_slug = prow[1]
-                    prow[2]
 
                     # Get or create "HumanOverseer" agent (with race condition protection)
                     overseer_name = "HumanOverseer"
@@ -2882,8 +2854,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                             status_code=400,
                             detail=f"None of the specified recipients exist in this project. Available agents can be seen at /mail/{project_slug}",
                         )
-
-                    get_settings()
 
                     # Update HumanOverseer activity timestamp (after successful Git write, before commit)
                     await session.execute(
