@@ -2209,9 +2209,7 @@ async def _collect_file_reservation_statuses(
         recent_mail = last_mail is not None and (moment - last_mail).total_seconds() <= activity_grace
         recent_fs = fs_activity is not None and (moment - fs_activity).total_seconds() <= activity_grace
 
-        stale = bool(
-            reservation.released_ts is None and agent_inactive and not (recent_mail or recent_fs)
-        )
+        stale = bool(reservation.released_ts is None and agent_inactive and not (recent_mail or recent_fs))
         reasons: list[str] = []
         if agent_inactive:
             reasons.append(f"agent_inactive>{inactivity_seconds}s")

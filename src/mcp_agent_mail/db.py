@@ -92,6 +92,21 @@ def _build_engine(settings: DatabaseSettings) -> AsyncEngine:
     is_sqlite = "sqlite" in settings.url.lower()
 
     if is_sqlite:
+        # Ensure the parent directory for the SQLite database file exists.
+        # This prevents "unable to open database file" errors on fresh installs
+        # or in CI where ~/.mcp_agent_mail_git_mailbox_repo hasn't been created yet.
+        from pathlib import Path
+        from urllib.parse import urlparse
+
+        parsed = urlparse(settings.url)
+        # aiosqlite URLs look like: sqlite+aiosqlite:///path/to/db.sqlite3
+        db_path_str = parsed.path.lstrip("/") if parsed.path else ""
+        if db_path_str:
+            db_file = Path(db_path_str)
+            if not db_file.parent.exists():
+                db_file.parent.mkdir(parents=True, exist_ok=True)
+                logger.info("Created database directory: %s", db_file.parent)
+
         # Register datetime adapters ONCE globally for Python 3.12+ compatibility
         # These are module-level registrations, not per-connection
         import datetime as dt_module
