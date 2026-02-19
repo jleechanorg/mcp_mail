@@ -89,6 +89,9 @@ def validate_agent_name_format(name: str) -> bool:
     if not name:
         return False
 
+    if len(name) > 128:
+        return False
+
     # Check if name matches any valid adjective+noun combination with optional numeric suffix
     name_lower = name.lower()
     for adjective in ADJECTIVES:

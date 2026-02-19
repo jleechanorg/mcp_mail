@@ -145,7 +145,12 @@ def _build_engine(settings: DatabaseSettings) -> AsyncEngine:
         }
 
     pool_kwargs: dict[str, Any]
-    pool_kwargs = {"pool_size": 1, "max_overflow": 0} if is_sqlite else {"pool_size": 10, "max_overflow": 10}
+    # SQLite needs pool_size > 1 because the codebase uses nested get_session() calls
+    # (e.g. send_message holds a session while _create_placeholder_agent opens another).
+    # pool_size=1 causes deadlocks; 5 is sufficient for nesting without unbounded growth.
+    pool_kwargs: dict[str, int] = (
+        {"pool_size": 5, "max_overflow": 0} if is_sqlite else {"pool_size": 10, "max_overflow": 10}
+    )
 
     engine = create_async_engine(
         settings.url,
