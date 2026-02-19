@@ -67,18 +67,18 @@ bash -lc "cd /Users/jleechan/mcp_agent_mail && ./scripts/run_server_with_token.s
 
 ### MCP Agent Mail Credentials
 
-Credentials for MCP Agent Mail (especially Slack integration) should be stored in `~/.mcp_mail/credentials.json`. This is the **recommended location for PyPI package installs**.
+Credentials for MCP Agent Mail (especially Slack integration) should be stored in `~/.mcp_agent_mail_git_mailbox_repo/credentials.json`. This is the **recommended location for PyPI package installs**.
 
 **Credential precedence** (highest to lowest):
 1. Environment variables
-2. `~/.mcp_mail/credentials.json` (user-level, recommended)
+2. `~/.mcp_agent_mail_git_mailbox_repo/credentials.json` (user-level, recommended)
 3. Local `.env` file (development)
 4. Built-in defaults
 
 **Quick setup:**
 ```bash
-mkdir -p ~/.mcp_mail
-cat > ~/.mcp_mail/credentials.json <<'EOF'
+mkdir -p ~/.mcp_agent_mail_git_mailbox_repo
+cat > ~/.mcp_agent_mail_git_mailbox_repo/credentials.json <<'EOF'
 {
   "SLACK_ENABLED": "true",
   "SLACK_BOT_TOKEN": "xoxb-your-bot-token",
@@ -86,7 +86,7 @@ cat > ~/.mcp_mail/credentials.json <<'EOF'
   "SLACK_WEBHOOK_URL": "https://your-public-url/slack/events"
 }
 EOF
-chmod 600 ~/.mcp_mail/credentials.json
+chmod 600 ~/.mcp_agent_mail_git_mailbox_repo/credentials.json
 ```
 
 **Tunnelmole for public URLs:** Use `npm i -g tunnelmole && tmole 8765` to get a permanent public URL for Slack webhooks.

@@ -43,8 +43,8 @@ fi
 # Ensure HTTP_BEARER_TOKEN is available for Codex CLI
 if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then
   # Try standard locations
-  if [[ -f "${HOME}/.mcp_mail/credentials.json" ]] && command -v jq >/dev/null 2>&1; then
-    HTTP_BEARER_TOKEN=$(jq -r '.HTTP_BEARER_TOKEN // empty' "${HOME}/.mcp_mail/credentials.json" 2>/dev/null || true)
+  if [[ -f "${HOME}/.mcp_agent_mail_git_mailbox_repo/credentials.json" ]] && command -v jq >/dev/null 2>&1; then
+    HTTP_BEARER_TOKEN=$(jq -r '.HTTP_BEARER_TOKEN // empty' "${HOME}/.mcp_agent_mail_git_mailbox_repo/credentials.json" 2>/dev/null || true)
   fi
   
   if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then

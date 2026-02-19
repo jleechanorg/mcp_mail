@@ -152,8 +152,6 @@ def _build_environment() -> dict[str, Any]:
         "HTTP_PORT": "8765",
         "HTTP_PATH": "/mcp/",
         "STORAGE_ROOT": str(storage_root),
-        "GIT_AUTHOR_NAME": "integration-bot",
-        "GIT_AUTHOR_EMAIL": "integration-bot@example.com",
         "INLINE_IMAGE_MAX_BYTES": str(128 * 1024),
         "CONVERT_IMAGES": "true",
         "KEEP_ORIGINAL_IMAGES": "false",

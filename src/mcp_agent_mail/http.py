@@ -1314,7 +1314,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                             thread_id=message_info.get("thread_id"),
                             attachments=[],
                         )
-
                         logger.debug("slack_archive_write_skipped", reason="archive_removed")
 
                         # Capture thread mapping so outbound replies stay in the same Slack thread

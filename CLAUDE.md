@@ -257,15 +257,15 @@ Current credentials configured in `~/.bashrc`:
 
 ### MCP Agent Mail Credentials
 
-For MCP Agent Mail server credentials (especially Slack integration), use the dedicated credentials file at `~/.mcp_mail/credentials.json`. This is the **preferred location for PyPI installs** where there's no local `.env` file.
+For MCP Agent Mail server credentials (especially Slack integration), use the dedicated credentials file at `~/.mcp_agent_mail_git_mailbox_repo/credentials.json`. This is the **preferred location for PyPI installs** where there's no local `.env` file.
 
 **Credential precedence** (highest to lowest):
 1. Environment variables
-2. `~/.mcp_mail/credentials.json` (user-level, recommended)
+2. `~/.mcp_agent_mail_git_mailbox_repo/credentials.json` (user-level, recommended)
 3. Local `.env` file (development)
 4. Built-in defaults
 
-**Example `~/.mcp_mail/credentials.json`:**
+**Example `~/.mcp_agent_mail_git_mailbox_repo/credentials.json`:**
 ```json
 {
   "SLACK_ENABLED": "true",
@@ -282,9 +282,9 @@ For MCP Agent Mail server credentials (especially Slack integration), use the de
 ```
 
 **Setup steps:**
-1. Create the directory: `mkdir -p ~/.mcp_mail`
+1. Create the directory: `mkdir -p ~/.mcp_agent_mail_git_mailbox_repo`
 2. Create the credentials file with your values
-3. Secure permissions: `chmod 600 ~/.mcp_mail/credentials.json`
+3. Secure permissions: `chmod 600 ~/.mcp_agent_mail_git_mailbox_repo/credentials.json`
 4. Restart the MCP Agent Mail server
 
 **Where to get Slack credentials:**

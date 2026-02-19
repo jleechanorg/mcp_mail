@@ -1,7 +1,7 @@
 """Integration test for since_ts filter bug in fetch_inbox and fetch_outbox.
 
 This test demonstrates the bug where since_ts parameter doesn't filter correctly
-when using .mcp_mail/ storage with SQLite database.
+when using isolated storage with SQLite database.
 """
 
 from __future__ import annotations
@@ -26,19 +26,17 @@ def _get(field: str, obj):
 
 @pytest.fixture
 async def mcp_mail_storage(tmp_path, monkeypatch):
-    """Set up .mcp_mail/ storage with real implementation."""
+    """Set up isolated storage with real implementation."""
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
 
-    # Set up .mcp_mail/ as storage location
-    mcp_mail_dir = project_dir / ".mcp_mail"
+    # Set up isolated storage location
+    mcp_mail_dir = project_dir / "mailbox"
     mcp_mail_dir.mkdir()
 
-    # Configure environment to use .mcp_mail/ storage
+    # Configure environment to use isolated storage
     monkeypatch.setenv("STORAGE_ROOT", str(mcp_mail_dir))
     monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{mcp_mail_dir}/storage.sqlite3")
-    monkeypatch.setenv("GIT_AUTHOR_NAME", "test-agent")
-    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "test@example.com")
 
     # Clear settings cache to pick up new env vars
     _config.clear_settings_cache()

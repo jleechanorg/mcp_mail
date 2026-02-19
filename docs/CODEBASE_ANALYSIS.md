@@ -53,9 +53,8 @@ MCP Agent Mail (forked from the original `mcp_agent_mail`) is a production-grade
                ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ Persistent Storage                                           │
-│ - .mcp_mail/ (Git archive, project-local by default)       │
-│   Alternative: ~/.mcp_agent_mail_git_mailbox_repo/ (global)│
-│ - .mcp_mail/storage.sqlite3 (metadata + FTS5 indexes)      │
+│ - ~/.mcp_agent_mail_git_mailbox_repo/ (default mailbox root)│
+│ - storage.sqlite3 (metadata + FTS5 indexes)                 │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -168,25 +167,18 @@ MCP Agent Mail (forked from the original `mcp_agent_mail`) is a production-grade
 - `macro_prepare_thread()` - Fetch thread context + summarize + prepare for work
 - `macro_file_reservation_cycle()` - Claim → wait_for_ack → release
 
-### 7. **Git-Backed Archive**
+### 7. **Storage Backend**
 
 **What it does:**
-- All messages, profiles, reservations committed to Git
-- Enables: history, blame, diffing, human auditing
-- Per-project archive isolation
+- Stores messages, metadata, and indexes in SQLite-backed storage under the configured root
+- Enables fast search, retention, and mailbox queries without archive commits
 
 **Structure:**
 ```
-.mcp_mail/  # Project-local by default (global alternative: ~/.mcp_agent_mail_git_mailbox_repo/)
+~/.mcp_agent_mail_git_mailbox_repo/
 ├── projects/
 │   └── <slug>/
-│       ├── agents/
-│       │   ├── <agent_name>.md
-│       │   └── ...
-│       ├── messages/
-│       │   ├── <sender_name>/
-│       │   │   └── <thread_id>.md
-│       │   └── ...
+│       ├── attachments/
 │       ├── file_reservations/
 │       │   └── <timestamp>.md
 │       └── archive.json
@@ -414,11 +406,9 @@ DATABASE_URL=sqlite+aiosqlite:///./storage.sqlite3
 DATABASE_ECHO=false
 ```
 
-**Storage (Git Archive):**
+**Storage:**
 ```
-STORAGE_ROOT=.mcp_mail  # Use ~/.mcp_agent_mail_git_mailbox_repo for global storage
-GIT_AUTHOR_NAME=mcp-agent
-GIT_AUTHOR_EMAIL=mcp-agent@example.com
+STORAGE_ROOT=~/.mcp_agent_mail_git_mailbox_repo
 ```
 
 **LLM:**

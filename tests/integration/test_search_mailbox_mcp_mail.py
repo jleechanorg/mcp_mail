@@ -1,8 +1,8 @@
-"""Integration tests for search_mailbox with .mcp_mail/ storage.
+"""Integration tests for search_mailbox with isolated storage.
 
-Tests the search_mailbox tool with the default .mcp_mail/ storage backend to ensure:
-- SQLite FTS5 search works correctly with git-backed message storage
-- .mcp_mail/ directory structure is created properly
+Tests the search_mailbox tool with SQLite-backed local storage to ensure:
+- SQLite FTS5 search works correctly with message storage
+- Storage directory structure is created properly
 - Search results respect project isolation
 - Concurrent searches don't cause race conditions
 """
@@ -30,19 +30,17 @@ def extract_results(result):
 
 @pytest.fixture
 async def mcp_mail_search_env(tmp_path, monkeypatch):
-    """Set up .mcp_mail/ storage for search integration tests."""
+    """Set up isolated storage for search integration tests."""
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
 
-    # Set up .mcp_mail/ as storage location
-    mcp_mail_dir = project_dir / ".mcp_mail"
+    # Set up isolated storage location
+    mcp_mail_dir = project_dir / "mailbox"
     mcp_mail_dir.mkdir()
 
-    # Configure environment to use .mcp_mail/ storage
+    # Configure environment to use isolated storage
     monkeypatch.setenv("STORAGE_ROOT", str(mcp_mail_dir))
     monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{mcp_mail_dir}/storage.sqlite3")
-    monkeypatch.setenv("GIT_AUTHOR_NAME", "test-agent")
-    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "test@example.com")
 
     # Clear caches and reset DB state so the new env vars take effect
     _config.clear_settings_cache()
@@ -64,7 +62,7 @@ async def mcp_mail_search_env(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_search_with_mcp_mail_storage_structure(mcp_mail_search_env):
-    """Test that search_mailbox works with .mcp_mail/ storage backend."""
+    """Test that search_mailbox works with isolated storage backend."""
     storage_dir = mcp_mail_search_env["storage_dir"]
 
     server = build_mcp_server()
@@ -117,15 +115,15 @@ async def test_search_with_mcp_mail_storage_structure(mcp_mail_search_env):
     assert len(results) >= 1, f"Should find at least one message, got {len(results)}"
     assert any("search" in r["subject"].lower() for r in results)
 
-    # Verify .mcp_mail/ structure was created
-    assert storage_dir.exists(), ".mcp_mail/ should exist"
+    # Verify storage structure was created
+    assert storage_dir.exists(), "Storage root should exist"
     assert (storage_dir / "storage.sqlite3").exists(), "SQLite database should exist"
     assert not (storage_dir / "projects").exists(), "projects/ directory should not exist (archive storage removed)"
 
 
 @pytest.mark.asyncio
 async def test_search_respects_project_context_in_mcp_mail(mcp_mail_search_env):
-    """Test that search results respect project context in .mcp_mail/ storage.
+    """Test that search results respect project context in isolated storage.
 
     Note: Agent names are globally unique across all projects. This test uses
     different agent names for each project to comply with global uniqueness.
@@ -241,7 +239,7 @@ async def test_concurrent_searches_on_mcp_mail_storage(mcp_mail_search_env):
 
 @pytest.mark.asyncio
 async def test_search_agent_filter_complete_recipients(mcp_mail_search_env):
-    """Test that agent filter shows complete recipient lists in .mcp_mail/ storage."""
+    """Test that agent filter shows complete recipient lists in isolated storage."""
     server = build_mcp_server()
     async with Client(server) as client:
         # Register agents

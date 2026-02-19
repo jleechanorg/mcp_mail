@@ -125,8 +125,8 @@ read -p "Press Enter when you've completed the Slack App setup..."
 # =============================================================================
 print_header "Step 3: Configure Credentials"
 
-# Create ~/.mcp_mail directory if it doesn't exist
-CREDS_DIR="$HOME/.mcp_mail"
+# Create ~/.mcp_agent_mail_git_mailbox_repo directory if it doesn't exist
+CREDS_DIR="$HOME/.mcp_agent_mail_git_mailbox_repo"
 CREDS_FILE="$CREDS_DIR/credentials.json"
 mkdir -p "$CREDS_DIR"
 chmod 700 "$CREDS_DIR"
