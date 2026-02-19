@@ -240,12 +240,12 @@ if [[ "$MODEL" == "unknown" ]]; then
 fi
 
 # Load bearer token from environment or .env files
-# Order prioritizes ~/.mcp_mail/credentials.json per CLAUDE.md (differs from lib.sh defaults)
-# Try: 1. Env var, 2. ~/.mcp_mail/credentials.json, 3. Repo .env, 4. Config .env, 5. Legacy .env
+# Order prioritizes ~/.mcp_agent_mail_git_mailbox_repo/credentials.json per CLAUDE.md (differs from lib.sh defaults)
+# Try: 1. Env var, 2. ~/.mcp_agent_mail_git_mailbox_repo/credentials.json, 3. Repo .env, 4. Config .env, 5. Legacy .env
 if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then
-  # Check ~/.mcp_mail/credentials.json (recommended location per CLAUDE.md)
-  if [[ -f "${HOME}/.mcp_mail/credentials.json" ]] && command -v jq >/dev/null 2>&1; then
-    HTTP_BEARER_TOKEN=$(jq -r '.HTTP_BEARER_TOKEN // empty' "${HOME}/.mcp_mail/credentials.json" 2>/dev/null || true)
+  # Check ~/.mcp_agent_mail_git_mailbox_repo/credentials.json (recommended location per CLAUDE.md)
+  if [[ -f "${HOME}/.mcp_agent_mail_git_mailbox_repo/credentials.json" ]] && command -v jq >/dev/null 2>&1; then
+    HTTP_BEARER_TOKEN=$(jq -r '.HTTP_BEARER_TOKEN // empty' "${HOME}/.mcp_agent_mail_git_mailbox_repo/credentials.json" 2>/dev/null || true)
   fi
 fi
 if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then
@@ -271,7 +271,7 @@ if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then
   if [[ "$QUIET" != "1" ]]; then
     echo "WARNING: No HTTP_BEARER_TOKEN found. Using default token 'mcp-agent-mail-default-token'." >&2
     echo "         This may fail if your server requires authentication." >&2
-    echo "         Configure token in ~/.mcp_mail/credentials.json or set HTTP_BEARER_TOKEN env var." >&2
+    echo "         Configure token in ~/.mcp_agent_mail_git_mailbox_repo/credentials.json or set HTTP_BEARER_TOKEN env var." >&2
   fi
   HTTP_BEARER_TOKEN="mcp-agent-mail-default-token"
 fi

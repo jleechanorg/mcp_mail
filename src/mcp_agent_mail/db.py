@@ -6,8 +6,10 @@ import random
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from functools import wraps
+from pathlib import Path
 from typing import Any, TypeVar
 
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
@@ -160,12 +162,28 @@ def _build_engine(settings: DatabaseSettings) -> AsyncEngine:
     return engine
 
 
+def _ensure_sqlite_parent_dir(db_url: str) -> None:
+    """Ensure parent directory exists for SQLite file-based database URLs."""
+    normalized_url = db_url.lower()
+    if not normalized_url.startswith(("sqlite://", "sqlite+")):
+        return
+
+    url = make_url(db_url)
+    db_name = url.database
+    if not db_name or db_name == ":memory:":
+        return
+
+    db_path = Path(db_name).expanduser()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+
 def init_engine(settings: Settings | None = None) -> None:
     """Initialise global engine and session factory once."""
     global _engine, _session_factory
     if _engine is not None and _session_factory is not None:
         return
     resolved_settings = settings or get_settings()
+    _ensure_sqlite_parent_dir(resolved_settings.database.url)
     engine = _build_engine(resolved_settings.database)
     _engine = engine
     _session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)

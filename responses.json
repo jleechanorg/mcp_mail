@@ -1,0 +1,42 @@
+[
+  {
+    "html_url": "https://github.com/jleechanorg/mcp_mail/pull/218#discussion_r2825124008",
+    "status": "FIXED",
+    "summary": "Updated AGENTS.md and CLAUDE.md credential paths to ~/.mcp_agent_mail_git_mailbox_repo/credentials.json."
+  },
+  {
+    "html_url": "https://github.com/jleechanorg/mcp_mail/pull/218#discussion_r2825124028",
+    "status": "FIXED",
+    "summary": "Removed stale GIT_AUTHOR_* references from tests, scripts, .env.example, README, and docs."
+  },
+  {
+    "html_url": "https://github.com/jleechanorg/mcp_mail/pull/218#discussion_r2825124181",
+    "status": "FIXED",
+    "summary": "Added SQLite parent directory creation before engine initialization in db.py."
+  },
+  {
+    "html_url": "https://github.com/jleechanorg/mcp_mail/pull/218#discussion_r2825125779",
+    "status": "FIXED",
+    "summary": "Aligned setup/install/registration scripts to read and write credentials under ~/.mcp_agent_mail_git_mailbox_repo/credentials.json."
+  },
+  {
+    "html_url": "https://github.com/jleechanorg/mcp_mail/pull/218#discussion_r2825125780",
+    "status": "FIXED",
+    "summary": "Covered by the SQLite parent-directory initialization fix in db.py."
+  },
+  {
+    "html_url": "https://github.com/jleechanorg/mcp_mail/pull/218#discussion_r2825125973",
+    "status": "FIXED",
+    "summary": "Removed obsolete GIT_AUTHOR_NAME and GIT_AUTHOR_EMAIL entries from .env.example."
+  },
+  {
+    "html_url": "https://github.com/jleechanorg/mcp_mail/pull/218#discussion_r2825125983",
+    "status": "FIXED",
+    "summary": "Updated documentation references to default mailbox path ~/.mcp_agent_mail_git_mailbox_repo."
+  },
+  {
+    "html_url": "https://github.com/jleechanorg/mcp_mail/pull/218#discussion_r2825125992",
+    "status": "FIXED",
+    "summary": "Removed README/docs references to removed GIT_AUTHOR_* config variables."
+  }
+]
