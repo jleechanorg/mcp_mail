@@ -23,8 +23,6 @@ import anyio
 from fastmcp import Context, FastMCP
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.tools.tool import ToolResult
-from git import Repo
-from git.exc import InvalidGitRepositoryError, NoSuchPathError
 from sqlalchemy import Column, Integer, MetaData, Table, asc, bindparam, delete, desc, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, NoResultFound, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -707,28 +705,6 @@ def _latest_filesystem_activity(paths: Sequence[Path]) -> Optional[datetime]:
     return max(mtimes)
 
 
-def _latest_git_activity(repo: Optional[Repo], matches: Sequence[Path]) -> Optional[datetime]:
-    if repo is None:
-        return None
-    repo_root = Path(repo.working_tree_dir or "").resolve()
-    commit_times: list[datetime] = []
-    for match in matches:
-        try:
-            rel_path = match.resolve().relative_to(repo_root)
-        except Exception:
-            continue
-        try:
-            commit = next(repo.iter_commits(paths=str(rel_path), max_count=1))
-        except StopIteration:
-            continue
-        except Exception:
-            continue
-        commit_times.append(datetime.fromtimestamp(commit.committed_date, tz=timezone.utc))
-    if not commit_times:
-        return None
-    return max(commit_times)
-
-
 def _project_workspace_path(project: Project) -> Optional[Path]:
     try:
         candidate = Path(project.human_key).expanduser()
@@ -737,25 +713,6 @@ def _project_workspace_path(project: Project) -> Optional[Path]:
     with suppress(OSError):
         if candidate.exists():
             return candidate
-    return None
-
-
-def _open_repo_if_available(workspace: Optional[Path]) -> Optional[Repo]:
-    if workspace is None:
-        return None
-    try:
-        repo = Repo(workspace, search_parent_directories=True)
-    except (InvalidGitRepositoryError, NoSuchPathError):
-        return None
-    except Exception:
-        return None
-    try:
-        root = Path(repo.working_tree_dir or "")
-    except Exception:
-        return None
-    with suppress(Exception):
-        workspace.resolve().relative_to(root.resolve())
-        return repo
     return None
 
 
@@ -2237,8 +2194,6 @@ async def _collect_file_reservation_statuses(
             read_map = {row[0]: _ensure_utc(row[1]) for row in read_result}
 
     workspace = _project_workspace_path(project)
-    repo = _open_repo_if_available(workspace) if workspace is not None else None
-
     statuses: list[FileReservationStatus] = []
     for reservation, agent in rows:
         agent_id = agent.id or -1
@@ -2247,21 +2202,18 @@ async def _collect_file_reservation_statuses(
 
         matches: list[Path] = []
         fs_activity: Optional[datetime] = None
-        git_activity: Optional[datetime] = None
 
         if workspace is not None:
             matches = _collect_matching_paths(workspace, reservation.path_pattern)
             if matches:
                 fs_activity = _latest_filesystem_activity(matches)
-                git_activity = _latest_git_activity(repo, matches)
 
         agent_inactive = agent_last_active is None or (moment - agent_last_active).total_seconds() > inactivity_seconds
         recent_mail = last_mail is not None and (moment - last_mail).total_seconds() <= activity_grace
         recent_fs = fs_activity is not None and (moment - fs_activity).total_seconds() <= activity_grace
-        recent_git = git_activity is not None and (moment - git_activity).total_seconds() <= activity_grace
 
         stale = bool(
-            reservation.released_ts is None and agent_inactive and not (recent_mail or recent_fs or recent_git)
+            reservation.released_ts is None and agent_inactive and not (recent_mail or recent_fs)
         )
         reasons: list[str] = []
         if agent_inactive:
@@ -2277,12 +2229,9 @@ async def _collect_file_reservation_statuses(
                 reasons.append("filesystem_activity_recent")
             else:
                 reasons.append(f"no_recent_filesystem_activity>{activity_grace}s")
-            if recent_git:
-                reasons.append("git_activity_recent")
-            else:
-                reasons.append(f"no_recent_git_activity>{activity_grace}s")
         else:
             reasons.append("path_pattern_unmatched")
+        reasons.append("git_activity_not_tracked")
 
         statuses.append(
             FileReservationStatus(
@@ -2293,7 +2242,7 @@ async def _collect_file_reservation_statuses(
                 last_agent_activity=agent_last_active,
                 last_mail_activity=last_mail,
                 last_fs_activity=fs_activity,
-                last_git_activity=git_activity,
+                last_git_activity=None,
             )
         )
     return statuses
