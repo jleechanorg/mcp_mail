@@ -1,8 +1,7 @@
-"""Filesystem and Git archive helpers for MCP Agent Mail.
+"""Legacy storage helper stubs for MCP Agent Mail.
 
-NOTE: Local disk message copying to .mcp_mail/projects/ has been removed.
-This module now only provides stub functions for backwards compatibility.
-All message storage is handled via SQLite database.
+Message persistence is handled via SQLite database only.
+This module keeps compatibility interfaces as inert no-op helpers.
 """
 
 import asyncio
@@ -21,10 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 def is_archive_enabled(settings: Settings) -> bool:
-    """Check if archive storage is enabled.
-
-    Archive storage has been removed. This always returns False.
-    """
+    """Always disabled; legacy compatibility hook."""
     return False
 
 

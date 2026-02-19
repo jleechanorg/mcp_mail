@@ -2043,6 +2043,20 @@ def file_reservations_list(
     console.print(table)
 
 
+def _get_git_branch(repo_path: Path) -> str:
+    """Return the current git branch name, or 'unknown' on failure."""
+    try:
+        cp = subprocess.run(
+            ["git", "-C", str(repo_path), "rev-parse", "--abbrev-ref", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return cp.stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
 @app.command("amctl-env")
 def amctl_env(
     project_path: Path = typer.Option(
@@ -2064,16 +2078,7 @@ def amctl_env(
     slug = slugify(str(p))
     project_uid = hashlib.sha256(str(p).encode()).hexdigest()[:16]
     # Determine branch
-    try:
-        cp = subprocess.run(
-            ["git", "-C", str(p), "rev-parse", "--abbrev-ref", "HEAD"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        branch = cp.stdout.strip() or "unknown"
-    except Exception:
-        branch = "unknown"
+    branch = _get_git_branch(p)
     # Compute cache key and artifact dir
     settings = get_settings()
     cache_key = f"am-cache-{project_uid}-{agent_name}-{branch}"
@@ -2114,16 +2119,7 @@ def am_run(
     # Generate project identity from path
     slug = slugify(str(p))
     project_uid = hashlib.sha256(str(p).encode()).hexdigest()[:16]
-    try:
-        cp = subprocess.run(
-            ["git", "-C", str(p), "rev-parse", "--abbrev-ref", "HEAD"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        branch = cp.stdout.strip() or "unknown"
-    except Exception:
-        branch = "unknown"
+    branch = _get_git_branch(p)
     settings = get_settings()
     guard_mode = (os.environ.get("AGENT_MAIL_GUARD_MODE", "block") or "block").strip().lower()
     worktrees_enabled = bool(settings.worktrees_enabled) and is_archive_enabled(settings)

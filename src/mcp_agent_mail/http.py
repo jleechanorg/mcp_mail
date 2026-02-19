@@ -1091,19 +1091,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 attachments=[],
             )
 
-            to_agents = [r[0] for r in recipients_list if r[1] == "to"]
-            cc_agents = [r[0] for r in recipients_list if r[1] == "cc"]
-            bcc_agents = [r[0] for r in recipients_list if r[1] == "bcc"]
-            app_module._message_frontmatter(
-                message=message,
-                project=project,
-                sender=sender_agent,
-                to_agents=to_agents,
-                cc_agents=cc_agents,
-                bcc_agents=bcc_agents,
-                attachments=[],
-            )
-
             logger.debug("slack_archive_write_skipped", reason="archive_removed", source=source)
 
             slack_client_ref = None
@@ -1327,21 +1314,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                             thread_id=message_info.get("thread_id"),
                             attachments=[],
                         )
-
-                        # Write message to archive in background to avoid webhook timeout
-                        to_agents = [r[0] for r in recipients_list if r[1] == "to"]
-                        cc_agents = [r[0] for r in recipients_list if r[1] == "cc"]
-                        bcc_agents = [r[0] for r in recipients_list if r[1] == "bcc"]
-                        app_module._message_frontmatter(
-                            message=message,
-                            project=project,
-                            sender=sender_agent,
-                            to_agents=to_agents,
-                            cc_agents=cc_agents,
-                            bcc_agents=bcc_agents,
-                            attachments=[],
-                        )
-
                         logger.debug("slack_archive_write_skipped", reason="archive_removed")
 
                         # Capture thread mapping so outbound replies stay in the same Slack thread
@@ -2757,7 +2729,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     # Extract project info consistently
                     project_id = int(prow[0])
                     project_slug = prow[1]
-                    prow[2]
 
                     # Get or create "HumanOverseer" agent (with race condition protection)
                     overseer_name = "HumanOverseer"
@@ -2883,8 +2854,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                             detail=f"None of the specified recipients exist in this project. Available agents can be seen at /mail/{project_slug}",
                         )
 
-                    get_settings()
-
                     # Update HumanOverseer activity timestamp (after successful Git write, before commit)
                     await session.execute(
                         text("UPDATE agents SET last_active_ts = :ts WHERE id = :id"), {"ts": now, "id": overseer_id}
@@ -2927,42 +2896,42 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             # Should match safe slug pattern
             return bool(re.match(r"^[a-z0-9_-]+$", slug, re.IGNORECASE))
 
-        @fastapi_app.get("/mail/archive/guide", response_class=HTMLResponse)
+        @fastapi_app.get("/mail/storage-disabled/guide", response_class=HTMLResponse)
         async def archive_guide() -> HTMLResponse:
             """Archive UI has been removed."""
             return await _render("error.html", message="Archive storage has been removed.")
 
-        @fastapi_app.get("/mail/archive/activity", response_class=HTMLResponse)
+        @fastapi_app.get("/mail/storage-disabled/activity", response_class=HTMLResponse)
         async def archive_activity(limit: int = 50) -> HTMLResponse:
             """Archive UI has been removed."""
             _ = limit
             return await _render("error.html", message="Archive storage has been removed.")
 
-        @fastapi_app.get("/mail/archive/commit/{sha}", response_class=HTMLResponse)
+        @fastapi_app.get("/mail/storage-disabled/commit/{sha}", response_class=HTMLResponse)
         async def archive_commit(sha: str) -> HTMLResponse:
             """Archive UI has been removed."""
             _ = sha
             return await _render("error.html", message="Archive storage has been removed.")
 
-        @fastapi_app.get("/mail/archive/timeline", response_class=HTMLResponse)
+        @fastapi_app.get("/mail/storage-disabled/timeline", response_class=HTMLResponse)
         async def archive_timeline(project: str | None = None) -> HTMLResponse:
             """Archive UI has been removed."""
             _ = project
             return await _render("error.html", message="Archive storage has been removed.")
 
-        @fastapi_app.get("/mail/archive/browser", response_class=HTMLResponse)
+        @fastapi_app.get("/mail/storage-disabled/browser", response_class=HTMLResponse)
         async def archive_browser(project: str | None = None, path: str = "") -> HTMLResponse:
             """Archive UI has been removed."""
             _ = (project, path)
             return await _render("error.html", message="Archive storage has been removed.")
 
-        @fastapi_app.get("/mail/archive/browser/{project}/file")
+        @fastapi_app.get("/mail/storage-disabled/browser/{project}/file")
         async def archive_browser_file(project: str, path: str) -> JSONResponse:
             """Archive UI has been removed."""
             _ = (project, path)
             raise HTTPException(status_code=404, detail="Archive storage has been removed")
 
-        @fastapi_app.get("/mail/archive/network", response_class=HTMLResponse)
+        @fastapi_app.get("/mail/storage-disabled/network", response_class=HTMLResponse)
         async def archive_network(project: str | None = None) -> HTMLResponse:
             """Archive UI has been removed."""
             _ = project
@@ -2992,12 +2961,12 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
             return JSONResponse({"agents": agents})
 
-        @fastapi_app.get("/mail/archive/time-travel", response_class=HTMLResponse)
+        @fastapi_app.get("/mail/storage-disabled/time-travel", response_class=HTMLResponse)
         async def archive_time_travel() -> HTMLResponse:
             """Archive UI has been removed."""
             return await _render("error.html", message="Archive storage has been removed.")
 
-        @fastapi_app.get("/mail/archive/time-travel/snapshot")
+        @fastapi_app.get("/mail/storage-disabled/time-travel/snapshot")
         async def archive_time_travel_snapshot(project: str, agent: str, timestamp: str) -> JSONResponse:
             """Archive UI has been removed."""
             _ = (project, agent, timestamp)
