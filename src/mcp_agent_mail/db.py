@@ -144,7 +144,6 @@ def _build_engine(settings: DatabaseSettings) -> AsyncEngine:
             "check_same_thread": False,  # Required for async SQLite
         }
 
-    pool_kwargs: dict[str, Any]
     # SQLite needs pool_size > 1 because the codebase uses nested get_session() calls
     # (e.g. send_message holds a session while _create_placeholder_agent opens another).
     # pool_size=1 causes deadlocks; 5 is sufficient for nesting without unbounded growth.

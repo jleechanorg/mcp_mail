@@ -913,7 +913,9 @@ async def _ensure_project(human_key: str) -> Project:
         except IntegrityError:
             await session.rollback()
             result = await session.execute(select(Project).where(Project.slug == slug))
-            project = result.scalar_one()
+            project = result.scalar_one_or_none()
+            if project is None:
+                raise  # IntegrityError was from a different constraint
         # Create global inbox agent for new project
         await _ensure_global_inbox_agent(project, session)
         return project
@@ -1005,7 +1007,9 @@ async def _ensure_global_inbox_agent(project: Project, session: AsyncSession | N
                 Agent.name == global_inbox_name,
             )
         )
-        agent = result.scalar_one()
+        agent = result.scalar_one_or_none()
+        if agent is None:
+            raise  # IntegrityError was from a different constraint
     return agent
 
 
