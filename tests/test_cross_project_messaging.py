@@ -146,6 +146,7 @@ async def test_cross_project_reply(isolated_env):
         deliveries = (
             send_data.get("deliveries") if isinstance(send_data, dict) else getattr(send_data, "deliveries", [])
         )
+        assert deliveries, "send_message should return deliveries"
         mid = deliveries[0]["payload"]["id"]
 
         # Fern replies from project-b — should work cross-project

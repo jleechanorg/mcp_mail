@@ -1932,18 +1932,10 @@ async def _get_agent_by_name(name: str) -> Agent:
     Since agent names are globally unique, we can look up agents
     by name without needing project context.
     """
-    await ensure_schema()
-    async with get_session() as session:
-        result = await session.execute(
-            select(Agent).where(
-                func.lower(Agent.name) == name.lower(),
-                cast(Any, Agent.is_active).is_(True),
-            )
-        )
-        agent = result.scalars().first()
-        if not agent:
-            raise NoResultFound(f"Agent '{name}' not found. Tip: Use register_agent to create a new agent.")
-        return agent
+    agent = await _get_agent_by_name_optional(name)
+    if not agent:
+        raise NoResultFound(f"Agent '{name}' not found. Tip: Use register_agent to create a new agent.")
+    return agent
 
 
 async def _get_agent_by_name_optional(name: str) -> Agent | None:
@@ -6216,7 +6208,6 @@ def build_mcp_server() -> FastMCP:
             released_reservations: list[FileReservation] = []
             async with get_session() as session:
                 sel = select(FileReservation).where(
-                    FileReservation.project_id == project.id,
                     FileReservation.agent_id == agent.id,
                     cast(Any, FileReservation.released_ts).is_(None),
                 )
@@ -6228,7 +6219,6 @@ def build_mcp_server() -> FastMCP:
                 released_reservations = list(rows.scalars().all())
 
                 stmt = update(FileReservation).where(
-                    FileReservation.project_id == project.id,
                     FileReservation.agent_id == agent.id,
                     cast(Any, FileReservation.released_ts).is_(None),
                 )
@@ -6313,14 +6303,13 @@ def build_mcp_server() -> FastMCP:
                 .join(Agent, FileReservation.agent_id == Agent.id)
                 .where(
                     FileReservation.id == file_reservation_id,
-                    FileReservation.project_id == project.id,
                 )
             )
             row = result.first()
         if not row:
             raise ToolExecutionError(
                 "NOT_FOUND",
-                f"File reservation id={file_reservation_id} not found for project '{project.human_key}'.",
+                f"File reservation id={file_reservation_id} not found.",
                 recoverable=True,
                 data={"file_reservation_id": file_reservation_id},
             )
@@ -6527,7 +6516,6 @@ def build_mcp_server() -> FastMCP:
             stmt = (
                 select(FileReservation)
                 .where(
-                    FileReservation.project_id == project.id,
                     FileReservation.agent_id == agent.id,
                     cast(Any, FileReservation.released_ts).is_(None),
                 )
