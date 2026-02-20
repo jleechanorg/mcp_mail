@@ -558,6 +558,86 @@ async def test_file_reservation_integration_logging(isolated_env, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_file_reservation_release_renew_and_force_release_respect_project(isolated_env, monkeypatch):
+    monkeypatch.setenv("FILE_RESERVATION_INACTIVITY_SECONDS", "5")
+    monkeypatch.setenv("FILE_RESERVATION_ACTIVITY_GRACE_SECONDS", "1")
+    clear_settings_cache()
+    try:
+        server = build_mcp_server()
+        async with Client(server) as client:
+            await client.call_tool("ensure_project", {"human_key": "/project-a"})
+            await client.call_tool("ensure_project", {"human_key": "/project-b"})
+            await client.call_tool(
+                "register_agent",
+                {
+                    "project_key": "project-a",
+                    "program": "codex",
+                    "model": "gpt-5",
+                    "name": "BlueLake",
+                },
+            )
+            await client.call_tool(
+                "register_agent",
+                {
+                    "project_key": "project-b",
+                    "program": "codex",
+                    "model": "gpt-5",
+                    "name": "GreenLake",
+                },
+            )
+
+            reservation = await client.call_tool(
+                "file_reservation_paths",
+                {
+                    "project_key": "project-a",
+                    "agent_name": "BlueLake",
+                    "paths": ["src/app.py"],
+                    "ttl_seconds": 3600,
+                },
+            )
+            reservation_id = reservation.data["granted"][0]["id"]
+
+            release_other_project = await client.call_tool(
+                "release_file_reservations",
+                {
+                    "project_key": "project-b",
+                    "agent_name": "BlueLake",
+                    "paths": ["src/app.py"],
+                },
+            )
+            assert release_other_project.data["released"] == 0
+
+            renew_other_project = await client.call_tool(
+                "renew_file_reservations",
+                {
+                    "project_key": "project-b",
+                    "agent_name": "BlueLake",
+                    "paths": ["src/app.py"],
+                },
+            )
+            assert renew_other_project.data["renewed"] == 0
+
+            with pytest.raises(ToolError) as exc_info:
+                await client.call_tool(
+                    "force_release_file_reservation",
+                    {
+                        "project_key": "project-b",
+                        "agent_name": "GreenLake",
+                        "file_reservation_id": reservation_id,
+                    },
+                )
+
+            assert "belongs to a different project" in str(exc_info.value)
+
+            resource = await client.read_resource("resource://file_reservations/project-a?active_only=true")
+            entries = json.loads(resource[0].text)
+            assert entries and entries[0]["id"] == reservation_id
+            assert entries[0]["released_ts"] is None
+    finally:
+        clear_settings_cache()
+
+
+@pytest.mark.asyncio
 async def test_search_and_summarize(isolated_env):
     server = build_mcp_server()
 

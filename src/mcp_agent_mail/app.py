@@ -1612,10 +1612,12 @@ async def _get_or_create_agent(
                     # Name exists in another project
                     if mode == "strict" and not force_reclaim:
                         # In strict mode, require explicit force_reclaim
+                        # Note: project assignment is metadata only, not access control; the agent
+                        # exists globally and can be reassigned with force_reclaim=True.
                         conflict_info = await _build_conflict_info(sanitized)
                         raise ToolExecutionError(
                             "NAME_TAKEN",
-                            f"Agent name '{sanitized}' is already in use. Set force_reclaim=True to override and retire the existing agent(s).",
+                            f"Agent '{sanitized}' exists in another project. Use force_reclaim=True to reassign.",
                             recoverable=True,
                             data={
                                 "name": sanitized,
@@ -1934,35 +1936,20 @@ async def _retire_conflicting_agents(
 
 
 async def _get_agent(project: Project, name: str) -> Agent:
-    await ensure_schema()
-    async with get_session() as session:
-        result = await session.execute(
-            select(Agent).where(
-                Agent.project_id == project.id,
-                func.lower(Agent.name) == name.lower(),
-                cast(Any, Agent.is_active).is_(True),
-            )
-        )
-        agent = result.scalars().first()
-        if not agent:
-            raise NoResultFound(
-                f"Agent '{name}' not registered for project '{project.human_key}'. "
-                "Tip: Use resource://agents to discover registered agents globally."
-            )
-        return agent
+    """Get agent by name (globally unique). Project param kept for API compatibility.
+
+    Projects are informational metadata only and do not restrict agent visibility.
+    Any agent can be found by name regardless of which project_key was provided.
+    """
+    return await _get_agent_by_name(name)
 
 
 async def _get_agent_optional(project: Project, name: str) -> Agent | None:
-    await ensure_schema()
-    async with get_session() as session:
-        result = await session.execute(
-            select(Agent).where(
-                Agent.project_id == project.id,
-                func.lower(Agent.name) == name.lower(),
-                cast(Any, Agent.is_active).is_(True),
-            )
-        )
-        return result.scalars().first()
+    """Get agent by name (globally unique), returning None if not found.
+
+    Projects are informational metadata only and do not restrict agent visibility.
+    """
+    return await _get_agent_by_name_optional(name)
 
 
 async def _get_agent_by_name(name: str) -> Agent:
@@ -1971,18 +1958,10 @@ async def _get_agent_by_name(name: str) -> Agent:
     Since agent names are globally unique, we can look up agents
     by name without needing project context.
     """
-    await ensure_schema()
-    async with get_session() as session:
-        result = await session.execute(
-            select(Agent).where(
-                func.lower(Agent.name) == name.lower(),
-                cast(Any, Agent.is_active).is_(True),
-            )
-        )
-        agent = result.scalars().first()
-        if not agent:
-            raise NoResultFound(f"Agent '{name}' not found. Tip: Use register_agent to create a new agent.")
-        return agent
+    agent = await _get_agent_by_name_optional(name)
+    if not agent:
+        raise NoResultFound(f"Agent '{name}' not found. Tip: Use register_agent to create a new agent.")
+    return agent
 
 
 async def _get_agent_by_name_optional(name: str) -> Agent | None:
@@ -3567,7 +3546,7 @@ def build_mcp_server() -> FastMCP:
         inbox_include_bodies: bool = False,
     ) -> dict[str, Any]:
         """
-        Create or update an agent identity within a project.
+        Create or update an agent identity. Project is informational metadata only.
 
         IMPORTANT: Global Namespace
         ---------------------------
@@ -6259,8 +6238,8 @@ def build_mcp_server() -> FastMCP:
             released_reservations: list[FileReservation] = []
             async with get_session() as session:
                 sel = select(FileReservation).where(
-                    FileReservation.project_id == project.id,
                     FileReservation.agent_id == agent.id,
+                    FileReservation.project_id == project.id,
                     cast(Any, FileReservation.released_ts).is_(None),
                 )
                 if file_reservation_ids:
@@ -6271,8 +6250,8 @@ def build_mcp_server() -> FastMCP:
                 released_reservations = list(rows.scalars().all())
 
                 stmt = update(FileReservation).where(
-                    FileReservation.project_id == project.id,
                     FileReservation.agent_id == agent.id,
+                    FileReservation.project_id == project.id,
                     cast(Any, FileReservation.released_ts).is_(None),
                 )
                 if file_reservation_ids:
@@ -6356,19 +6335,29 @@ def build_mcp_server() -> FastMCP:
                 .join(Agent, FileReservation.agent_id == Agent.id)
                 .where(
                     FileReservation.id == file_reservation_id,
-                    FileReservation.project_id == project.id,
                 )
             )
             row = result.first()
         if not row:
             raise ToolExecutionError(
                 "NOT_FOUND",
-                f"File reservation id={file_reservation_id} not found for project '{project.human_key}'.",
+                f"File reservation id={file_reservation_id} not found.",
                 recoverable=True,
                 data={"file_reservation_id": file_reservation_id},
             )
 
         reservation, holder = row
+        if reservation.project_id != project.id:
+            raise ToolExecutionError(
+                "WRONG_PROJECT",
+                "Reservation belongs to a different project; use its project_key.",
+                recoverable=True,
+                data={
+                    "file_reservation_id": file_reservation_id,
+                    "reservation_project_id": reservation.project_id,
+                    "requested_project_id": project.id,
+                },
+            )
         if reservation.released_ts is not None:
             return {
                 "released": 0,
@@ -6570,8 +6559,8 @@ def build_mcp_server() -> FastMCP:
             stmt = (
                 select(FileReservation)
                 .where(
-                    FileReservation.project_id == project.id,
                     FileReservation.agent_id == agent.id,
+                    FileReservation.project_id == project.id,
                     cast(Any, FileReservation.released_ts).is_(None),
                 )
                 .order_by(asc(FileReservation.expires_ts))
