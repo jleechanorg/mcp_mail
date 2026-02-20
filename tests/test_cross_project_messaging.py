@@ -10,20 +10,7 @@ import pytest
 from fastmcp import Client
 
 from mcp_agent_mail.app import build_mcp_server
-
-
-def _extract_result(call_result):
-    """Extract the actual data from a CallToolResult."""
-    if hasattr(call_result, "structured_content") and call_result.structured_content:
-        return call_result.structured_content.get("result", call_result.data)
-    return call_result.data
-
-
-def _get(field: str, obj):
-    """Get field from dict or object."""
-    if isinstance(obj, dict):
-        return obj.get(field)
-    return getattr(obj, field, None)
+from tests.conftest import extract_result, get_field
 
 
 @pytest.mark.asyncio
@@ -54,7 +41,7 @@ async def test_cross_project_messaging(isolated_env):
                 "body_md": "Hi from project A!",
             },
         )
-        data = _extract_result(result)
+        data = extract_result(result)
         deliveries = data.get("deliveries") if isinstance(data, dict) else getattr(data, "deliveries", [])
         assert deliveries, "send_message should return deliveries"
         assert len(deliveries) > 0, "Message should have at least one delivery"
@@ -68,9 +55,9 @@ async def test_cross_project_messaging(isolated_env):
                 "limit": 10,
             },
         )
-        messages = _extract_result(inbox)
+        messages = extract_result(inbox)
         assert len(messages) == 1, f"Bob should have 1 message, got {len(messages)}"
-        assert _get("subject", messages[0]) == "Cross-project hello"
+        assert get_field("subject", messages[0]) == "Cross-project hello"
 
 
 @pytest.mark.asyncio
@@ -110,7 +97,7 @@ async def test_cross_project_fetch_inbox_any_project_key(isolated_env):
                 "limit": 10,
             },
         )
-        messages = _extract_result(inbox)
+        messages = extract_result(inbox)
         assert len(messages) == 1, "Receiver should see the message regardless of project_key used in fetch"
 
 
@@ -142,7 +129,7 @@ async def test_cross_project_reply(isolated_env):
                 "body_md": "Can you reply?",
             },
         )
-        send_data = _extract_result(send_result)
+        send_data = extract_result(send_result)
         deliveries = (
             send_data.get("deliveries") if isinstance(send_data, dict) else getattr(send_data, "deliveries", [])
         )
@@ -159,7 +146,7 @@ async def test_cross_project_reply(isolated_env):
                 "body_md": "Sure, here's my reply!",
             },
         )
-        reply_data = _extract_result(reply_result)
+        reply_data = extract_result(reply_result)
         thread_id = (
             reply_data.get("thread_id") if isinstance(reply_data, dict) else getattr(reply_data, "thread_id", None)
         )

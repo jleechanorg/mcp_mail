@@ -12,25 +12,12 @@ import pytest
 from fastmcp import Client
 
 from mcp_agent_mail.app import build_mcp_server
+from tests.conftest import extract_result, get_field
 
 
 def get_global_inbox_name(project_slug: str) -> str:
     """Get project-specific global inbox name."""
     return f"global-inbox-{project_slug}"
-
-
-def _get(field: str, obj):
-    """Get field from dict or object"""
-    if isinstance(obj, dict):
-        return obj.get(field)
-    return getattr(obj, field, None)
-
-
-def _extract_result(call_result):
-    """Extract the actual data from a CallToolResult."""
-    if hasattr(call_result, "structured_content") and call_result.structured_content:
-        return call_result.structured_content.get("result", call_result.data)
-    return call_result.data
 
 
 @pytest.mark.asyncio
@@ -55,7 +42,7 @@ async def test_global_inbox_agent_created_on_project_setup(isolated_env):
         )
 
         # The global inbox should exist and be empty initially
-        messages = _extract_result(result)
+        messages = extract_result(result)
         assert isinstance(messages, list)
 
 
@@ -98,15 +85,15 @@ async def test_all_messages_auto_cc_global_inbox(isolated_env):
             {"project_key": "test-project", "agent_name": get_global_inbox_name("test-project")},
         )
 
-        messages = _extract_result(inbox_result)
+        messages = extract_result(inbox_result)
         assert len(messages) >= 1
 
         # Find our message in the global inbox
         found = False
         for msg in messages:
-            subj = _get("subject", msg)
-            from_field = _get("from", msg)
-            kind = _get("kind", msg)
+            subj = get_field("subject", msg)
+            from_field = get_field("from", msg)
+            kind = get_field("kind", msg)
             if subj == "Test Message" and from_field == "Alice":
                 found = True
                 # Verify it's a cc (not to or bcc)
@@ -191,6 +178,6 @@ async def test_any_agent_can_read_global_inbox(isolated_env):
             {"project_key": "test-project", "agent_name": get_global_inbox_name("test-project")},
         )
 
-        messages = _extract_result(charlie_global_view)
-        private_msg_found = any(_get("subject", msg) == "Private Message" for msg in messages)
+        messages = extract_result(charlie_global_view)
+        private_msg_found = any(get_field("subject", msg) == "Private Message" for msg in messages)
         assert private_msg_found, "Charlie should see Alice-to-Bob message in global inbox"
