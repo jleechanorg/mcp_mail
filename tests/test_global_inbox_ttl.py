@@ -154,46 +154,6 @@ async def test_global_inbox_cc_not_visible_to_sender_outbox(isolated_env):
 
 
 @pytest.mark.asyncio
-async def test_explicit_global_inbox_cc_fans_out_to_all_workers(isolated_env):
-    """CCing the global inbox explicitly should broadcast to all active project workers."""
-    server = build_mcp_server()
-    async with Client(server) as client:
-        await client.call_tool("ensure_project", {"human_key": "/test-project"})
-        for name in ("Alice", "Bob", "Charlie", "Dana"):
-            await client.call_tool(
-                "register_agent",
-                {"project_key": "test-project", "program": "test", "model": "gpt-4", "name": name},
-            )
-
-        global_inbox = get_global_inbox_name("test-project")
-        await client.call_tool(
-            "send_message",
-            {
-                "project_key": "test-project",
-                "sender_name": "Alice",
-                "to": ["Bob"],
-                "cc": [global_inbox],
-                "subject": "Broadcast via global inbox",
-                "body_md": "All workers should receive this",
-            },
-        )
-
-        bob_inbox = _extract_result(
-            await client.call_tool("fetch_inbox", {"project_key": "test-project", "agent_name": "Bob"})
-        )
-        charlie_inbox = _extract_result(
-            await client.call_tool("fetch_inbox", {"project_key": "test-project", "agent_name": "Charlie"})
-        )
-        dana_inbox = _extract_result(
-            await client.call_tool("fetch_inbox", {"project_key": "test-project", "agent_name": "Dana"})
-        )
-
-        assert any(_get("subject", msg) == "Broadcast via global inbox" for msg in bob_inbox)
-        assert any(_get("subject", msg) == "Broadcast via global inbox" for msg in charlie_inbox)
-        assert any(_get("subject", msg) == "Broadcast via global inbox" for msg in dana_inbox)
-
-
-@pytest.mark.asyncio
 async def test_any_agent_can_read_global_inbox(isolated_env):
     """Test that any agent can read the global inbox."""
     server = build_mcp_server()

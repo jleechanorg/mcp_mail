@@ -48,8 +48,7 @@ def generate_agent_name() -> str:
     """Return a random codename composed from the adjective/noun pools."""
     adjective = random.choice(tuple(ADJECTIVES))
     noun = random.choice(tuple(NOUNS))
-    suffix = random.randint(100, 9999)
-    return f"{adjective}{noun}{suffix}"
+    return f"{adjective}{noun}"
 
 
 def sanitize_agent_name(value: str) -> Optional[str]:
@@ -89,17 +88,11 @@ def validate_agent_name_format(name: str) -> bool:
     if not name:
         return False
 
-    if len(name) > 128:
-        return False
-
-    # Check if name matches any valid adjective+noun combination with optional numeric suffix
+    # Check if name matches any valid adjective+noun combination (case-insensitive)
     name_lower = name.lower()
     for adjective in ADJECTIVES:
         for noun in NOUNS:
-            base = f"{adjective}{noun}".lower()
-            if name_lower == base:
-                return True
-            if name_lower.startswith(base) and name_lower[len(base) :].isdigit():
+            if name_lower == f"{adjective}{noun}".lower():
                 return True
 
     return False

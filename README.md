@@ -115,13 +115,42 @@ This fork extends the original MCP Agent Mail with **11 core enhancements** focu
 
 ### 🌐 Global Architecture (No Boundaries)
 
+> **Projects are informational labels** (e.g., repo paths, team names). They do **NOT** isolate agents — any agent can message any other agent regardless of project. The `project_key` parameter on every tool is metadata only.
+
 - **🌍 Projects as Informational Metadata** - Projects don't create barriers:
   - Projects are **metadata only** (badges, tags, context) - NOT organizational boundaries
   - Unified inbox shows ALL messages regardless of project
   - Backend queries ignore project filters (messages fetched by agent, not project)
+  - Agent lookup is **global by name**; `project_key` is never used to restrict which agents are reachable
   - Consistent treatment across all layers (UI, database, tools)
   - **Why**: Agents work seamlessly across multiple repos/projects
-  - **Implementation**: `src/mcp_agent_mail/app.py:2312-2327` (_get_message_by_id_global)
+  - **Implementation**: `src/mcp_agent_mail/app.py` (`_get_agent`, `_get_message_by_id_global`)
+
+**Cross-project messaging example:**
+```python
+# Alice is in project "repo-frontend", Bob is in project "repo-backend"
+# They can still message each other directly — project is just a label
+await client.call_tool("register_agent", {
+    "project_key": "repo-frontend", "program": "claude-code", "model": "opus-4", "name": "Alice"
+})
+await client.call_tool("register_agent", {
+    "project_key": "repo-backend", "program": "claude-code", "model": "opus-4", "name": "Bob"
+})
+
+# Alice (project: repo-frontend) sends to Bob (project: repo-backend) — works seamlessly
+await client.call_tool("send_message", {
+    "project_key": "repo-frontend",
+    "sender_name": "Alice",
+    "to": ["Bob"],
+    "subject": "Cross-project hello",
+    "body_md": "Hi from frontend!",
+})
+
+# Bob fetches inbox and sees the message — no cross-project barrier
+inbox = await client.call_tool("fetch_inbox", {
+    "project_key": "repo-backend", "agent_name": "Bob"
+})
+```
 
 - **🎯 Globally Unique Agent Names** - Database-enforced global uniqueness:
   - **Case-insensitive** uniqueness across ALL projects (prevents name collisions)
@@ -286,6 +315,14 @@ When an agent sends a message via `send_message`, here's what happens:
 - Storage location: `STORAGE_ROOT` env var (default: `.mcp_mail`) for the SQLite DB and local artifacts
 - Archive storage has been removed; messages are no longer written to per-project Git archives
 - Git author: `GIT_AUTHOR_NAME` and `GIT_AUTHOR_EMAIL` env vars
+
+> **Important: DATABASE_URL must point to the same database for all agents.**
+> By default `DATABASE_URL=sqlite+aiosqlite:///mcp_mail.sqlite3` is relative to the server's working directory.
+> If you run the server from different directories (e.g., multiple workspace tabs), each will create its own separate database and agents cannot see each other's messages.
+> For multi-workspace or Conductor setups, set an **absolute path**:
+> ```bash
+> export DATABASE_URL="sqlite+aiosqlite:////home/user/.mcp_mail/shared.sqlite3"
+> ```
 
 **Messages are stored in SQLite by default:**
 ```bash
