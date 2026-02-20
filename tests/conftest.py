@@ -8,6 +8,20 @@ from mcp_agent_mail.config import clear_settings_cache
 from mcp_agent_mail.db import reset_database_state
 
 
+def extract_result(call_result):
+    """Extract the payload value from a CallToolResult-like object."""
+    if hasattr(call_result, "structured_content") and call_result.structured_content:
+        return call_result.structured_content.get("result", call_result.data)
+    return call_result.data
+
+
+def get_field(field: str, obj):
+    """Read a field from either a mapping or object attribute."""
+    if isinstance(obj, dict):
+        return obj.get(field)
+    return getattr(obj, field, None)
+
+
 @pytest.fixture
 def isolated_env(tmp_path, monkeypatch):
     """Provide isolated database settings for tests and reset caches."""

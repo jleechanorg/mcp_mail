@@ -317,8 +317,9 @@ When an agent sends a message via `send_message`, here's what happens:
 - Git author: `GIT_AUTHOR_NAME` and `GIT_AUTHOR_EMAIL` env vars
 
 > **Important: DATABASE_URL must point to the same database for all agents.**
-> By default `DATABASE_URL=sqlite+aiosqlite:///mcp_mail.sqlite3` is relative to the server's working directory.
-> If you run the server from different directories (e.g., multiple workspace tabs), each will create its own separate database and agents cannot see each other's messages.
+> The default is an absolute path under your home directory:
+> `DATABASE_URL=sqlite+aiosqlite:///{home}/.mcp_agent_mail_git_mailbox_repo/storage.sqlite3`
+> If you override it with a **relative** SQLite URL and run the server from different directories (e.g., multiple workspace tabs), each will create its own separate database and agents cannot see each other's messages.
 > For multi-workspace or Conductor setups, set an **absolute path**:
 > ```bash
 > export DATABASE_URL="sqlite+aiosqlite:////home/user/.mcp_mail/shared.sqlite3"
@@ -2073,7 +2074,7 @@ result = await client.call_tool("list_extended_tools", {})
 | `OTEL_SERVICE_NAME` | `mcp-agent-mail` | Service name for telemetry |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` |  | OTLP exporter endpoint URL |
 | `APP_ENVIRONMENT` | `development` | Environment name (development/production) |
-| `DATABASE_URL` | `sqlite+aiosqlite:///./.mcp_mail/storage.sqlite3` | SQLAlchemy async database URL (stored in .mcp_mail/) |
+| `DATABASE_URL` | `sqlite+aiosqlite:///{home}/.mcp_agent_mail_git_mailbox_repo/storage.sqlite3` | SQLAlchemy async database URL |
 | `DATABASE_ECHO` | `false` | Echo SQL statements for debugging |
 | `GIT_AUTHOR_NAME` | `mcp-agent` | Git commit author name |
 | `GIT_AUTHOR_EMAIL` | `mcp-agent@example.com` | Git commit author email |

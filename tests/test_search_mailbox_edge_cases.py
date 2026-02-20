@@ -16,13 +16,7 @@ import pytest
 from fastmcp import Client
 
 from mcp_agent_mail.app import build_mcp_server
-
-
-def _extract_result(call_result):
-    """Extract the actual data from a CallToolResult."""
-    if hasattr(call_result, "structured_content") and call_result.structured_content:
-        return call_result.structured_content.get("result", call_result.data)
-    return call_result.data
+from tests.conftest import extract_result
 
 
 @pytest.mark.asyncio
@@ -69,7 +63,7 @@ async def test_search_with_special_characters(isolated_env):
             },
         )
 
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
         assert len(results) >= 1, "Should find template-related messages"
 
         # Search for vector
@@ -82,7 +76,7 @@ async def test_search_with_special_characters(isolated_env):
             },
         )
 
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
         assert len(results) >= 1, "Should find vector/map structures"
 
 
@@ -130,7 +124,7 @@ async def test_search_with_unicode_characters(isolated_env):
             },
         )
 
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
         assert len(results) >= 1, "Should find internationalization message"
 
         # Search for emoji
@@ -143,7 +137,7 @@ async def test_search_with_unicode_characters(isolated_env):
             },
         )
 
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
         assert len(results) >= 1, "Should handle emoji in content"
 
 
@@ -189,7 +183,7 @@ This uses aiohttp for asynchronous HTTP requests.""",
             },
         )
 
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
         assert len(results) >= 1, "Should find code in message body"
         assert "aiohttp" in results[0]["body_md"]
 
@@ -233,7 +227,7 @@ async def test_search_with_very_long_message(isolated_env):
             },
         )
 
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
         assert len(results) == 1, "Should find keyword in long message"
         assert "IMPORTANT_KEYWORD_HERE" in results[0]["body_snippet"]
 
@@ -271,7 +265,7 @@ async def test_search_case_insensitive(isolated_env):
                 },
             )
 
-            results = _extract_result(search_result)
+            results = extract_result(search_result)
             assert len(results) == 1, f"Should find result regardless of case: {query}"
 
 
@@ -307,7 +301,7 @@ async def test_search_with_whitespace_variations(isolated_env):
             },
         )
 
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
         assert len(results) == 1, "Should handle extra whitespace in query"
 
 
@@ -345,7 +339,7 @@ async def test_search_with_prefix_wildcard(isolated_env):
             },
         )
 
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
         # Should find authenticate, authentication, authenticator
         assert len(results) >= 3, "Prefix wildcard should match multiple words"
 
@@ -383,7 +377,7 @@ async def test_search_with_attachments_metadata(isolated_env):
             },
         )
 
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
         assert len(results) == 1, "Should find message mentioning attachments"
 
 
@@ -430,7 +424,7 @@ async def test_search_excludes_terms_with_NOT(isolated_env):
             },
         )
 
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
         assert len(results) == 1, "Should find only backend testing message"
         assert "backend" in results[0]["subject"].lower()
 
@@ -478,7 +472,7 @@ async def test_search_with_numbers_and_versions(isolated_env):
             },
         )
 
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
         assert len(results) >= 1, "Should find Python upgrade message"
 
         # Search for API release
@@ -491,7 +485,7 @@ async def test_search_with_numbers_and_versions(isolated_env):
             },
         )
 
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
         assert len(results) >= 1, "Should find API release message"
 
 
@@ -531,7 +525,7 @@ async def test_search_result_structure_completeness(isolated_env):
             },
         )
 
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
         assert len(results) == 1
 
         # Verify all expected fields are present
@@ -597,7 +591,7 @@ async def test_search_without_bodies(isolated_env):
             },
         )
 
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
         assert len(results) == 1
         assert "body_md" not in results[0], "body_md should not be present when include_bodies=False"
         assert "body_snippet" in results[0], "body_snippet should still be present"

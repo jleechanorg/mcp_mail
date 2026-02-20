@@ -6209,6 +6209,7 @@ def build_mcp_server() -> FastMCP:
             async with get_session() as session:
                 sel = select(FileReservation).where(
                     FileReservation.agent_id == agent.id,
+                    FileReservation.project_id == project.id,
                     cast(Any, FileReservation.released_ts).is_(None),
                 )
                 if file_reservation_ids:
@@ -6220,6 +6221,7 @@ def build_mcp_server() -> FastMCP:
 
                 stmt = update(FileReservation).where(
                     FileReservation.agent_id == agent.id,
+                    FileReservation.project_id == project.id,
                     cast(Any, FileReservation.released_ts).is_(None),
                 )
                 if file_reservation_ids:
@@ -6315,6 +6317,17 @@ def build_mcp_server() -> FastMCP:
             )
 
         reservation, holder = row
+        if reservation.project_id != project.id:
+            raise ToolExecutionError(
+                "WRONG_PROJECT",
+                "Reservation belongs to a different project; use its project_key.",
+                recoverable=True,
+                data={
+                    "file_reservation_id": file_reservation_id,
+                    "reservation_project_id": reservation.project_id,
+                    "requested_project_id": project.id,
+                },
+            )
         if reservation.released_ts is not None:
             return {
                 "released": 0,
@@ -6517,6 +6530,7 @@ def build_mcp_server() -> FastMCP:
                 select(FileReservation)
                 .where(
                     FileReservation.agent_id == agent.id,
+                    FileReservation.project_id == project.id,
                     cast(Any, FileReservation.released_ts).is_(None),
                 )
                 .order_by(asc(FileReservation.expires_ts))
