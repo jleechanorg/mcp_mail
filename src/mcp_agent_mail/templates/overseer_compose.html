@@ -155,6 +155,25 @@
               Split
             </button>
           </div>
+
+          <!-- Message Mode selector -->
+          <div class="flex items-center gap-1 p-0.5 bg-slate-100 dark:bg-slate-900 rounded-lg" title="Select message mode">
+            <button type="button" @click="messageMode = 'normal'"
+                    class="px-3 py-1.5 text-xs font-medium rounded-md transition-all"
+                    :class="messageMode === 'normal' ? 'bg-white dark:bg-slate-800 shadow-sm text-slate-900 dark:text-white' : 'text-slate-600 dark:text-slate-400'">
+              Normal
+            </button>
+            <button type="button" @click="messageMode = 'think'"
+                    class="px-3 py-1.5 text-xs font-medium rounded-md transition-all"
+                    :class="messageMode === 'think' ? 'bg-indigo-100 dark:bg-indigo-900/50 shadow-sm text-indigo-700 dark:text-indigo-300' : 'text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400'">
+              THINK
+            </button>
+            <button type="button" @click="messageMode = 'god'"
+                    class="px-3 py-1.5 text-xs font-medium rounded-md transition-all"
+                    :class="messageMode === 'god' ? 'bg-amber-100 dark:bg-amber-900/50 shadow-sm text-amber-700 dark:text-amber-300' : 'text-slate-600 dark:text-slate-400 hover:text-amber-600 dark:hover:text-amber-400'">
+              GOD
+            </button>
+          </div>
         </div>
       </div>
 
@@ -168,11 +187,12 @@
                  id="subject"
                  x-model="subject"
                  required
-                 maxlength="200"
+                 :maxlength="getSubjectMaxLength()"
                  placeholder="e.g., Urgent: Review security vulnerability"
                  class="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white placeholder-slate-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all" />
           <p class="mt-1.5 text-xs text-slate-500 dark:text-slate-500">
-            <span x-text="subject.length"></span> / 200 characters
+            <span x-text="getSubjectWithMode().length"></span> / 200 characters
+            <span x-show="messageMode !== 'normal'" class="text-indigo-600 dark:text-indigo-400 ml-1">(includes mode prefix)</span>
           </p>
         </div>
 
@@ -362,7 +382,13 @@ Please investigate the following:
           </div>
           <div class="flex items-start justify-between text-sm gap-3">
             <span class="text-slate-600 dark:text-slate-400 flex-shrink-0">Subject:</span>
-            <span class="font-medium text-slate-900 dark:text-white text-right" x-text="subject"></span>
+            <span class="font-medium text-slate-900 dark:text-white text-right" x-text="getSubjectWithMode()"></span>
+          </div>
+          <div class="flex items-center justify-between text-sm" x-show="messageMode !== 'normal'">
+            <span class="text-slate-600 dark:text-slate-400">Mode:</span>
+            <span class="px-2 py-0.5 rounded text-xs font-medium"
+                  :class="messageMode === 'think' ? 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-400' : 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400'"
+                  x-text="messageMode.toUpperCase()"></span>
           </div>
           <div class="flex items-center justify-between text-sm">
             <span class="text-slate-600 dark:text-slate-400">Priority:</span>
@@ -402,6 +428,7 @@ function overseerComposer() {
     threadId: '',
     recipientSearch: '',
     viewMode: 'write',
+    messageMode: 'normal', // 'normal', 'think', or 'god'
     renderedPreview: '',
     sending: false,
     showToast: false,
@@ -417,6 +444,34 @@ function overseerComposer() {
           lucide.createIcons();
         }
       });
+    },
+
+    // Get subject with mode prefix (idempotent - won't double-prefix)
+    getSubjectWithMode() {
+      if (this.messageMode === 'normal') {
+        return this.subject;
+      }
+      const prefix = `:${this.messageMode.toUpperCase()}:`;
+      // Remove existing mode prefixes first to avoid double-prefixing
+      let cleanSubject = this.subject.replace(/^:(NORMAL|THINK|GOD):\s*/, '');
+      return `${prefix} ${cleanSubject}`;
+    },
+
+    // Calculate max length accounting for mode prefix
+    getSubjectMaxLength() {
+      const baseLength = 200;
+      const prefixLengths = {
+        'normal': 0,
+        'think': 7,   // ":THINK: " = 7 chars
+        'god': 5       // ":GOD: " = 5 chars
+      };
+      // Current prefix length (if any)
+      const currentPrefixMatch = this.subject.match(/^:(NORMAL|THINK|GOD):\s*/);
+      const currentPrefixLength = currentPrefixMatch ? currentPrefixMatch[0].length : 0;
+      // New prefix length
+      const newPrefixLength = prefixLengths[this.messageMode] || 0;
+      // Adjust max length based on prefix delta
+      return baseLength + currentPrefixLength - newPrefixLength;
     },
 
     selectAll() {
@@ -437,7 +492,7 @@ function overseerComposer() {
       return this.selectedRecipients.length > 0 &&
              this.selectedRecipients.length <= 100 &&
              this.subject.trim() &&
-             this.subject.length <= 200 &&
+             this.getSubjectWithMode().length <= 200 &&
              this.body.trim() &&
              this.body.length <= 49600 &&
              !this.sending;
@@ -524,9 +579,10 @@ function overseerComposer() {
           },
           body: JSON.stringify({
             recipients: this.selectedRecipients,
-            subject: this.subject.trim(),
+            subject: this.getSubjectWithMode().trim(),
             body_md: this.body.trim(),
             thread_id: this.threadId.trim() || null,
+            message_mode: this.messageMode !== 'normal' ? this.messageMode : null,
           })
         });
 

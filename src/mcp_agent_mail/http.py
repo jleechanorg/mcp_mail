@@ -2667,6 +2667,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 subject: str = request_body.get("subject", "").strip()
                 body_md: str = request_body.get("body_md", "").strip()
                 thread_id: str | None = request_body.get("thread_id")
+                message_mode: str | None = request_body.get("message_mode")
 
                 # Comprehensive validation
                 if not recipients:
