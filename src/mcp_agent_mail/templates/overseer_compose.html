@@ -158,6 +158,36 @@
         </div>
       </div>
 
+      <!-- Message Mode Selector -->
+      <div class="px-6 py-3 bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700">
+        <div class="flex items-center gap-3">
+          <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Message Mode:</span>
+          <div class="flex items-center gap-1 p-0.5 bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700">
+            <button type="button" @click="messageMode = 'normal'"
+                    class="px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5"
+                    :class="messageMode === 'normal' ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 shadow-sm' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700'">
+              <i data-lucide="message-square" class="w-3.5 h-3.5"></i>
+              Normal
+            </button>
+            <button type="button" @click="messageMode = 'think'"
+                    class="px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5"
+                    :class="messageMode === 'think' ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 shadow-sm' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700'">
+              <i data-lucide="brain" class="w-3.5 h-3.5"></i>
+              Think
+            </button>
+            <button type="button" @click="messageMode = 'god'"
+                    class="px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5"
+                    :class="messageMode === 'god' ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 shadow-sm' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700'">
+              <i data-lucide="sparkles" class="w-3.5 h-3.5"></i>
+              God
+            </button>
+          </div>
+          <span x-show="messageMode !== 'normal'" class="text-xs text-slate-500 dark:text-slate-400">
+            <span x-text="messageMode === 'think' ? '🤔 AI will reason step-by-step' : '🌟 AI will use enhanced capabilities'"></span>
+          </span>
+        </div>
+      </div>
+
       <div class="p-6 space-y-4">
         <!-- Subject Line -->
         <div>
@@ -403,6 +433,7 @@ function overseerComposer() {
     threadId: '',
     recipientSearch: '',
     viewMode: 'write',
+    messageMode: 'normal',
     renderedPreview: '',
     sending: false,
     showToast: false,
