@@ -18,3 +18,5 @@ bd.db
 !*.jsonl
 !metadata.json
 !config.json
+.br_history/
+dolt/
