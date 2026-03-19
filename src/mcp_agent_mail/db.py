@@ -4,7 +4,7 @@ import asyncio
 import logging
 import random
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from functools import wraps
 from typing import Any, TypeVar
 
@@ -394,24 +394,13 @@ def _setup_fts(connection) -> None:
     connection.exec_driver_sql(
         "CREATE INDEX IF NOT EXISTS idx_product_project ON product_project_links(product_id, project_id)"
     )
-    # AgentLink indexes for efficient contact lookups
-    connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_agent_links_a_project ON agent_links(a_project_id)")
-    connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_agent_links_b_project ON agent_links(b_project_id)")
-    connection.exec_driver_sql(
-        "CREATE INDEX IF NOT EXISTS idx_agent_links_b_project_agent ON agent_links(b_project_id, b_agent_id)"
-    )
-    connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_agent_links_status ON agent_links(status)")
+
     # Schema migrations: add columns that may be missing on older databases.
-    # SQLite ALTER TABLE ADD COLUMN is idempotent-safe via try/except.
-    for migration_sql in [
-        "ALTER TABLE agents ADD COLUMN retired_at DATETIME DEFAULT NULL",
-        "ALTER TABLE projects ADD COLUMN archived_at DATETIME DEFAULT NULL",
-        "ALTER TABLE agents ADD COLUMN registration_token VARCHAR(64) DEFAULT NULL",
-        "ALTER TABLE messages ADD COLUMN topic VARCHAR(64) DEFAULT NULL",
-    ]:
-        with suppress(Exception):
-            # Column already exists — safe to ignore
-            connection.exec_driver_sql(migration_sql)
+    # Check column existence first to avoid masking real errors.
+    _add_column_if_missing(connection, "agents", "retired_at", "DATETIME DEFAULT NULL")
+    _add_column_if_missing(connection, "projects", "archived_at", "DATETIME DEFAULT NULL")
+    _add_column_if_missing(connection, "agents", "registration_token", "VARCHAR(64) DEFAULT NULL")
+    _add_column_if_missing(connection, "messages", "topic", "VARCHAR(64) DEFAULT NULL")
 
     # Index migrations for newly added columns.
     # CREATE INDEX IF NOT EXISTS is natively idempotent in SQLite.
@@ -420,6 +409,13 @@ def _setup_fts(connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_messages_project_topic ON messages (project_id, topic)",
     ]:
         connection.exec_driver_sql(index_sql)
+
+
+def _add_column_if_missing(connection, table: str, column: str, column_def: str) -> None:
+    """Add a column to a table if it doesn't already exist."""
+    columns = {row[1] for row in connection.exec_driver_sql(f"PRAGMA table_info('{table}')").fetchall()}
+    if column not in columns:
+        connection.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {column_def}")
 
 
 def _ensure_agent_active_columns(connection) -> None:
