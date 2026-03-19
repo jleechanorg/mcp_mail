@@ -186,8 +186,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         """Detect proxy-forwarded headers to avoid trusting localhost behind proxies."""
         headers = request.headers
         return any(
-            name in headers
-            for name in ("x-forwarded-for", "x-forwarded-proto", "x-forwarded-host", "forwarded")
+            name in headers for name in ("x-forwarded-for", "x-forwarded-proto", "x-forwarded-host", "forwarded")
         )
 
     async def dispatch(self, request: Request, call_next):
@@ -201,7 +200,11 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
             client_host = request.client.host if request.client else ""
         except Exception:
             client_host = ""
-        if self._allow_localhost and client_host in {"127.0.0.1", "::1", "localhost"} and not self._has_forwarded_headers(request):
+        if (
+            self._allow_localhost
+            and client_host in {"127.0.0.1", "::1", "localhost"}
+            and not self._has_forwarded_headers(request)
+        ):
             return await call_next(request)
         auth_header = request.headers.get("Authorization", "")
         if auth_header != f"Bearer {self._token}":
