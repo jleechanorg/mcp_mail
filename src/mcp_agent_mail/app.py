@@ -6706,7 +6706,12 @@ def build_mcp_server() -> FastMCP:
                         prod.name = normalized_name
                         await session.commit()
                         await session.refresh(prod)
-                return {"id": prod.id, "product_uid": prod.product_uid, "name": prod.name, "created_at": _iso(prod.created_at)}
+                return {
+                    "id": prod.id,
+                    "product_uid": prod.product_uid,
+                    "name": prod.name,
+                    "created_at": _iso(prod.created_at),
+                }
             # Create with strict uid pattern; otherwise generate uid and normalize name
             import re as _re
             import uuid as _uuid

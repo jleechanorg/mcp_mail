@@ -910,7 +910,9 @@ async def test_ensure_product_updates_name(isolated_env):
         product_id1 = result1.data["id"]
 
         # Call with different name - should update
-        result2 = await client.call_tool("ensure_product", {"product_key": result1.data["product_uid"], "name": "Updated Name"})
+        result2 = await client.call_tool(
+            "ensure_product", {"product_key": result1.data["product_uid"], "name": "Updated Name"}
+        )
         assert result2.data["id"] == product_id1  # Same product
         assert result2.data["name"] == "Updated Name"  # name updated
 
