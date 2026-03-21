@@ -2988,6 +2988,7 @@ def build_mcp_server() -> FastMCP:
         task_description: str = "",
         attachments_policy: str = "auto",
         force_reclaim: bool = False,
+        agent_name: Optional[str] = None,
     ) -> dict[str, Any]:
         """
         Create or update an agent identity within a project and persist its profile to Git.
@@ -3000,9 +3001,8 @@ def build_mcp_server() -> FastMCP:
         Semantics
         ---------
         - If the project doesn't exist, it will be automatically created (you don't need to call `ensure_project` first).
-        - If `name` is omitted, a random adjective+noun name is auto-generated (e.g., "BlueLake").
-        - Reusing the same `name` updates the profile (program/model/task) and
-          refreshes `last_active_ts`.
+        - If `name` (or `agent_name`) is omitted, a random adjective+noun name is auto-generated (e.g., "BlueLake").
+        - Reusing the same name updates the profile (program/model/task) and refreshes `last_active_ts`.
         - A `profile.json` file is written under `agents/<Name>/` in the project archive.
         - Providing a name that is active in another project automatically retires that identity so you can claim the handle.
 
@@ -3026,15 +3026,19 @@ def build_mcp_server() -> FastMCP:
         model : str
             The underlying model (e.g., "gpt5-codex", "opus-4.1").
         name : Optional[str]
-            Any alphanumeric string for the agent name (e.g., "BlueLake", "streamf", "agent1").
-            If omitted, the server auto-generates a random codename (currently adjective+noun).
-            Names are globally unique; passing the same name updates the profile.
+            Alphanumeric agent name (e.g., "BlueLake", "streamf", "agent1").
+            Alias: `agent_name`. One of `name` or `agent_name` may be provided;
+            `agent_name` takes precedence if both are provided.
+            If omitted (and `agent_name` also omitted), the server auto-generates a random codename.
         task_description : str
             Short description of current focus (shows up in directory listings).
         force_reclaim : bool
             If True, forcefully reclaim this agent name by retiring any active agents that currently
             use it, even in other projects. Use this when you want to override existing agents.
             Default is False. When False, the system will warn you if the name is already taken.
+        agent_name : Optional[str]
+            Alias for `name`. Provided for compatibility with callers that use `agent_name` as the
+            parameter name (matching `fetch_inbox`'s convention). Takes precedence over `name`.
 
         Returns
         -------
@@ -3063,6 +3067,8 @@ def build_mcp_server() -> FastMCP:
         - Names are globally unique (case-insensitive). If you see "already in use", pick another or omit `name`.
         - Use the same `project_key` consistently across cooperating agents.
         """
+        # Resolve agent_name alias → name (agent_name takes precedence if both provided)
+        resolved_name = agent_name if agent_name is not None else name
         # Auto-create project if it doesn't exist (allows any string as project_key)
         project = await _ensure_project(project_key)
         await ensure_archive(settings, project.slug)
@@ -3078,7 +3084,7 @@ def build_mcp_server() -> FastMCP:
                 c = Console()
                 c.print(
                     Panel(
-                        f"project=[bold]{project.human_key}[/]\nname=[bold]{name or '(generated)'}[/]\nprogram={program}\nmodel={model}",
+                        f"project=[bold]{project.human_key}[/]\nname=[bold]{resolved_name or '(generated)'}[/]\nprogram={program}\nmodel={model}",
                         title="tool: register_agent",
                         border_style="green",
                     )
@@ -3091,7 +3097,7 @@ def build_mcp_server() -> FastMCP:
         if ap not in {"auto", "inline", "file"}:
             ap = "auto"
         agent = await _get_or_create_agent(
-            project, name, program, model, task_description, settings, force_reclaim=force_reclaim
+            project, resolved_name, program, model, task_description, settings, force_reclaim=force_reclaim
         )
         # Persist attachment policy if changed
         if getattr(agent, "attachments_policy", None) != ap:
