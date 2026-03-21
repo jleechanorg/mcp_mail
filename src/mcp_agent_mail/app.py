@@ -902,6 +902,11 @@ async def _ensure_project(human_key: str) -> Project:
         result = await session.execute(select(Project).where(Project.slug == slug))
         project = result.scalars().first()
         if project:
+            # Update human_key if it has changed (supports config updates)
+            if project.human_key != human_key:
+                project.human_key = human_key
+                await session.commit()
+                await session.refresh(project)
             # Ensure global inbox agent exists for existing project
             await _ensure_global_inbox_agent(project, session)
             return project
@@ -6684,6 +6689,8 @@ def build_mcp_server() -> FastMCP:
 
         - product_key may be a product_uid or a name
         - If both are absent, error
+
+        Idempotent: If the product exists, updates the name if provided and different.
         """
         await ensure_schema()
         key_raw = (product_key or name or "").strip()
@@ -6691,23 +6698,31 @@ def build_mcp_server() -> FastMCP:
             raise ToolExecutionError("INVALID_ARGUMENT", "Provide product_key or name.")
         async with get_session() as session:
             prod = await _get_product_by_key(session, key_raw)
-            if prod is None:
-                # Create with strict uid pattern; otherwise generate uid and normalize name
-                import re as _re
-                import uuid as _uuid
+            if prod is not None:
+                # Update name if provided and different (supports config updates)
+                if name:
+                    normalized_name = " ".join(name.strip().split())[:255]
+                    if prod.name != normalized_name:
+                        prod.name = normalized_name
+                        await session.commit()
+                        await session.refresh(prod)
+                return {"id": prod.id, "product_uid": prod.product_uid, "name": prod.name, "created_at": _iso(prod.created_at)}
+            # Create with strict uid pattern; otherwise generate uid and normalize name
+            import re as _re
+            import uuid as _uuid
 
-                uid_pattern = _re.compile(r"^[A-Fa-f0-9]{8,64}$")
-                if product_key and uid_pattern.fullmatch(product_key.strip()):
-                    uid = product_key.strip().lower()
-                else:
-                    uid = _uuid.uuid4().hex[:20]
-                display_name = (name or key_raw).strip()
-                # Collapse internal whitespace and cap length
-                display_name = " ".join(display_name.split())[:255] or uid
-                prod = Product(product_uid=uid, name=display_name)
-                session.add(prod)
-                await session.commit()
-                await session.refresh(prod)
+            uid_pattern = _re.compile(r"^[A-Fa-f0-9]{8,64}$")
+            if product_key and uid_pattern.fullmatch(product_key.strip()):
+                uid = product_key.strip().lower()
+            else:
+                uid = _uuid.uuid4().hex[:20]
+            display_name = (name or key_raw).strip()
+            # Collapse internal whitespace and cap length
+            display_name = " ".join(display_name.split())[:255] or uid
+            prod = Product(product_uid=uid, name=display_name)
+            session.add(prod)
+            await session.commit()
+            await session.refresh(prod)
         return {"id": prod.id, "product_uid": prod.product_uid, "name": prod.name, "created_at": _iso(prod.created_at)}
 
     @mcp.tool(name="products_link")
