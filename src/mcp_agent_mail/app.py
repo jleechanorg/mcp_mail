@@ -3136,6 +3136,31 @@ def build_mcp_server() -> FastMCP:
         if should_cc_global_inbox:
             cc_agents.append(global_inbox_agent)
 
+        # If sender explicitly CCs the global inbox, fan out to all active project workers.
+        # This keeps global inbox usable as a broadcast trigger while still preserving
+        # regular recipient semantics.
+        explicitly_cced_global_inbox = global_inbox_name in cc_names
+        if explicitly_cced_global_inbox and sender.name != global_inbox_name and project.id is not None:
+            existing_recipient_names = {
+                agent.name for agent in to_agents + cc_agents + bcc_agents if getattr(agent, "name", None)
+            }
+            async with get_session() as fanout_session:
+                worker_rows = await fanout_session.execute(
+                    select(Agent)
+                    .where(Agent.project_id == project.id)
+                    .where(cast(Any, Agent.is_active).is_(True))
+                )
+                for worker in worker_rows.scalars().all():
+                    worker_name = (worker.name or "").strip()
+                    if not worker_name:
+                        continue
+                    if worker_name == sender.name or worker_name == global_inbox_name:
+                        continue
+                    if worker_name in existing_recipient_names:
+                        continue
+                    cc_agents.append(worker)
+                    existing_recipient_names.add(worker_name)
+
         # Filter out global inbox from cc_agents for outbox visibility (keep in recipient_records)
         cc_agents_for_outbox = [agent for agent in cc_agents if agent.name != global_inbox_name]
 
