@@ -6,6 +6,7 @@ import pytest
 from fastmcp import Client
 
 from mcp_agent_mail.app import _EXTENDED_TOOL_REGISTRY, CORE_TOOLS, EXTENDED_TOOLS, PRODUCT_TOOLS, build_mcp_server
+from mcp_agent_mail.config import clear_settings_cache
 
 
 @pytest.mark.asyncio
@@ -166,6 +167,7 @@ def test_product_tools_count():
 async def test_core_mode_hides_product_tools(isolated_env, monkeypatch):
     """Test that core mode removes product tools from MCP exposure."""
     monkeypatch.setenv("MCP_TOOLS_MODE", "core")
+    clear_settings_cache()
     mcp = build_mcp_server()
     async with Client(mcp) as client:
         tools = await client.list_tools()

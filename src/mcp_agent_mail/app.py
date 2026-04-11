@@ -3150,7 +3150,7 @@ def build_mcp_server() -> FastMCP:
         # If sender explicitly CCs the global inbox, fan out to all active project workers.
         # This keeps global inbox usable as a broadcast trigger while still preserving
         # regular recipient semantics.
-        explicitly_cced_global_inbox = global_inbox_name in cc_names
+        explicitly_cced_global_inbox = global_inbox_name.lower() in {n.lower() for n in cc_names}
         if explicitly_cced_global_inbox and sender.name != global_inbox_name and project.id is not None:
             existing_recipient_names = {
                 agent.name for agent in to_agents + cc_agents + bcc_agents if getattr(agent, "name", None)
