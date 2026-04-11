@@ -2961,6 +2961,17 @@ CORE_TOOLS = {
     "search_mailbox",
 }
 
+# Product bus tools (~3k tokens): Product/project coordination features
+# These are only needed when using the product bus feature.
+# Excluded from core mode to reduce token overhead.
+PRODUCT_TOOLS = {
+    "ensure_product",
+    "products_link",
+    "search_messages_product",
+    "fetch_inbox_product",
+    "summarize_thread_product",
+}
+
 # Extended tools (~16k tokens): Advanced features available via meta-tools
 EXTENDED_TOOLS = {
     "create_agent_identity",
@@ -9068,25 +9079,29 @@ def build_mcp_server() -> FastMCP:
 
     # Conditional tool exposure based on tools_mode setting
     if settings.tools_mode == "core":
-        # In core mode, hide extended tools from direct MCP exposure
-        # They remain accessible via call_extended_tool meta-tool
-        # Note: Meta-tools (list_extended_tools, call_extended_tool) are intentionally
-        # NOT in CORE_TOOLS or EXTENDED_TOOLS - they're kept by not being in EXTENDED_TOOLS
-        # Remove extended tools using FastMCP's remove_tool method
-        for tool_name in EXTENDED_TOOLS:
+        # In core mode, hide extended and product tools from direct MCP exposure.
+        # Extended tools remain accessible via the call_extended_tool meta-tool.
+        # Product bus tools (ensure_product, products_link, etc.) are only needed
+        # when using product coordination features — omit them to reduce token overhead.
+        # Meta-tools (list_extended_tools, call_extended_tool) are intentionally kept.
+        for tool_name in EXTENDED_TOOLS | PRODUCT_TOOLS:
             try:
                 mcp.remove_tool(tool_name)
             except (KeyError, AttributeError, ValueError) as e:
                 # Tool might not exist or already removed, that's ok
                 logger.debug(f"Could not remove tool {tool_name}: {e}")
 
-        # Count remaining tools by checking what's in CORE_TOOLS + meta tools
+        # Count remaining tools: CORE_TOOLS + 2 meta tools
         exposed_count = len(CORE_TOOLS) + 2  # +2 for list_extended_tools and call_extended_tool
-        hidden_count = len(EXTENDED_TOOLS)
-        logger.info(f"Core mode enabled: Exposed {exposed_count} tools (hidden {hidden_count} extended tools)")
+        len(EXTENDED_TOOLS) + len(PRODUCT_TOOLS)
+        logger.info(
+            f"Core mode enabled: Exposed {exposed_count} tools "
+            f"(hidden {len(EXTENDED_TOOLS)} extended + {len(PRODUCT_TOOLS)} product tools). "
+            f"Set MCP_TOOLS_MODE=extended to expose all tools."
+        )
     else:
-        # Extended mode: all tools exposed
-        total_count = len(CORE_TOOLS) + len(EXTENDED_TOOLS) + 2  # +2 for meta tools
+        # Extended mode: all tools exposed directly
+        total_count = len(CORE_TOOLS) + len(EXTENDED_TOOLS) + len(PRODUCT_TOOLS) + 2  # +2 for meta tools
         logger.info(f"Extended mode: All {total_count} tools exposed directly")
 
     return mcp
