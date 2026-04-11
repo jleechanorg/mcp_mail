@@ -3157,7 +3157,10 @@ def build_mcp_server() -> FastMCP:
             }
             async with get_session() as fanout_session:
                 worker_rows = await fanout_session.execute(
-                    select(Agent).where(Agent.project_id == project.id).where(cast(Any, Agent.is_active).is_(True))
+                    select(Agent)
+                    .where(Agent.project_id == project.id)
+                    .where(cast(Any, Agent.is_active).is_(True))
+                    .where(cast(Any, Agent.is_placeholder).is_(False))
                 )
                 for worker in worker_rows.scalars().all():
                     worker_name = (worker.name or "").strip()
