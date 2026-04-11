@@ -9091,7 +9091,6 @@ def build_mcp_server() -> FastMCP:
 
         # Count remaining tools: CORE_TOOLS + 2 meta tools
         exposed_count = len(CORE_TOOLS) + 2  # +2 for list_extended_tools and call_extended_tool
-        len(EXTENDED_TOOLS) + len(PRODUCT_TOOLS)
         logger.info(
             f"Core mode enabled: Exposed {exposed_count} tools "
             f"(hidden {len(EXTENDED_TOOLS)} extended + {len(PRODUCT_TOOLS)} product tools). "
