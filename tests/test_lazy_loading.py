@@ -152,7 +152,13 @@ def test_core_tools_count():
 def test_product_tools_count():
     """Test that we have exactly 5 product bus tools."""
     assert len(PRODUCT_TOOLS) == 5, f"Expected 5 product tools, but found {len(PRODUCT_TOOLS)}"
-    expected = {"ensure_product", "products_link", "search_messages_product", "fetch_inbox_product", "summarize_thread_product"}
+    expected = {
+        "ensure_product",
+        "products_link",
+        "search_messages_product",
+        "fetch_inbox_product",
+        "summarize_thread_product",
+    }
     assert expected == PRODUCT_TOOLS, f"PRODUCT_TOOLS mismatch: {PRODUCT_TOOLS}"
 
 
