@@ -6676,11 +6676,15 @@ def build_mcp_server() -> FastMCP:
 
     # --- Product Bus (Phase 2): ensure/link/search/resources ---------------------------------
 
-    async def _get_product_by_key(session, key: str) -> Optional[Product]:
-        # Key may match product_uid or name (case-sensitive by default)
+    async def _get_product_by_key(session, key: str) -> tuple[Optional[Product], Optional[str]]:
+        """Find product by product_uid or name. Returns (product, matched_by)."""
         stmt = select(Product).where((Product.product_uid == key) | (Product.name == key))
         res = await session.execute(stmt)
-        return res.scalars().first()
+        prod = res.scalars().first()
+        if prod is None:
+            return None, None
+        matched_by = "product_uid" if prod.product_uid == key else "name"
+        return prod, matched_by
 
     @mcp.tool(name="ensure_product")
     @_instrument_tool("ensure_product", cluster=CLUSTER_PRODUCT, capabilities={"product"})
@@ -6703,10 +6707,11 @@ def build_mcp_server() -> FastMCP:
             raise ToolExecutionError("INVALID_ARGUMENT", "Provide product_key or name.")
         async with get_session() as session:
             normalized_key = " ".join(key_raw.split())[:128] or key_raw
-            prod = await _get_product_by_key(session, normalized_key)
+            prod, matched_by = await _get_product_by_key(session, normalized_key)
             if prod is not None:
                 # Update name if provided and different (supports config updates)
-                if name is not None:
+                # Only update if found by product_uid (not by name) to preserve idempotency
+                if name is not None and matched_by == "product_uid":
                     normalized_name = " ".join(name.split())[:128]
                     if not normalized_name:
                         raise ToolExecutionError("INVALID_ARGUMENT", "Product name cannot be empty.")
@@ -6751,7 +6756,7 @@ def build_mcp_server() -> FastMCP:
         """
         await ensure_schema()
         async with get_session() as session:
-            prod = await _get_product_by_key(session, product_key.strip())
+            prod, _ = await _get_product_by_key(session, product_key.strip())
             if prod is None:
                 raise ToolExecutionError("NOT_FOUND", f"Product '{product_key}' not found.", recoverable=True)
             # Resolve project
@@ -6811,7 +6816,7 @@ def build_mcp_server() -> FastMCP:
         async def _load() -> dict[str, Any]:
             await ensure_schema()
             async with get_session() as session:
-                prod = await _get_product_by_key(session, key.strip())
+                prod, _ = await _get_product_by_key(session, key.strip())
                 if prod is None:
                     raise ToolExecutionError("NOT_FOUND", f"Product '{key}' not found.", recoverable=True)
                 proj_rows = await session.execute(
@@ -6847,7 +6852,7 @@ def build_mcp_server() -> FastMCP:
         """
         await ensure_schema()
         async with get_session() as session:
-            prod = await _get_product_by_key(session, product_key.strip())
+            prod, _ = await _get_product_by_key(session, product_key.strip())
             if prod is None:
                 raise ToolExecutionError("NOT_FOUND", f"Product '{product_key}' not found.", recoverable=True)
             proj_ids_rows = await session.execute(
@@ -6910,7 +6915,7 @@ def build_mcp_server() -> FastMCP:
         await ensure_schema()
         # Collect linked projects
         async with get_session() as session:
-            prod = await _get_product_by_key(session, product_key.strip())
+            prod, _ = await _get_product_by_key(session, product_key.strip())
             if prod is None:
                 raise ToolExecutionError("NOT_FOUND", f"Product '{product_key}' not found.", recoverable=True)
             proj_rows = await session.execute(
@@ -6964,7 +6969,7 @@ def build_mcp_server() -> FastMCP:
             criteria.append(Message.id == seed_id)
 
         async with get_session() as session:
-            prod = await _get_product_by_key(session, product_key.strip())
+            prod, _ = await _get_product_by_key(session, product_key.strip())
             if prod is None:
                 raise ToolExecutionError("NOT_FOUND", f"Product '{product_key}' not found.", recoverable=True)
             proj_ids_rows = await session.execute(
