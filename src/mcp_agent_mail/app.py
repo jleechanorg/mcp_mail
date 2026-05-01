@@ -1043,6 +1043,30 @@ async def _get_project_by_id(project_id: int) -> Project:
         return project
 
 
+async def _get_active_project_agents(
+    project_id: int, *, session: AsyncSession | None = None
+) -> list[Agent]:
+    """Return active, non-placeholder agents for a project, ordered by name."""
+    if session is None:
+        async with get_session() as new_session:
+            result = await new_session.execute(
+                select(Agent)
+                .where(Agent.project_id == project_id)
+                .where(cast(Any, Agent.is_active).is_(True))
+                .where(cast(Any, Agent.is_placeholder).is_(False))
+                .order_by(func.lower(Agent.name))
+            )
+            return list(result.scalars().all())
+    result = await session.execute(
+        select(Agent)
+        .where(Agent.project_id == project_id)
+        .where(cast(Any, Agent.is_active).is_(True))
+        .where(cast(Any, Agent.is_placeholder).is_(False))
+        .order_by(func.lower(Agent.name))
+    )
+    return list(result.scalars().all())
+
+
 # --- Project sibling suggestion helpers -----------------------------------------------------
 
 _PROJECT_PROFILE_FILENAMES: tuple[str, ...] = (
@@ -3166,13 +3190,7 @@ def build_mcp_server() -> FastMCP:
                 agent.name for agent in to_agents + cc_agents + bcc_agents if getattr(agent, "name", None)
             }
             async with get_session() as fanout_session:
-                worker_rows = await fanout_session.execute(
-                    select(Agent)
-                    .where(Agent.project_id == project.id)
-                    .where(cast(Any, Agent.is_active).is_(True))
-                    .where(cast(Any, Agent.is_placeholder).is_(False))
-                )
-                for worker in worker_rows.scalars().all():
+                for worker in await _get_active_project_agents(project.id, session=fanout_session):
                     worker_name = (worker.name or "").strip()
                     if not worker_name:
                         continue

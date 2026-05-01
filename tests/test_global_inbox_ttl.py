@@ -192,6 +192,14 @@ async def test_explicit_global_inbox_cc_fans_out_to_all_workers(isolated_env):
         assert any(_get("subject", msg) == "Broadcast via global inbox" for msg in charlie_inbox)
         assert any(_get("subject", msg) == "Broadcast via global inbox" for msg in dana_inbox)
 
+        # Sender (Alice) must NOT receive a fan-out copy in her own inbox
+        alice_inbox = _extract_result(
+            await client.call_tool("fetch_inbox", {"project_key": "test-project", "agent_name": "Alice"})
+        )
+        assert not any(_get("subject", msg) == "Broadcast via global inbox" for msg in alice_inbox), (
+            "Sender Alice should not receive a fan-out copy of her own broadcast message"
+        )
+
 
 @pytest.mark.asyncio
 async def test_any_agent_can_read_global_inbox(isolated_env):
