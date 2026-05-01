@@ -411,8 +411,6 @@ def _setup_fts(connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_product_project ON product_project_links(product_id, project_id)"
     )
 
-    _ensure_agent_active_columns(connection)
-
 
 def _add_column_if_missing(connection, table: str, column: str, column_def: str) -> None:
     """Add a column to a table if it doesn't already exist."""
