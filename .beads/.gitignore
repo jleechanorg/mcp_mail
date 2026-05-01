@@ -13,6 +13,7 @@ bd.sock
 # Legacy database files
 db.sqlite
 bd.db
+beads.db
 
 # Keep JSONL exports and config (source of truth for git)
 !*.jsonl
