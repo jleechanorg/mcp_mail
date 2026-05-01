@@ -321,6 +321,22 @@ def _check_and_fix_duplicate_agent_names(connection) -> None:
 
 
 def _setup_fts(connection) -> None:
+    # Schema migrations: add columns that may be missing on older databases.
+    # Must run BEFORE _ensure_agent_active_columns (which calls _migrate_project_id_nullable)
+    # so that table rebuilds in the migration include these new columns.
+    _add_column_if_missing(connection, "agents", "retired_at", "DATETIME DEFAULT NULL")
+    _add_column_if_missing(connection, "projects", "archived_at", "DATETIME DEFAULT NULL")
+    _add_column_if_missing(connection, "agents", "registration_token", "VARCHAR(64) DEFAULT NULL")
+    _add_column_if_missing(connection, "messages", "topic", "VARCHAR(64) DEFAULT NULL")
+
+    # Index migrations for newly added columns.
+    # CREATE INDEX IF NOT EXISTS is natively idempotent in SQLite.
+    for index_sql in [
+        "CREATE INDEX IF NOT EXISTS ix_agents_registration_token ON agents (registration_token)",
+        "CREATE INDEX IF NOT EXISTS idx_messages_project_topic ON messages (project_id, topic)",
+    ]:
+        connection.exec_driver_sql(index_sql)
+
     _ensure_agent_active_columns(connection)
     connection.exec_driver_sql(
         "CREATE VIRTUAL TABLE IF NOT EXISTS fts_messages USING fts5(message_id UNINDEXED, subject, body)"
@@ -395,20 +411,7 @@ def _setup_fts(connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_product_project ON product_project_links(product_id, project_id)"
     )
 
-    # Schema migrations: add columns that may be missing on older databases.
-    # Check column existence first to avoid masking real errors.
-    _add_column_if_missing(connection, "agents", "retired_at", "DATETIME DEFAULT NULL")
-    _add_column_if_missing(connection, "projects", "archived_at", "DATETIME DEFAULT NULL")
-    _add_column_if_missing(connection, "agents", "registration_token", "VARCHAR(64) DEFAULT NULL")
-    _add_column_if_missing(connection, "messages", "topic", "VARCHAR(64) DEFAULT NULL")
-
-    # Index migrations for newly added columns.
-    # CREATE INDEX IF NOT EXISTS is natively idempotent in SQLite.
-    for index_sql in [
-        "CREATE INDEX IF NOT EXISTS ix_agents_registration_token ON agents (registration_token)",
-        "CREATE INDEX IF NOT EXISTS idx_messages_project_topic ON messages (project_id, topic)",
-    ]:
-        connection.exec_driver_sql(index_sql)
+    _ensure_agent_active_columns(connection)
 
 
 def _add_column_if_missing(connection, table: str, column: str, column_def: str) -> None:
