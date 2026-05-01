@@ -322,7 +322,7 @@ When an agent sends a message via `send_message`, here's what happens:
 > If you override it with a **relative** SQLite URL and run the server from different directories (e.g., multiple workspace tabs), each will create its own separate database and agents cannot see each other's messages.
 > For multi-workspace or Conductor setups, set an **absolute path**:
 > ```bash
-> export DATABASE_URL="sqlite+aiosqlite:////home/user/.mcp_mail/shared.sqlite3"
+> export DATABASE_URL="sqlite+aiosqlite:////home/user/.mcp_agent_mail_git_mailbox_repo/storage.sqlite3"
 > ```
 
 **Messages are stored in SQLite by default:**

@@ -43,8 +43,7 @@ async def test_cross_project_messaging(isolated_env):
         )
         data = extract_result(result)
         deliveries = data.get("deliveries") if isinstance(data, dict) else getattr(data, "deliveries", [])
-        assert deliveries, "send_message should return deliveries"
-        assert len(deliveries) > 0, "Message should have at least one delivery"
+        assert deliveries, "Message should have at least one delivery"
 
         # Bob (project-b) sees the message in his inbox
         inbox = await client.call_tool(
