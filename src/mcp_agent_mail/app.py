@@ -921,6 +921,11 @@ async def _ensure_project(human_key: str) -> Project:
             project = result.scalar_one_or_none()
             if project is None:
                 raise  # IntegrityError was from a different constraint
+            # Reconcile human_key after race-condition reload
+            if project.human_key != human_key:
+                project.human_key = human_key
+                await session.commit()
+                await session.refresh(project)
         # Create global inbox agent for new project
         await _ensure_global_inbox_agent(project, session)
         return project
@@ -6697,7 +6702,8 @@ def build_mcp_server() -> FastMCP:
         if not key_raw:
             raise ToolExecutionError("INVALID_ARGUMENT", "Provide product_key or name.")
         async with get_session() as session:
-            prod = await _get_product_by_key(session, key_raw)
+            normalized_key = " ".join(key_raw.split())[:128] or key_raw
+            prod = await _get_product_by_key(session, normalized_key)
             if prod is not None:
                 # Update name if provided and different (supports config updates)
                 if name is not None:
