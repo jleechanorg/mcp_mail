@@ -1022,17 +1022,28 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             return JSONResponse({"ok": True, "message": "No active recipients"})
 
         recipients_list = [(agent, "to") for agent in recipient_agents]
-        message = await _create_message(
-            project=project,
-            sender=sender_agent,
-            subject=message_info["subject"],
-            body_md=message_info["body_md"],
-            recipients=recipients_list,
-            importance="normal",
-            ack_required=False,
-            thread_id=message_info.get("thread_id"),
-            attachments=[],
-        )
+        try:
+            message = await _create_message(
+                project=project,
+                sender=sender_agent,
+                subject=message_info["subject"],
+                body_md=message_info["body_md"],
+                recipients=recipients_list,
+                importance="normal",
+                ack_required=False,
+                thread_id=message_info.get("thread_id"),
+                attachments=[],
+            )
+        except Exception as exc:
+            logger.error(
+                "slack_message_creation_failed",
+                error=str(exc),
+                source=source,
+                thread_id=message_info.get("thread_id"),
+                slack_channel=message_info.get("channel"),
+                slack_ts=message_info.get("ts"),
+            )
+            raise
 
         to_agents = [r[0] for r in recipients_list if r[1] == "to"]
         cc_agents = [r[0] for r in recipients_list if r[1] == "cc"]
@@ -1211,18 +1222,27 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
         form = await request.form()
 
+        import hmac as _hmac
+
         token = (form.get("token") or "").strip()
-        if token != settings.slack.slackbox_token:
+        if not _hmac.compare_digest(token, settings.slack.slackbox_token or ""):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Slackbox token")
 
         text = (form.get("text") or "").strip()
         if not text:
             return JSONResponse({"ok": True, "message": "No text provided"})
 
-        channel_id = (form.get("channel_id") or form.get("channel_name") or "").strip()
-        if settings.slack.slackbox_channels and channel_id not in settings.slack.slackbox_channels:
-            logger.info("slackbox_channel_skipped", channel=channel_id)
-            return JSONResponse({"ok": True, "message": "Channel not allowed"})
+        channel_id = (form.get("channel_id") or "").strip()
+        channel_name = (form.get("channel_name") or "").strip()
+        if settings.slack.slackbox_channels:
+            allowed = settings.slack.slackbox_channels
+            if channel_id not in allowed and channel_name not in allowed:
+                logger.info(
+                    "slackbox_channel_skipped",
+                    channel_id=channel_id,
+                    channel_name=channel_name,
+                )
+                return JSONResponse({"ok": True, "message": "Channel not allowed"})
 
         timestamp = (form.get("timestamp") or form.get("ts") or "").strip()
         dedupe_key = (channel_id, timestamp) if channel_id and timestamp else None

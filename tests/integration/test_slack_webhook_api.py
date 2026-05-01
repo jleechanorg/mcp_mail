@@ -255,3 +255,4 @@ async def test_notify_slack_message_replies_into_slack_thread(monkeypatch):
     assert call["channel"] == "CSLACK123"
     assert call["thread_ts"] == "1111.2222"
     assert "Reply subject" in (call["text"] or "")
+    assert client.mappings == [(thread_id, "CSLACK123", "1111.2222")]
