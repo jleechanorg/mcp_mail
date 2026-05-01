@@ -413,10 +413,7 @@ def _setup_fts(connection) -> None:
 
 def _add_column_if_missing(connection, table: str, column: str, column_def: str) -> None:
     """Add a column to a table if it doesn't already exist."""
-    columns = {
-        row[1]
-        for row in connection.exec_driver_sql(f'PRAGMA table_info("{table}")').fetchall()
-    }
+    columns = {row[1] for row in connection.exec_driver_sql(f'PRAGMA table_info("{table}")').fetchall()}
     if column not in columns:
         connection.exec_driver_sql(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {column_def}')
 
