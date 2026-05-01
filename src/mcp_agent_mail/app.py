@@ -6700,8 +6700,10 @@ def build_mcp_server() -> FastMCP:
             prod = await _get_product_by_key(session, key_raw)
             if prod is not None:
                 # Update name if provided and different (supports config updates)
-                if name:
-                    normalized_name = " ".join(name.strip().split())[:255]
+                if name is not None:
+                    normalized_name = " ".join(name.split())[:128]
+                    if not normalized_name:
+                        raise ToolExecutionError("INVALID_ARGUMENT", "Product name cannot be empty.")
                     if prod.name != normalized_name:
                         prod.name = normalized_name
                         await session.commit()
@@ -6721,9 +6723,10 @@ def build_mcp_server() -> FastMCP:
                 uid = product_key.strip().lower()
             else:
                 uid = _uuid.uuid4().hex[:20]
-            display_name = (name or key_raw).strip()
+            raw_display_name = name if name is not None else key_raw
+            display_name = raw_display_name.strip()
             # Collapse internal whitespace and cap length
-            display_name = " ".join(display_name.split())[:255] or uid
+            display_name = " ".join(display_name.split())[:128] or uid
             prod = Product(product_uid=uid, name=display_name)
             session.add(prod)
             await session.commit()

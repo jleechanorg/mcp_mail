@@ -1,6 +1,7 @@
 import contextlib
 import json
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 import anyio
 import pytest
@@ -886,16 +887,17 @@ async def test_ensure_product_idempotent(isolated_env):
     server = build_mcp_server()
 
     async with Client(server) as client:
+        product_key = uuid4().hex[:12]
         # First call creates the product (using valid hex uid pattern - 8+ chars)
-        result1 = await client.call_tool("ensure_product", {"product_key": "abc123def456", "name": "Test Product"})
-        assert result1.data["product_uid"] == "abc123def456"
+        result1 = await client.call_tool("ensure_product", {"product_key": product_key, "name": "Test Product"})
+        assert result1.data["product_uid"] == product_key
         assert result1.data["name"] == "Test Product"
         product_id1 = result1.data["id"]
 
         # Second call should return the same product (idempotent)
-        result2 = await client.call_tool("ensure_product", {"product_key": "abc123def456", "name": "Test Product"})
+        result2 = await client.call_tool("ensure_product", {"product_key": product_key, "name": "Test Product"})
         assert result2.data["id"] == product_id1
-        assert result2.data["product_uid"] == "abc123def456"
+        assert result2.data["product_uid"] == product_key
 
 
 @pytest.mark.asyncio
@@ -924,13 +926,14 @@ async def test_ensure_product_preserves_uid_on_name_change(isolated_env):
 
     async with Client(server) as client:
         # Create product (using valid hex uid pattern - 8+ chars, hex only a-f0-9)
-        result1 = await client.call_tool("ensure_product", {"product_key": "abc123def456", "name": "First Name"})
+        product_key = uuid4().hex[:12]
+        result1 = await client.call_tool("ensure_product", {"product_key": product_key, "name": "First Name"})
         product_uid = result1.data["product_uid"]
 
         # Update name only
-        result2 = await client.call_tool("ensure_product", {"product_key": "abc123def456", "name": "Second Name"})
+        result2 = await client.call_tool("ensure_product", {"product_key": product_key, "name": "Second Name"})
 
         # UID should be preserved
         assert result2.data["product_uid"] == product_uid
-        assert result2.data["product_uid"] == "abc123def456"
+        assert result2.data["product_uid"] == product_key
         assert result2.data["name"] == "Second Name"
