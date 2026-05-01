@@ -2971,6 +2971,17 @@ CORE_TOOLS = {
     "search_mailbox",
 }
 
+# Product bus tools (~3k tokens): Product/project coordination features
+# These are only needed when using the product bus feature.
+# Excluded from core mode to reduce token overhead.
+PRODUCT_TOOLS = {
+    "ensure_product",
+    "products_link",
+    "search_messages_product",
+    "fetch_inbox_product",
+    "summarize_thread_product",
+}
+
 # Extended tools (~16k tokens): Advanced features available via meta-tools
 EXTENDED_TOOLS = {
     "create_agent_identity",
@@ -3145,6 +3156,32 @@ def build_mcp_server() -> FastMCP:
         # Add global inbox to cc_agents directly (avoids race condition from re-fetching by name)
         if should_cc_global_inbox:
             cc_agents.append(global_inbox_agent)
+
+        # If sender explicitly CCs the global inbox, fan out to all active project workers.
+        # This keeps global inbox usable as a broadcast trigger while still preserving
+        # regular recipient semantics.
+        explicitly_cced_global_inbox = global_inbox_name.lower() in {n.lower() for n in cc_names}
+        if explicitly_cced_global_inbox and sender.name != global_inbox_name and project.id is not None:
+            existing_recipient_names = {
+                agent.name for agent in to_agents + cc_agents + bcc_agents if getattr(agent, "name", None)
+            }
+            async with get_session() as fanout_session:
+                worker_rows = await fanout_session.execute(
+                    select(Agent)
+                    .where(Agent.project_id == project.id)
+                    .where(cast(Any, Agent.is_active).is_(True))
+                    .where(cast(Any, Agent.is_placeholder).is_(False))
+                )
+                for worker in worker_rows.scalars().all():
+                    worker_name = (worker.name or "").strip()
+                    if not worker_name:
+                        continue
+                    if worker_name == sender.name or worker_name == global_inbox_name:
+                        continue
+                    if worker_name in existing_recipient_names:
+                        continue
+                    cc_agents.append(worker)
+                    existing_recipient_names.add(worker_name)
 
         # Filter out global inbox from cc_agents for outbox visibility (keep in recipient_records)
         cc_agents_for_outbox = [agent for agent in cc_agents if agent.name != global_inbox_name]
@@ -9077,25 +9114,28 @@ def build_mcp_server() -> FastMCP:
 
     # Conditional tool exposure based on tools_mode setting
     if settings.tools_mode == "core":
-        # In core mode, hide extended tools from direct MCP exposure
-        # They remain accessible via call_extended_tool meta-tool
-        # Note: Meta-tools (list_extended_tools, call_extended_tool) are intentionally
-        # NOT in CORE_TOOLS or EXTENDED_TOOLS - they're kept by not being in EXTENDED_TOOLS
-        # Remove extended tools using FastMCP's remove_tool method
-        for tool_name in EXTENDED_TOOLS:
+        # In core mode, hide extended and product tools from direct MCP exposure.
+        # Extended tools remain accessible via the call_extended_tool meta-tool.
+        # Product bus tools (ensure_product, products_link, etc.) are only needed
+        # when using product coordination features — omit them to reduce token overhead.
+        # Meta-tools (list_extended_tools, call_extended_tool) are intentionally kept.
+        for tool_name in EXTENDED_TOOLS | PRODUCT_TOOLS:
             try:
                 mcp.remove_tool(tool_name)
             except (KeyError, AttributeError, ValueError) as e:
                 # Tool might not exist or already removed, that's ok
                 logger.debug(f"Could not remove tool {tool_name}: {e}")
 
-        # Count remaining tools by checking what's in CORE_TOOLS + meta tools
+        # Count remaining tools: CORE_TOOLS + 2 meta tools
         exposed_count = len(CORE_TOOLS) + 2  # +2 for list_extended_tools and call_extended_tool
-        hidden_count = len(EXTENDED_TOOLS)
-        logger.info(f"Core mode enabled: Exposed {exposed_count} tools (hidden {hidden_count} extended tools)")
+        logger.info(
+            f"Core mode enabled: Exposed {exposed_count} tools "
+            f"(hidden {len(EXTENDED_TOOLS)} extended + {len(PRODUCT_TOOLS)} product tools). "
+            f"Set MCP_TOOLS_MODE=extended to expose all tools."
+        )
     else:
-        # Extended mode: all tools exposed
-        total_count = len(CORE_TOOLS) + len(EXTENDED_TOOLS) + 2  # +2 for meta tools
+        # Extended mode: all tools exposed directly
+        total_count = len(CORE_TOOLS) + len(EXTENDED_TOOLS) + len(PRODUCT_TOOLS) + 2  # +2 for meta tools
         logger.info(f"Extended mode: All {total_count} tools exposed directly")
 
     return mcp
