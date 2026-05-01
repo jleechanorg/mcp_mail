@@ -407,7 +407,7 @@ DATABASE_ECHO=false
 ```
 
 **Storage:**
-```
+```bash
 STORAGE_ROOT=~/.mcp_agent_mail_git_mailbox_repo
 ```
 

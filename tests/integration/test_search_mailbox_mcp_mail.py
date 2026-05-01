@@ -41,6 +41,7 @@ async def mcp_mail_search_env(tmp_path, monkeypatch):
     # Configure environment to use isolated storage
     monkeypatch.setenv("STORAGE_ROOT", str(mcp_mail_dir))
     monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{mcp_mail_dir}/storage.sqlite3")
+    monkeypatch.setenv("APP_ENVIRONMENT", "test")
 
     # Clear caches and reset DB state so the new env vars take effect
     _config.clear_settings_cache()
