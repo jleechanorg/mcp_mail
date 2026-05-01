@@ -263,7 +263,7 @@ class BaseCLITest:
             return False
 
         if not self.cli_profile:
-            raise ValueError(f"CLI_NAME '{self.CLI_NAME}' not found in CLI_PROFILES")
+            return False
 
         cli_binary = self.cli_profile.get("binary") or self.CLI_NAME
         if not cli_binary:
@@ -313,7 +313,7 @@ class BaseCLITest:
         from contextlib import suppress
 
         if not self.cli_profile:
-            raise ValueError(f"CLI_NAME '{self.CLI_NAME}' not found in CLI_PROFILES")
+            return False, f"CLI_NAME '{self.CLI_NAME}' not found in CLI_PROFILES"
 
         cli_binary = self.cli_profile.get("binary") or self.CLI_NAME
         if not cli_binary:
