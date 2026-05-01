@@ -531,7 +531,9 @@ def _recreate_agents_table_nullable_project_id(connection) -> None:
             contact_policy VARCHAR(16) DEFAULT 'auto',
             is_active INTEGER DEFAULT 1,
             deleted_ts TIMESTAMP,
-            is_placeholder INTEGER DEFAULT 0
+            is_placeholder INTEGER DEFAULT 0,
+            retired_at DATETIME DEFAULT NULL,
+            registration_token VARCHAR(64) DEFAULT NULL
         )
         """
     )
@@ -543,12 +545,14 @@ def _recreate_agents_table_nullable_project_id(connection) -> None:
             INSERT INTO agents_new (
                 id, project_id, name, program, model, task_description,
                 inception_ts, last_active_ts, attachments_policy, contact_policy,
-                is_active, deleted_ts, is_placeholder
+                is_active, deleted_ts, is_placeholder, retired_at, registration_token
             )
             SELECT
                 id, project_id, name, program, model, task_description,
                 inception_ts, last_active_ts, attachments_policy, contact_policy,
-                is_active, deleted_ts, is_placeholder
+                is_active, deleted_ts, is_placeholder,
+                COALESCE(retired_at, NULL) as retired_at,
+                COALESCE(registration_token, NULL) as registration_token
             FROM agents
             """
         )
@@ -641,7 +645,8 @@ def _recreate_messages_table_nullable_project_id(connection) -> None:
             importance VARCHAR(16) DEFAULT 'normal',
             ack_required INTEGER DEFAULT 0,
             created_ts TIMESTAMP,
-            attachments JSON DEFAULT '[]'
+            attachments JSON DEFAULT '[]',
+            topic VARCHAR(64) DEFAULT NULL
         )
         """
     )
@@ -652,11 +657,12 @@ def _recreate_messages_table_nullable_project_id(connection) -> None:
             """
             INSERT INTO messages_new (
                 id, project_id, sender_id, thread_id, subject, body_md,
-                importance, ack_required, created_ts, attachments
+                importance, ack_required, created_ts, attachments, topic
             )
             SELECT
                 id, project_id, sender_id, thread_id, subject, body_md,
-                importance, ack_required, created_ts, attachments
+                importance, ack_required, created_ts, attachments,
+                COALESCE(topic, NULL) as topic
             FROM messages
             """
         )
