@@ -50,7 +50,7 @@ from .share import (
     sign_manifest,
     summarize_snapshot,
 )
-from .storage import ensure_runtime_project_root, is_archive_enabled
+from .storage import ensure_runtime_project_root
 from .utils import safe_filesystem_component, slugify
 
 # Suppress annoying bleach CSS sanitizer warning from dependencies
