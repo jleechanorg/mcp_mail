@@ -575,6 +575,10 @@ def _recreate_agents_table_nullable_project_id(connection) -> None:
     connection.exec_driver_sql(
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_agents_name_ci ON agents(lower(name)) WHERE is_active = 1"
     )
+    # Restore new-column indexes (lost when table was rebuilt)
+    connection.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_agents_registration_token ON agents(registration_token)"
+    )
 
 
 def _recreate_messages_table_nullable_project_id(connection) -> None:
@@ -683,3 +687,7 @@ def _recreate_messages_table_nullable_project_id(connection) -> None:
     connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_messages_project_id ON messages(project_id)")
     connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_messages_sender_id ON messages(sender_id)")
     connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_messages_thread_id ON messages(thread_id)")
+    # Restore new-column indexes (lost when table was rebuilt)
+    connection.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS idx_messages_project_topic ON messages(project_id, topic)"
+    )
