@@ -1,7 +1,5 @@
 """Async database engine and session management utilities."""
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import random
@@ -94,6 +92,20 @@ def _build_engine(settings: DatabaseSettings) -> AsyncEngine:
     is_sqlite = "sqlite" in settings.url.lower()
 
     if is_sqlite:
+        # Ensure the parent directory for the SQLite database file exists.
+        # This prevents "unable to open database file" errors on fresh installs
+        # or in CI where ~/.mcp_agent_mail_git_mailbox_repo hasn't been created yet.
+        from pathlib import Path
+
+        from sqlalchemy.engine import make_url
+
+        db_path_str = make_url(settings.url).database or ""
+        if db_path_str:
+            db_file = Path(db_path_str).expanduser()
+            if not db_file.parent.exists():
+                db_file.parent.mkdir(parents=True, exist_ok=True)
+                logger.info("Created database directory: %s", db_file.parent)
+
         # Register datetime adapters ONCE globally for Python 3.12+ compatibility
         # These are module-level registrations, not per-connection
         import datetime as dt_module
@@ -132,13 +144,19 @@ def _build_engine(settings: DatabaseSettings) -> AsyncEngine:
             "check_same_thread": False,  # Required for async SQLite
         }
 
+    # SQLite needs pool_size > 1 because the codebase uses nested get_session() calls
+    # (e.g. send_message holds a session while _create_placeholder_agent opens another).
+    # pool_size=1 causes deadlocks; 5 is sufficient for nesting without unbounded growth.
+    pool_kwargs: dict[str, int] = (
+        {"pool_size": 5, "max_overflow": 0} if is_sqlite else {"pool_size": 10, "max_overflow": 10}
+    )
+
     engine = create_async_engine(
         settings.url,
         echo=settings.echo,
         future=True,
         pool_pre_ping=True,
-        pool_size=10,
-        max_overflow=10,
+        **pool_kwargs,
         connect_args=connect_args,
     )
 
@@ -234,16 +252,17 @@ def reset_database_state() -> None:
 
 
 def _check_and_fix_duplicate_agent_names(connection) -> None:
-    """Check for duplicate agent names and auto-rename to ensure global uniqueness.
+    """Check for duplicate ACTIVE agent names and auto-rename to ensure global uniqueness.
 
     This handles migration from the old schema (per-project uniqueness) to the new schema
-    (global uniqueness). Any duplicate names are automatically renamed by appending a number.
+    (global uniqueness). Only considers active agents - inactive agents don't conflict.
     """
-    # Find all duplicate names (case-insensitive)
+    # Find all duplicate names among ACTIVE agents only (case-insensitive)
     cursor = connection.exec_driver_sql(
         """
         SELECT lower(name) as name_lower, COUNT(*) as count
         FROM agents
+        WHERE is_active = 1
         GROUP BY name_lower
         HAVING count > 1
         """
@@ -251,19 +270,19 @@ def _check_and_fix_duplicate_agent_names(connection) -> None:
     duplicates = cursor.fetchall()
 
     if not duplicates:
-        return  # No duplicates, safe to proceed
+        return  # No duplicates among active agents, safe to proceed
 
     logger.warning(
-        f"Found {len(duplicates)} agent name(s) used in multiple projects. Auto-renaming for global uniqueness..."
+        f"Found {len(duplicates)} active agent name(s) with duplicates. Auto-renaming for global uniqueness..."
     )
 
     for name_lower, _count in duplicates:
-        # Get all agents with this name
+        # Get all ACTIVE agents with this name
         cursor = connection.exec_driver_sql(
             """
             SELECT id, name, project_id
             FROM agents
-            WHERE lower(name) = ?
+            WHERE lower(name) = ? AND is_active = 1
             ORDER BY id
             """,
             (name_lower,),
@@ -284,9 +303,9 @@ def _check_and_fix_duplicate_agent_names(connection) -> None:
                 # Trim base name to leave room for suffix
                 trimmed_name = original_name[: max_name_length - len(suffix_str)]
                 new_name = f"{trimmed_name}{suffix_str}"
-                # Check if this new name exists
+                # Check if this new name exists among active agents
                 check = connection.exec_driver_sql(
-                    "SELECT COUNT(*) FROM agents WHERE lower(name) = lower(?)",
+                    "SELECT COUNT(*) FROM agents WHERE lower(name) = lower(?) AND is_active = 1",
                     (new_name,),
                 ).fetchone()[0]
                 if check == 0:
@@ -356,11 +375,14 @@ def _setup_fts(connection) -> None:
     )
 
     # MIGRATION: Check for duplicate agent names before enforcing global uniqueness
-    # This handles upgrading from per-project uniqueness to global uniqueness
-    _check_and_fix_duplicate_agent_names(connection)
+    # This handles upgrading from per-project uniqueness to global uniqueness.
+    index_exists = connection.exec_driver_sql(
+        "SELECT 1 FROM sqlite_master WHERE type='index' AND name='uq_agents_name_ci'"
+    ).fetchone()
+    if not index_exists:
+        _check_and_fix_duplicate_agent_names(connection)
 
     # Case-insensitive unique index on ACTIVE agent names for global uniqueness
-    connection.exec_driver_sql("DROP INDEX IF EXISTS uq_agents_name_ci")
     connection.exec_driver_sql(
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_agents_name_ci ON agents(lower(name)) WHERE is_active = 1"
     )
@@ -504,8 +526,11 @@ def _recreate_agents_table_nullable_project_id(connection) -> None:
         raise RuntimeError("Failed to migrate data from agents to agents_new") from exc
 
     # Drop old table and rename new one
+    # Disable FK enforcement temporarily to allow DROP (other tables reference agents)
+    connection.exec_driver_sql("PRAGMA foreign_keys = OFF")
     connection.exec_driver_sql("DROP TABLE agents")
     connection.exec_driver_sql("ALTER TABLE agents_new RENAME TO agents")
+    connection.exec_driver_sql("PRAGMA foreign_keys = ON")
 
     # Recreate indexes
     connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_agents_project_id ON agents(project_id)")
@@ -609,8 +634,11 @@ def _recreate_messages_table_nullable_project_id(connection) -> None:
         raise RuntimeError("Failed to migrate data from messages to messages_new") from exc
 
     # Drop old table and rename new one
+    # Disable FK enforcement temporarily to allow DROP (message_recipients references messages)
+    connection.exec_driver_sql("PRAGMA foreign_keys = OFF")
     connection.exec_driver_sql("DROP TABLE messages")
     connection.exec_driver_sql("ALTER TABLE messages_new RENAME TO messages")
+    connection.exec_driver_sql("PRAGMA foreign_keys = ON")
 
     # Recreate indexes
     connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_messages_project_id ON messages(project_id)")

@@ -1,7 +1,5 @@
 """Command-line interface surface for developer tooling."""
 
-from __future__ import annotations
-
 # ruff: noqa: B008
 import asyncio
 import hashlib
@@ -10,6 +8,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -30,11 +29,9 @@ from rich.table import Table
 from sqlalchemy import asc, bindparam, desc, func, select, text
 from sqlalchemy.engine import make_url
 
-from .app import build_mcp_server
 from .config import get_settings
 from .db import ensure_schema, get_session
 from .guard import install_guard as install_guard_script, uninstall_guard as uninstall_guard_script
-from .http import build_http_app
 from .models import Agent, FileReservation, Message, MessageRecipient, Product, ProductProjectLink, Project
 from .share import (
     DEFAULT_CHUNK_SIZE,
@@ -53,13 +50,24 @@ from .share import (
     sign_manifest,
     summarize_snapshot,
 )
-from .storage import ensure_archive, ensure_runtime_project_root, is_archive_enabled
+from .storage import ensure_runtime_project_root, is_archive_enabled
 from .utils import safe_filesystem_component, slugify
 
 # Suppress annoying bleach CSS sanitizer warning from dependencies
 warnings.filterwarnings("ignore", category=UserWarning, module="bleach")
 
 console = Console()
+
+
+def _ensure_supported_python_version() -> None:
+    if sys.version_info >= (3, 14):
+        error_console = Console(stderr=True)
+        error_console.print("[bold red]❌ Error:[/bold red] Python 3.14+ is not supported.")
+        error_console.print("[yellow]MCP Mail requires Python 3.11, 3.12, or 3.13.[/yellow]")
+        error_console.print(
+            "[dim]Reason: the beartype dependency imports collections.abc.ByteString, which was removed in Python 3.14.[/dim]"
+        )
+        raise typer.Exit(code=1)
 
 
 DEFAULT_ENV_PATH = Path(".env")
@@ -110,6 +118,31 @@ async def _get_agent_record(project: Project, agent_name: str) -> Agent:
         if not agent:
             raise ValueError(f"Agent '{agent_name}' not registered for project '{project.human_key}'")
         return agent
+
+
+async def _get_agent_global(agent_name: str) -> tuple[Agent, Optional[Project]]:
+    """Look up an agent globally by name (agents are globally unique).
+
+    Returns the agent and its associated project. Project may be None if the agent
+    has no project_id (as of v0.2.0, project_id is nullable).
+    """
+    await ensure_schema()
+    async with get_session() as session:
+        result = await session.execute(
+            select(Agent, Project)
+            .outerjoin(Project, Agent.project_id == Project.id)  # LEFT OUTER JOIN
+            .where(func.lower(Agent.name) == agent_name.lower(), Agent.is_active.is_(True))
+        )
+        row = result.first()
+        if not row:
+            raise ValueError(f"Agent '{agent_name}' not found (globally)")
+        return row[0], row[1]
+
+
+def _get_project_from_cwd() -> str:
+    """Get project identifier from current working directory."""
+    cwd = Path.cwd().resolve()
+    return str(cwd)
 
 
 def _iso(dt: Optional[datetime]) -> str:
@@ -592,6 +625,11 @@ def serve_http(
     path: Optional[str] = typer.Option(None, help="HTTP path where the MCP endpoint is exposed."),
 ) -> None:
     """Run the MCP server over the Streamable HTTP transport."""
+    _ensure_supported_python_version()
+
+    from .app import build_mcp_server
+    from .http import build_http_app
+
     settings = get_settings()
     resolved_host = host or settings.http.host
     resolved_port = port or settings.http.port
@@ -1937,7 +1975,7 @@ def guard_install(
 
     try:
         hook_path = asyncio.run(_run())
-    except ValueError as exc:  # convert to CLI-friendly error
+    except (ValueError, NotImplementedError) as exc:  # convert to CLI-friendly error
         raise typer.BadParameter(str(exc)) from exc
     console.print(f"[green]Installed guard for [bold]{project}[/] at {hook_path}.")
 
@@ -2005,6 +2043,20 @@ def file_reservations_list(
     console.print(table)
 
 
+def _get_git_branch(repo_path: Path) -> str:
+    """Return the current git branch name, or 'unknown' on failure."""
+    try:
+        cp = subprocess.run(
+            ["git", "-C", str(repo_path), "rev-parse", "--abbrev-ref", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return cp.stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
 @app.command("amctl-env")
 def amctl_env(
     project_path: Path = typer.Option(
@@ -2026,18 +2078,7 @@ def amctl_env(
     slug = slugify(str(p))
     project_uid = hashlib.sha256(str(p).encode()).hexdigest()[:16]
     # Determine branch
-    branch = ""
-    if True:
-        try:
-            from git import Repo as _Repo
-
-            repo = _Repo(str(p), search_parent_directories=True)
-            try:
-                branch = repo.active_branch.name
-            except Exception:
-                branch = repo.git.rev_parse("--abbrev-ref", "HEAD").strip()
-        except Exception:
-            branch = "unknown"
+    branch = _get_git_branch(p)
     # Compute cache key and artifact dir
     settings = get_settings()
     cache_key = f"am-cache-{project_uid}-{agent_name}-{branch}"
@@ -2078,29 +2119,14 @@ def am_run(
     # Generate project identity from path
     slug = slugify(str(p))
     project_uid = hashlib.sha256(str(p).encode()).hexdigest()[:16]
-    branch = ""
-    if not branch:
-        try:
-            from git import Repo as _Repo
-
-            repo = _Repo(str(p), search_parent_directories=True)
-            try:
-                branch = repo.active_branch.name
-            except Exception:
-                branch = repo.git.rev_parse("--abbrev-ref", "HEAD").strip()
-        except Exception:
-            branch = "unknown"
+    branch = _get_git_branch(p)
     settings = get_settings()
     guard_mode = (os.environ.get("AGENT_MAIL_GUARD_MODE", "block") or "block").strip().lower()
-    worktrees_enabled = bool(settings.worktrees_enabled)
+    worktrees_enabled = bool(settings.worktrees_enabled) and is_archive_enabled(settings)
 
     async def _ensure_slot_paths() -> Path:
-        if is_archive_enabled(settings):
-            archive = await ensure_archive(settings, slug, project_key=str(p))
-            slot_dir = archive.root / "build_slots" / safe_filesystem_component(slot)
-        else:
-            runtime_project_root = await ensure_runtime_project_root(settings, slug)
-            slot_dir = runtime_project_root / "build_slots" / safe_filesystem_component(slot)
+        runtime_project_root = await ensure_runtime_project_root(settings, slug)
+        slot_dir = runtime_project_root / "build_slots" / safe_filesystem_component(slot)
         slot_dir.mkdir(parents=True, exist_ok=True)
         return slot_dir
 
@@ -2258,18 +2284,13 @@ def mail_status(
 
     normalized_remote: Optional[str] = None
     try:
-        from git import Repo as _Repo  # local import to avoid CLI startup cost
-
-        repo = _Repo(str(p), search_parent_directories=True)
-        try:
-            url = repo.git.remote("get-url", remote_name).strip() or None
-        except Exception:
-            try:
-                r = next((r for r in repo.remotes if r.name == remote_name), None)
-                url = next(iter(r.urls), None) if r and r.urls else None
-            except Exception:
-                url = None
-        normalized_remote = _norm_remote(url)
+        cp = subprocess.run(
+            ["git", "-C", str(p), "remote", "get-url", remote_name],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        normalized_remote = _norm_remote(cp.stdout.strip() or None)
     except Exception:
         normalized_remote = None
 
@@ -2386,15 +2407,8 @@ def projects_adopt(
         console.print("[red]Refusing to adopt: projects do not appear to belong to the same repository.[/]")
         return
 
-    # Describe filesystem moves (archive layout)
-    settings = get_settings()
-    from .storage import ensure_archive as _ensure_archive
-
-    src_archive = asyncio.run(_ensure_archive(settings, src.slug, project_key=src.human_key))
-    dst_archive = asyncio.run(_ensure_archive(settings, dst.slug, project_key=dst.human_key))
-    plan.append(f"Move Git artifacts: {src_archive.root} -> {dst_archive.root}")
+    plan.append("Archive migration skipped (archive storage removed).")
     plan.append("Re-key DB rows: source project_id -> target project_id (messages, agents, file_reservations, etc.)")
-    plan.append("Write aliases.json under target 'projects/<slug>/' with former_slugs")
 
     console.print("[bold]Projects adopt plan (dry-run)[/bold]")
     for line in plan:
@@ -2419,33 +2433,6 @@ def projects_adopt(
             dup = sorted(set(src_agents).intersection(set(dst_agents)))
             if dup:
                 raise typer.BadParameter(f"Agent name conflicts in target project: {', '.join(dup)}")
-        # Move Git artifacts
-        settings = get_settings()
-        # local import to minimize top-level churn and keep ordering stable
-        from .storage import (
-            AsyncFileLock as _AsyncFileLock,  # type: ignore
-            ensure_archive as _ensure_archive,
-        )
-
-        src_archive = asyncio.run(_ensure_archive(settings, src.slug, project_key=src.human_key))
-        dst_archive = asyncio.run(_ensure_archive(settings, dst.slug, project_key=dst.human_key))
-        moved_relpaths: list[str] = []
-        for path in sorted(src_archive.root.rglob("*"), key=str):
-            if not path.is_file():
-                continue
-            if path.name.endswith(".lock") or path.name.endswith(".lock.owner.json"):
-                continue
-            rel_from_root = path.relative_to(src_archive.root)
-            dest_path = dst_archive.root / rel_from_root
-            await asyncio.to_thread(dest_path.parent.mkdir, parents=True, exist_ok=True)
-            if dest_path.exists():
-                continue
-            await asyncio.to_thread(path.replace, dest_path)
-            moved_relpaths.append(dest_path.relative_to(dst_archive.repo_root).as_posix())
-        from .storage import _commit as _archive_commit  # type: ignore
-
-        async with _AsyncFileLock(dst_archive.lock_path):
-            await _archive_commit(dst_archive.repo, settings, f"adopt: move {src.slug} into {dst.slug}", moved_relpaths)
         # Re-key database rows (agents, messages, file_reservations)
         async with get_session() as session:
             from sqlalchemy import update as _update  # local import to avoid top-of-file churn
@@ -2456,20 +2443,6 @@ def projects_adopt(
                 _update(FileReservation).where(FileReservation.project_id == src.id).values(project_id=dst.id)
             )
             await session.commit()
-        # Write aliases.json under target
-        aliases_path = dst_archive.root / "aliases.json"
-        try:
-            existing = {}
-            if aliases_path.exists():
-                existing = json.loads(aliases_path.read_text(encoding="utf-8"))
-            former = set(existing.get("former_slugs", []))
-            former.add(src.slug)
-            existing["former_slugs"] = sorted(former)
-            await asyncio.to_thread(aliases_path.write_text, json.dumps(existing, indent=2), "utf-8")
-            rel_alias = aliases_path.relative_to(dst_archive.repo_root).as_posix()
-            await _archive_commit(dst_archive.repo, settings, f"adopt: record alias for {src.slug}", [rel_alias])
-        except Exception as exc:
-            console.print(f"[yellow]Warning: failed to write aliases.json: {exc}[/]")
 
     try:
         asyncio.run(_apply())
@@ -2604,24 +2577,32 @@ def file_reservations_soon(
 
 @acks_app.command("pending")
 def acks_pending(
-    project: str = typer.Argument(..., help="Project slug or human key"),
-    agent: str = typer.Argument(..., help="Agent name"),
+    agent: str = typer.Argument(..., help="Agent name (globally unique)"),
+    project: Optional[str] = typer.Argument(None, help="Project slug or human key (optional)"),
     limit: int = typer.Option(20, help="Max messages to display"),
 ) -> None:
     """List messages that require acknowledgement and are still pending."""
 
-    async def _run() -> tuple[Project, Agent, list[tuple[Message, Any, Any, str]]]:
-        project_record = await _get_project_record(project)
-        agent_record = await _get_agent_record(project_record, agent)
-        if project_record.id is None or agent_record.id is None:
-            raise ValueError("Project and agent must have IDs")
+    async def _run() -> tuple[Project | None, Agent, list[tuple[Message, Any, Any, str]]]:
+        # Global agent lookup (agents are globally unique)
+        agent_record, project_record = await _get_agent_global(agent)
+        if agent_record.id is None:
+            raise ValueError("Agent must have an ID")
+        if project_record is not None and project_record.id is None:
+            raise ValueError("Project must have an ID if it exists")
+        if project:
+            project_override = await _get_project_record(project)
+            if project_record is None:
+                raise ValueError(f"Agent '{agent}' is not associated with a project; cannot scope to '{project}'.")
+            if project_record.id != project_override.id:
+                raise ValueError(f"Agent '{agent}' not registered for project '{project_override.human_key}'.")
+            project_record = project_override
         await ensure_schema()
         async with get_session() as session:
             stmt = (
                 select(Message, MessageRecipient.read_ts, MessageRecipient.ack_ts, MessageRecipient.kind)
                 .join(MessageRecipient, MessageRecipient.message_id == Message.id)
                 .where(
-                    Message.project_id == project_record.id,
                     MessageRecipient.agent_id == agent_record.id,
                     cast(Any, Message.ack_required).is_(True),
                     cast(Any, MessageRecipient.ack_ts).is_(None),
@@ -2637,7 +2618,8 @@ def acks_pending(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
-    table = Table(title=f"Pending ACKs for {agent_record.name} ({project_record.human_key})", show_lines=False)
+    project_label = project_record.human_key if project_record else "(no project)"
+    table = Table(title=f"Pending ACKs for {agent_record.name} ({project_label})", show_lines=False)
     table.add_column("Msg ID")
     table.add_column("Thread")
     table.add_column("Subject")
@@ -2674,25 +2656,33 @@ def acks_pending(
 
 @acks_app.command("remind")
 def acks_remind(
-    project: str = typer.Argument(..., help="Project slug or human key"),
-    agent: str = typer.Argument(..., help="Agent name"),
+    agent: str = typer.Argument(..., help="Agent name (globally unique)"),
+    project: Optional[str] = typer.Argument(None, help="Project slug or human key (optional)"),
     min_age_minutes: int = typer.Option(30, help="Only show ACK-required older than N minutes"),
     limit: int = typer.Option(50, help="Max messages to display"),
 ) -> None:
     """Highlight pending acknowledgements older than a threshold."""
 
-    async def _run() -> tuple[Project, Agent, list[tuple[Message, Any, Any, str]]]:
-        project_record = await _get_project_record(project)
-        agent_record = await _get_agent_record(project_record, agent)
-        if project_record.id is None or agent_record.id is None:
-            raise ValueError("Project and agent must have IDs")
+    async def _run() -> tuple[Project | None, Agent, list[tuple[Message, Any, Any, str]]]:
+        # Global agent lookup (agents are globally unique)
+        agent_record, project_record = await _get_agent_global(agent)
+        if agent_record.id is None:
+            raise ValueError("Agent must have an ID")
+        if project_record is not None and project_record.id is None:
+            raise ValueError("Project must have an ID if it exists")
+        if project:
+            project_override = await _get_project_record(project)
+            if project_record is None:
+                raise ValueError(f"Agent '{agent}' is not associated with a project; cannot scope to '{project}'.")
+            if project_record.id != project_override.id:
+                raise ValueError(f"Agent '{agent}' not registered for project '{project_override.human_key}'.")
+            project_record = project_override
         await ensure_schema()
         async with get_session() as session:
             stmt = (
                 select(Message, MessageRecipient.read_ts, MessageRecipient.ack_ts, MessageRecipient.kind)
                 .join(MessageRecipient, MessageRecipient.message_id == Message.id)
                 .where(
-                    Message.project_id == project_record.id,
                     MessageRecipient.agent_id == agent_record.id,
                     cast(Any, Message.ack_required).is_(True),
                     cast(Any, MessageRecipient.ack_ts).is_(None),
@@ -2750,18 +2740,27 @@ def acks_remind(
 
 @acks_app.command("overdue")
 def acks_overdue(
-    project: str = typer.Argument(..., help="Project slug or human key"),
-    agent: str = typer.Argument(..., help="Agent name"),
+    agent: str = typer.Argument(..., help="Agent name (globally unique)"),
+    project: Optional[str] = typer.Argument(None, help="Project slug or human key (optional)"),
     ttl_minutes: int = typer.Option(60, min=1, help="Only show ACK-required older than N minutes"),
     limit: int = typer.Option(50, help="Max messages to display"),
 ) -> None:
     """List ack-required messages older than a threshold without acknowledgements."""
 
-    async def _run() -> tuple[Project, Agent, list[tuple[Message, str]]]:
-        project_record = await _get_project_record(project)
-        agent_record = await _get_agent_record(project_record, agent)
-        if project_record.id is None or agent_record.id is None:
-            raise ValueError("Project and agent must have IDs")
+    async def _run() -> tuple[Project | None, Agent, list[tuple[Message, str]]]:
+        # Global agent lookup (agents are globally unique)
+        agent_record, project_record = await _get_agent_global(agent)
+        if agent_record.id is None:
+            raise ValueError("Agent must have an ID")
+        if project_record is not None and project_record.id is None:
+            raise ValueError("Project must have an ID if it exists")
+        if project:
+            project_override = await _get_project_record(project)
+            if project_record is None:
+                raise ValueError(f"Agent '{agent}' is not associated with a project; cannot scope to '{project}'.")
+            if project_record.id != project_override.id:
+                raise ValueError(f"Agent '{agent}' not registered for project '{project_override.human_key}'.")
+            project_record = project_override
         await ensure_schema()
         async with get_session() as session:
             cutoff = datetime.now(timezone.utc) - timedelta(minutes=ttl_minutes)
@@ -2769,7 +2768,6 @@ def acks_overdue(
                 select(Message, MessageRecipient.kind)
                 .join(MessageRecipient, MessageRecipient.message_id == Message.id)
                 .where(
-                    Message.project_id == project_record.id,
                     MessageRecipient.agent_id == agent_record.id,
                     cast(Any, Message.ack_required).is_(True),
                     cast(Any, MessageRecipient.ack_ts).is_(None),
@@ -2786,7 +2784,8 @@ def acks_overdue(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
-    table = Table(title=f"ACK Overdue (>{ttl_minutes}m) for {agent_record.name} ({project_record.human_key})")
+    project_label = project_record.human_key if project_record else "(no project)"
+    table = Table(title=f"ACK Overdue (>{ttl_minutes}m) for {agent_record.name} ({project_label})")
     table.add_column("ID")
     table.add_column("Subject")
     table.add_column("Created")
@@ -2820,33 +2819,23 @@ def acks_overdue(
 
 @app.command("list-acks")
 def list_acks(
-    project_key: str = typer.Option(..., "--project", help="Project human key or slug."),
-    agent_name: str = typer.Option(..., "--agent", help="Agent name to query."),
+    agent_name: str = typer.Option(..., "--agent", help="Agent name to query (globally unique)."),
+    project_key: Optional[str] = typer.Option(
+        None, "--project", help="Project human key or slug (optional, agent lookup is global)."
+    ),
     limit: int = typer.Option(20, help="Max messages to show."),
 ) -> None:
     """List messages requiring acknowledgement for an agent where ack is missing."""
 
-    async def _collect() -> list[tuple[Message, str]]:
+    async def _collect() -> tuple[list[tuple[Message, str]], str]:
         await ensure_schema()
         async with get_session() as session:
-            # Resolve project and agent
-            proj_result = await session.execute(
-                select(Project).where((Project.slug == slugify(project_key)) | (Project.human_key == project_key))
-            )
-            project = proj_result.scalars().first()
-            if not project:
-                raise typer.BadParameter(f"Project not found for key: {project_key}")
-            agent_result = await session.execute(
-                select(Agent).where(Agent.project_id == project.id, func.lower(Agent.name) == agent_name.lower())
-            )
-            agent = agent_result.scalars().first()
-            if not agent:
-                raise typer.BadParameter(f"Agent '{agent_name}' not found in project '{project.human_key}'")
+            # Global agent lookup (agents are globally unique)
+            agent, project = await _get_agent_global(agent_name)
             rows = await session.execute(
                 select(Message, MessageRecipient.kind)
                 .join(MessageRecipient, MessageRecipient.message_id == Message.id)
                 .where(
-                    Message.project_id == project.id,
                     MessageRecipient.agent_id == agent.id,
                     cast(Any, Message.ack_required).is_(True),
                     cast(Any, MessageRecipient.ack_ts).is_(None),
@@ -2854,11 +2843,14 @@ def list_acks(
                 .order_by(desc(Message.created_ts))
                 .limit(limit)
             )
-            return rows.all()
+            return rows.all(), project.human_key if project else "(no project)"
 
     console.rule("[bold blue]Ack-required Messages")
-    rows = asyncio.run(_collect())
-    table = Table(title=f"Pending Acks for {agent_name}")
+    try:
+        rows, proj_key = asyncio.run(_collect())
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from e
+    table = Table(title=f"Pending Acks for {agent_name} ({proj_key})")
     table.add_column("ID")
     table.add_column("Subject")
     table.add_column("Importance")
