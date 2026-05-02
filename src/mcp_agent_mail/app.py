@@ -393,8 +393,6 @@ def _instrument_tool(
         # Preserve annotations so FastMCP can infer output schema
         with suppress(Exception):
             wrapper.__annotations__ = getattr(func, "__annotations__", {})
-        with suppress(Exception):
-            wrapper.__signature__ = signature
         return wrapper
 
     return decorator
@@ -918,14 +916,9 @@ async def _ensure_project(human_key: str) -> Project:
         except IntegrityError:
             await session.rollback()
             result = await session.execute(select(Project).where(Project.slug == slug))
-            project = result.scalar_one_or_none()
+            project = result.scalars().first()
             if project is None:
-                raise  # IntegrityError was from a different constraint
-            # Reconcile human_key after race-condition reload
-            if project.human_key != human_key:
-                project.human_key = human_key
-                await session.commit()
-                await session.refresh(project)
+                raise
         # Create global inbox agent for new project
         await _ensure_global_inbox_agent(project, session)
         return project
@@ -1009,6 +1002,7 @@ async def _ensure_global_inbox_agent(project: Project, session: AsyncSession | N
     try:
         await session.commit()
         await session.refresh(agent)
+        return agent
     except IntegrityError:
         await session.rollback()
         result = await session.execute(
@@ -1017,10 +1011,10 @@ async def _ensure_global_inbox_agent(project: Project, session: AsyncSession | N
                 Agent.name == global_inbox_name,
             )
         )
-        agent = result.scalar_one_or_none()
-        if agent is None:
-            raise  # IntegrityError was from a different constraint
-    return agent
+        existing = result.scalars().first()
+        if existing is None:
+            raise
+        return existing
 
 
 async def _get_project_by_identifier(identifier: str) -> Project:
@@ -1622,10 +1616,12 @@ async def _get_or_create_agent(
                     # Name exists in another project
                     if mode == "strict" and not force_reclaim:
                         # In strict mode, require explicit force_reclaim
+                        # Note: project assignment is metadata only, not access control; the agent
+                        # exists globally and can be reassigned with force_reclaim=True.
                         conflict_info = await _build_conflict_info(sanitized)
                         raise ToolExecutionError(
                             "NAME_TAKEN",
-                            f"Agent name '{sanitized}' is already in use. Set force_reclaim=True to override and retire the existing agent(s).",
+                            f"Agent '{sanitized}' exists in another project. Use force_reclaim=True to reassign.",
                             recoverable=True,
                             data={
                                 "name": sanitized,
@@ -1944,35 +1940,20 @@ async def _retire_conflicting_agents(
 
 
 async def _get_agent(project: Project, name: str) -> Agent:
-    await ensure_schema()
-    async with get_session() as session:
-        result = await session.execute(
-            select(Agent).where(
-                Agent.project_id == project.id,
-                func.lower(Agent.name) == name.lower(),
-                cast(Any, Agent.is_active).is_(True),
-            )
-        )
-        agent = result.scalars().first()
-        if not agent:
-            raise NoResultFound(
-                f"Agent '{name}' not registered for project '{project.human_key}'. "
-                "Tip: Use resource://agents to discover registered agents globally."
-            )
-        return agent
+    """Get agent by name (globally unique). Project param kept for API compatibility.
+
+    Projects are informational metadata only and do not restrict agent visibility.
+    Any agent can be found by name regardless of which project_key was provided.
+    """
+    return await _get_agent_by_name(name)
 
 
 async def _get_agent_optional(project: Project, name: str) -> Agent | None:
-    await ensure_schema()
-    async with get_session() as session:
-        result = await session.execute(
-            select(Agent).where(
-                Agent.project_id == project.id,
-                func.lower(Agent.name) == name.lower(),
-                cast(Any, Agent.is_active).is_(True),
-            )
-        )
-        return result.scalars().first()
+    """Get agent by name (globally unique), returning None if not found.
+
+    Projects are informational metadata only and do not restrict agent visibility.
+    """
+    return await _get_agent_by_name_optional(name)
 
 
 async def _get_agent_by_name(name: str) -> Agent:
@@ -1981,18 +1962,10 @@ async def _get_agent_by_name(name: str) -> Agent:
     Since agent names are globally unique, we can look up agents
     by name without needing project context.
     """
-    await ensure_schema()
-    async with get_session() as session:
-        result = await session.execute(
-            select(Agent).where(
-                func.lower(Agent.name) == name.lower(),
-                cast(Any, Agent.is_active).is_(True),
-            )
-        )
-        agent = result.scalars().first()
-        if not agent:
-            raise NoResultFound(f"Agent '{name}' not found. Tip: Use register_agent to create a new agent.")
-        return agent
+    agent = await _get_agent_by_name_optional(name)
+    if not agent:
+        raise NoResultFound(f"Agent '{name}' not found. Tip: Use register_agent to create a new agent.")
+    return agent
 
 
 async def _get_agent_by_name_optional(name: str) -> Agent | None:
@@ -2971,17 +2944,6 @@ CORE_TOOLS = {
     "search_mailbox",
 }
 
-# Product bus tools (~3k tokens): Product/project coordination features
-# These are only needed when using the product bus feature.
-# Excluded from core mode to reduce token overhead.
-PRODUCT_TOOLS = {
-    "ensure_product",
-    "products_link",
-    "search_messages_product",
-    "fetch_inbox_product",
-    "summarize_thread_product",
-}
-
 # Extended tools (~16k tokens): Advanced features available via meta-tools
 EXTENDED_TOOLS = {
     "create_agent_identity",
@@ -3123,9 +3085,9 @@ def build_mcp_server() -> FastMCP:
             seen: set[str] = set()
             ordered: list[str] = []
             for item in items:
-                key = item.strip().lower()
-                if key not in seen:
-                    seen.add(key)
+                normalized = item.strip().lower()
+                if normalized not in seen:
+                    seen.add(normalized)
                     ordered.append(item)
             return ordered
 
@@ -3156,32 +3118,6 @@ def build_mcp_server() -> FastMCP:
         # Add global inbox to cc_agents directly (avoids race condition from re-fetching by name)
         if should_cc_global_inbox:
             cc_agents.append(global_inbox_agent)
-
-        # If sender explicitly CCs the global inbox, fan out to all active project workers.
-        # This keeps global inbox usable as a broadcast trigger while still preserving
-        # regular recipient semantics.
-        explicitly_cced_global_inbox = global_inbox_name.lower() in {n.lower() for n in cc_names}
-        if explicitly_cced_global_inbox and sender.name != global_inbox_name and project.id is not None:
-            existing_recipient_names = {
-                agent.name for agent in to_agents + cc_agents + bcc_agents if getattr(agent, "name", None)
-            }
-            async with get_session() as fanout_session:
-                worker_rows = await fanout_session.execute(
-                    select(Agent)
-                    .where(Agent.project_id == project.id)
-                    .where(cast(Any, Agent.is_active).is_(True))
-                    .where(cast(Any, Agent.is_placeholder).is_(False))
-                )
-                for worker in worker_rows.scalars().all():
-                    worker_name = (worker.name or "").strip()
-                    if not worker_name:
-                        continue
-                    if worker_name == sender.name or worker_name == global_inbox_name:
-                        continue
-                    if worker_name in existing_recipient_names:
-                        continue
-                    cc_agents.append(worker)
-                    existing_recipient_names.add(worker_name)
 
         # Filter out global inbox from cc_agents for outbox visibility (keep in recipient_records)
         cc_agents_for_outbox = [agent for agent in cc_agents if agent.name != global_inbox_name]
@@ -3614,7 +3550,7 @@ def build_mcp_server() -> FastMCP:
         inbox_include_bodies: bool = False,
     ) -> dict[str, Any]:
         """
-        Create or update an agent identity within a project.
+        Create or update an agent identity. Project is informational metadata only.
 
         IMPORTANT: Global Namespace
         ---------------------------
@@ -5268,7 +5204,7 @@ def build_mcp_server() -> FastMCP:
                         -x["relevance_score"],  # Then by relevance (higher first)
                     )
                 )
-                results = results[:clamped_limit]
+                results = results[:limit]
 
                 await ctx.info(
                     f"Found {len(results)} messages matching query '{query}' "
@@ -5558,7 +5494,7 @@ def build_mcp_server() -> FastMCP:
                     LIMIT :limit
                     """
                 ),
-                {"project_id": project.id, "query": query, "limit": _clamp_limit(limit)},
+                {"project_id": project.id, "query": query, "limit": limit},
             )
             rows = result.mappings().all()
         await ctx.info(f"Search '{query}' returned {len(rows)} messages for project '{project.human_key}'.")
@@ -6306,8 +6242,8 @@ def build_mcp_server() -> FastMCP:
             released_reservations: list[FileReservation] = []
             async with get_session() as session:
                 sel = select(FileReservation).where(
-                    FileReservation.project_id == project.id,
                     FileReservation.agent_id == agent.id,
+                    FileReservation.project_id == project.id,
                     cast(Any, FileReservation.released_ts).is_(None),
                 )
                 if file_reservation_ids:
@@ -6318,8 +6254,8 @@ def build_mcp_server() -> FastMCP:
                 released_reservations = list(rows.scalars().all())
 
                 stmt = update(FileReservation).where(
-                    FileReservation.project_id == project.id,
                     FileReservation.agent_id == agent.id,
+                    FileReservation.project_id == project.id,
                     cast(Any, FileReservation.released_ts).is_(None),
                 )
                 if file_reservation_ids:
@@ -6403,19 +6339,29 @@ def build_mcp_server() -> FastMCP:
                 .join(Agent, FileReservation.agent_id == Agent.id)
                 .where(
                     FileReservation.id == file_reservation_id,
-                    FileReservation.project_id == project.id,
                 )
             )
             row = result.first()
         if not row:
             raise ToolExecutionError(
                 "NOT_FOUND",
-                f"File reservation id={file_reservation_id} not found for project '{project.human_key}'.",
+                f"File reservation id={file_reservation_id} not found.",
                 recoverable=True,
                 data={"file_reservation_id": file_reservation_id},
             )
 
         reservation, holder = row
+        if reservation.project_id != project.id:
+            raise ToolExecutionError(
+                "WRONG_PROJECT",
+                "Reservation belongs to a different project; use its project_key.",
+                recoverable=True,
+                data={
+                    "file_reservation_id": file_reservation_id,
+                    "reservation_project_id": reservation.project_id,
+                    "requested_project_id": project.id,
+                },
+            )
         if reservation.released_ts is not None:
             return {
                 "released": 0,
@@ -6617,8 +6563,8 @@ def build_mcp_server() -> FastMCP:
             stmt = (
                 select(FileReservation)
                 .where(
-                    FileReservation.project_id == project.id,
                     FileReservation.agent_id == agent.id,
+                    FileReservation.project_id == project.id,
                     cast(Any, FileReservation.released_ts).is_(None),
                 )
                 .order_by(asc(FileReservation.expires_ts))
@@ -6735,8 +6681,6 @@ def build_mcp_server() -> FastMCP:
 
         - product_key may be a product_uid or a name
         - If both are absent, error
-
-        Idempotent: If the product exists, updates the name if provided and different.
         """
         await ensure_schema()
         key_raw = (product_key or name or "").strip()
@@ -6912,7 +6856,7 @@ def build_mcp_server() -> FastMCP:
                     LIMIT :limit
                     """
                 ).bindparams(bindparam("proj_ids", expanding=True)),
-                {"proj_ids": proj_ids, "query": query, "limit": _clamp_limit(limit)},
+                {"proj_ids": proj_ids, "query": query, "limit": limit},
             )
             rows = result.mappings().all()
         items = [
@@ -6968,7 +6912,7 @@ def build_mcp_server() -> FastMCP:
                 ag = await _get_agent(project, agent_name)
             except Exception:
                 continue
-            proj_items = await _list_inbox(project, ag, _clamp_limit(limit), urgent_only, include_bodies, since_ts)
+            proj_items = await _list_inbox(project, ag, limit, urgent_only, include_bodies, since_ts)
             for item in proj_items:
                 item["project_id"] = item.get("project_id") or project.id
                 messages.append(item)
@@ -6979,7 +6923,7 @@ def build_mcp_server() -> FastMCP:
             return ts.timestamp() if ts else 0.0
 
         messages.sort(key=_dt_key, reverse=True)
-        return messages[: _clamp_limit(limit)]
+        return messages[: max(0, int(limit))]
 
     @mcp.tool(name="summarize_thread_product")
     @_instrument_tool("summarize_thread_product", cluster=CLUSTER_PRODUCT, capabilities={"summarization", "search"})
@@ -9114,28 +9058,25 @@ def build_mcp_server() -> FastMCP:
 
     # Conditional tool exposure based on tools_mode setting
     if settings.tools_mode == "core":
-        # In core mode, hide extended and product tools from direct MCP exposure.
-        # Extended tools remain accessible via the call_extended_tool meta-tool.
-        # Product bus tools (ensure_product, products_link, etc.) are only needed
-        # when using product coordination features — omit them to reduce token overhead.
-        # Meta-tools (list_extended_tools, call_extended_tool) are intentionally kept.
-        for tool_name in EXTENDED_TOOLS | PRODUCT_TOOLS:
+        # In core mode, hide extended tools from direct MCP exposure
+        # They remain accessible via call_extended_tool meta-tool
+        # Note: Meta-tools (list_extended_tools, call_extended_tool) are intentionally
+        # NOT in CORE_TOOLS or EXTENDED_TOOLS - they're kept by not being in EXTENDED_TOOLS
+        # Remove extended tools using FastMCP's remove_tool method
+        for tool_name in EXTENDED_TOOLS:
             try:
                 mcp.remove_tool(tool_name)
             except (KeyError, AttributeError, ValueError) as e:
                 # Tool might not exist or already removed, that's ok
                 logger.debug(f"Could not remove tool {tool_name}: {e}")
 
-        # Count remaining tools: CORE_TOOLS + 2 meta tools
+        # Count remaining tools by checking what's in CORE_TOOLS + meta tools
         exposed_count = len(CORE_TOOLS) + 2  # +2 for list_extended_tools and call_extended_tool
-        logger.info(
-            f"Core mode enabled: Exposed {exposed_count} tools "
-            f"(hidden {len(EXTENDED_TOOLS)} extended + {len(PRODUCT_TOOLS)} product tools). "
-            f"Set MCP_TOOLS_MODE=extended to expose all tools."
-        )
+        hidden_count = len(EXTENDED_TOOLS)
+        logger.info(f"Core mode enabled: Exposed {exposed_count} tools (hidden {hidden_count} extended tools)")
     else:
-        # Extended mode: all tools exposed directly
-        total_count = len(CORE_TOOLS) + len(EXTENDED_TOOLS) + len(PRODUCT_TOOLS) + 2  # +2 for meta tools
+        # Extended mode: all tools exposed
+        total_count = len(CORE_TOOLS) + len(EXTENDED_TOOLS) + 2  # +2 for meta tools
         logger.info(f"Extended mode: All {total_count} tools exposed directly")
 
     return mcp

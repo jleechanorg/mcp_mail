@@ -147,19 +147,38 @@ def _configure_logging(settings: Settings) -> None:
     _LOGGING_CONFIGURED = True
 
 
+def _has_forwarded_headers(request: Request) -> bool:
+    """Return True if the request contains standard reverse-proxy forwarding headers."""
+    forwarded = request.headers.get("X-Forwarded-For") or request.headers.get("X-Real-IP")
+    return bool(forwarded)
+
+
+def _is_trusted_localhost(request: Request) -> bool:
+    """Return True if the request is from a trusted localhost source.
+
+    When the server runs behind a reverse proxy on the same host, the proxy's
+    outbound socket appears as 127.0.0.1. We only trust localhost as "local"
+    when either the connection is direct (no forwarded headers, meaning the
+    client is truly on the same machine) or when the request comes from the
+    loopback interface explicitly (::1). This prevents unauthenticated
+    access when a reverse proxy sits in front of the server.
+    """
+    try:
+        client_host = request.client.host if request.client else ""
+    except Exception:
+        return False
+    if client_host not in {"127.0.0.1", "::1", "localhost"}:
+        return False
+    # Require forwarding headers to be present before trusting a loopback address,
+    # unless the request comes from ::1 (kernel-level loopback, not a forwarded socket).
+    return client_host == "::1" or _has_forwarded_headers(request)
+
+
 class BearerAuthMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: FastAPI, token: str, allow_localhost: bool = False) -> None:
         super().__init__(app)
         self._token = token
         self._allow_localhost = allow_localhost
-
-    @staticmethod
-    def _has_forwarded_headers(request: Request) -> bool:
-        """Detect proxy-forwarded headers to avoid trusting localhost behind proxies."""
-        headers = request.headers
-        return any(
-            name in headers for name in ("x-forwarded-for", "x-forwarded-proto", "x-forwarded-host", "forwarded")
-        )
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path or ""
@@ -167,16 +186,8 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         if path.startswith("/health/") or path in {"/slack/events", "/slackbox/incoming"}:
             return await call_next(request)
-        # Allow localhost without Authorization when enabled
-        try:
-            client_host = request.client.host if request.client else ""
-        except Exception:
-            client_host = ""
-        if (
-            self._allow_localhost
-            and client_host in {"127.0.0.1", "::1", "localhost"}
-            and not self._has_forwarded_headers(request)
-        ):
+        # Allow localhost without Authorization when enabled (requires direct loopback or forwarded headers)
+        if self._allow_localhost and _is_trusted_localhost(request):
             return await call_next(request)
         auth_header = request.headers.get("Authorization", "")
         if auth_header != f"Bearer {self._token}":
@@ -393,27 +404,15 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
         else:
             roles = {self._default_role}
             # Elevate localhost to writer when unauthenticated localhost is allowed
-            try:
-                client_host = request.client.host if request.client else ""
-            except Exception:
-                client_host = ""
-            if (
-                bool(getattr(self.settings.http, "allow_localhost_unauthenticated", False))
-                and client_host in {"127.0.0.1", "::1", "localhost"}
-                and not BearerAuthMiddleware._has_forwarded_headers(request)
+            if bool(getattr(self.settings.http, "allow_localhost_unauthenticated", False)) and _is_trusted_localhost(
+                request
             ):
                 roles.add("writer")
 
         # RBAC enforcement (skip for localhost when allowed)
-        try:
-            client_host = request.client.host if request.client else ""
-        except Exception:
-            client_host = ""
-        is_local_ok = (
-            bool(getattr(self.settings.http, "allow_localhost_unauthenticated", False))
-            and client_host in {"127.0.0.1", "::1", "localhost"}
-            and not BearerAuthMiddleware._has_forwarded_headers(request)
-        )
+        is_local_ok = bool(
+            getattr(self.settings.http, "allow_localhost_unauthenticated", False)
+        ) and _is_trusted_localhost(request)
         # When RBAC is enabled but no authentication mechanism is available, return 401
         if self._rbac_enabled and not is_local_ok and kind in {"tools", "resources"}:
             # If JWT is not enabled AND bearer token is not configured, there's no way to authenticate
