@@ -1043,9 +1043,7 @@ async def _get_project_by_id(project_id: int) -> Project:
         return project
 
 
-async def _get_active_project_agents(
-    project_id: int, *, session: AsyncSession | None = None
-) -> list[Agent]:
+async def _get_active_project_agents(project_id: int, *, session: AsyncSession | None = None) -> list[Agent]:
     """Return active, non-placeholder agents for a project, ordered by name."""
     if session is None:
         async with get_session() as new_session:
