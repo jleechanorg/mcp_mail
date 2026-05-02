@@ -983,7 +983,45 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 _slack_event_cache.add(cache_key)
                 _slack_event_cache_order.append(cache_key)
 
-        project = await _ensure_project(settings.slack.sync_project_name)
+        # Route to the original thread's project if thread_id is provided, so Slack
+        # ack replies land in the same project as the original message.
+        thread_id = message_info.get("thread_id")
+        project = None
+        if thread_id:
+            async with get_session() as session:
+                if thread_id.isdigit():
+                    result = await session.execute(
+                        text(
+                            "SELECT p.id, p.slug, p.human_key FROM messages m JOIN projects p ON p.id = m.project_id WHERE m.id = :mid"
+                        ),
+                        {"mid": int(thread_id)},
+                    )
+                else:
+                    result = await session.execute(
+                        text("""
+                            SELECT p.id, p.slug, p.human_key
+                            FROM messages m
+                            JOIN projects p ON p.id = m.project_id
+                            WHERE m.thread_id = :tid
+                            ORDER BY m.id ASC
+                            LIMIT 1
+                        """),
+                        {"tid": thread_id},
+                    )
+                row = result.fetchone()
+                if row:
+                    from .models import Project
+
+                    project = Project(id=row[0], slug=row[1], human_key=row[2])
+                    logger.info(
+                        "slack_reply_routed_to_original_project",
+                        thread_id=thread_id,
+                        project_slug=project.slug,
+                        source=source,
+                    )
+        if not project:
+            # Fall back to sync_project_name for new Slack-originated threads
+            project = await _ensure_project(settings.slack.sync_project_name)
 
         sender_name = message_info["sender_name"]
         sender_agent = await _get_agent_by_name_optional(sender_name)
