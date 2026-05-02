@@ -445,9 +445,9 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
                 roles.add("writer")
 
         # RBAC enforcement (skip for localhost when allowed)
-        is_local_ok = bool(getattr(self.settings.http, "allow_localhost_unauthenticated", False)) and _is_trusted_localhost(
-            request
-        )
+        is_local_ok = bool(
+            getattr(self.settings.http, "allow_localhost_unauthenticated", False)
+        ) and _is_trusted_localhost(request)
         # When RBAC is enabled but no authentication mechanism is available, return 401
         if self._rbac_enabled and not is_local_ok and kind in {"tools", "resources"}:
             # If JWT is not enabled AND bearer token is not configured, there's no way to authenticate
