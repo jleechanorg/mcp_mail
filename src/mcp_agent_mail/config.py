@@ -313,13 +313,16 @@ def get_settings() -> Settings:
 
     database_settings = DatabaseSettings(
         # Store SQLite database inside .mcp_mail/ alongside Git archive
-        url=_decouple_config("DATABASE_URL", default="sqlite+aiosqlite:///./.mcp_mail/storage.sqlite3"),
+        url=_decouple_config(
+            "DATABASE_URL",
+            default=f"sqlite+aiosqlite:///{Path.home() / '.mcp_agent_mail_git_mailbox_repo' / 'storage.sqlite3'}",
+        ),
         echo=_bool(_decouple_config("DATABASE_ECHO", default="false"), default=False),
     )
 
     storage_settings = StorageSettings(
         # Default to project-local storage (committed to git) for transparency
-        root=_decouple_config("STORAGE_ROOT", default=".mcp_mail"),
+        root=_decouple_config("STORAGE_ROOT", default=str(Path.home() / ".mcp_agent_mail_git_mailbox_repo")),
         git_author_name=_decouple_config("GIT_AUTHOR_NAME", default="mcp-agent"),
         git_author_email=_decouple_config("GIT_AUTHOR_EMAIL", default="mcp-agent@example.com"),
         inline_image_max_bytes=_int(
