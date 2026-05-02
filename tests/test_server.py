@@ -1,6 +1,7 @@
 import contextlib
 import json
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 import anyio
 import pytest
@@ -86,6 +87,106 @@ async def test_messaging_flow(isolated_env):
         messages_dir = storage_root / "projects" / "backend" / "messages"
         message_files = [path async for path in messages_dir.rglob("*.md")] if await messages_dir.exists() else []
         assert not message_files
+
+
+@pytest.mark.asyncio
+async def test_send_message_deduplicates_recipient_names_case_insensitively(isolated_env):
+    server = build_mcp_server()
+
+    async with Client(server) as client:
+        await client.call_tool("ensure_project", {"human_key": "/backend"})
+        await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "Backend",
+                "program": "codex",
+                "model": "gpt-5",
+                "name": "AliceAgent",
+            },
+        )
+        await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "Backend",
+                "program": "codex",
+                "model": "gpt-5",
+                "name": "SenderAgent",
+            },
+        )
+
+        sent = await client.call_tool(
+            "send_message",
+            {
+                "project_key": "Backend",
+                "sender_name": "SenderAgent",
+                "to": ["AliceAgent", "aliceagent"],
+                "subject": "Case-insensitive dedup",
+                "body_md": "hello",
+            },
+        )
+        deliveries = sent.data.get("deliveries") or []
+        assert deliveries
+        assert deliveries[0]["payload"]["subject"] == "Case-insensitive dedup"
+
+        inbox = await client.call_tool(
+            "fetch_inbox",
+            {
+                "project_key": "Backend",
+                "agent_name": "AliceAgent",
+                "limit": 10,
+            },
+        )
+        messages = inbox.structured_content.get("result")
+        assert isinstance(messages, list)
+        assert len(messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_inbox_limit_is_clamped(isolated_env):
+    server = build_mcp_server()
+
+    async with Client(server) as client:
+        await client.call_tool("ensure_project", {"human_key": "/backend"})
+        await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "Backend",
+                "program": "codex",
+                "model": "gpt-5",
+                "name": "ClampSender",
+            },
+        )
+        await client.call_tool(
+            "register_agent",
+            {
+                "project_key": "Backend",
+                "program": "codex",
+                "model": "gpt-5",
+                "name": "ClampRecipient",
+            },
+        )
+
+        for i in range(5):
+            await client.call_tool(
+                "send_message",
+                {
+                    "project_key": "Backend",
+                    "sender_name": "ClampSender",
+                    "to": ["ClampRecipient"],
+                    "subject": f"m-{i}",
+                    "body_md": "x",
+                },
+            )
+
+        zero_limit = await client.call_tool(
+            "fetch_inbox",
+            {
+                "project_key": "Backend",
+                "agent_name": "ClampRecipient",
+                "limit": 0,
+            },
+        )
+        assert len(zero_limit.structured_content.get("result", [])) == 1
 
 
 @pytest.mark.asyncio
@@ -733,3 +834,106 @@ async def test_project_sibling_suggestions_backend(isolated_env, monkeypatch):
     assert any(entry["peer"]["id"] == second_id for entry in updated_map[first_id]["confirmed"])
     assert not any(entry["peer"]["id"] == second_id for entry in updated_map[first_id]["suggested"])
     assert any(entry["peer"]["id"] == first_id for entry in updated_map[second_id]["confirmed"])
+
+
+@pytest.mark.asyncio
+async def test_ensure_project_idempotent(isolated_env):
+    """Test that ensure_project is idempotent - calling multiple times returns same project."""
+    server = build_mcp_server()
+
+    async with Client(server) as client:
+        # First call creates the project
+        result1 = await client.call_tool("ensure_project", {"human_key": "/data/projects/myproject"})
+        assert result1.data["slug"] == "data-projects-myproject"
+        assert result1.data["human_key"] == "/data/projects/myproject"
+        project_id1 = result1.data["id"]
+
+        # Second call should return the same project (idempotent)
+        result2 = await client.call_tool("ensure_project", {"human_key": "/data/projects/myproject"})
+        assert result2.data["id"] == project_id1
+        assert result2.data["slug"] == "data-projects-myproject"
+
+        # Third call with same key should still return same project
+        result3 = await client.call_tool("ensure_project", {"human_key": "/data/projects/myproject"})
+        assert result3.data["id"] == project_id1
+
+
+@pytest.mark.asyncio
+async def test_ensure_project_updates_human_key_same_slug(isolated_env):
+    """Test that ensure_project updates human_key when slug stays the same (no stale early return).
+
+    This tests the case where human_key changes but slug remains unchanged
+    (e.g., adding/removing trailing slashes, case changes).
+    """
+    server = build_mcp_server()
+
+    async with Client(server) as client:
+        # Create project with initial human_key
+        result1 = await client.call_tool("ensure_project", {"human_key": "/data/projects/myproject"})
+        assert result1.data["slug"] == "data-projects-myproject"
+        assert result1.data["human_key"] == "/data/projects/myproject"
+        project_id1 = result1.data["id"]
+
+        # Call with different human_key but same slug (trailing slash removed) - should update
+        result2 = await client.call_tool("ensure_project", {"human_key": "/data/projects/myproject/"})
+        assert result2.data["id"] == project_id1  # Same project
+        assert result2.data["slug"] == "data-projects-myproject"  # slug unchanged
+        assert result2.data["human_key"] == "/data/projects/myproject/"  # human_key updated
+
+
+@pytest.mark.asyncio
+async def test_ensure_product_idempotent(isolated_env):
+    """Test that ensure_product is idempotent - calling multiple times returns same product."""
+    server = build_mcp_server()
+
+    async with Client(server) as client:
+        product_key = uuid4().hex[:12]
+        # First call creates the product (using valid hex uid pattern - 8+ chars)
+        result1 = await client.call_tool("ensure_product", {"product_key": product_key, "name": "Test Product"})
+        assert result1.data["product_uid"] == product_key
+        assert result1.data["name"] == "Test Product"
+        product_id1 = result1.data["id"]
+
+        # Second call should return the same product (idempotent)
+        result2 = await client.call_tool("ensure_product", {"product_key": product_key, "name": "Test Product"})
+        assert result2.data["id"] == product_id1
+        assert result2.data["product_uid"] == product_key
+
+
+@pytest.mark.asyncio
+async def test_ensure_product_updates_name(isolated_env):
+    """Test that ensure_product updates name when provided and different."""
+    server = build_mcp_server()
+
+    async with Client(server) as client:
+        # Create product with initial name
+        result1 = await client.call_tool("ensure_product", {"name": "Original Name"})
+        assert result1.data["name"] == "Original Name"
+        product_id1 = result1.data["id"]
+
+        # Call with different name - should update
+        result2 = await client.call_tool(
+            "ensure_product", {"product_key": result1.data["product_uid"], "name": "Updated Name"}
+        )
+        assert result2.data["id"] == product_id1  # Same product
+        assert result2.data["name"] == "Updated Name"  # name updated
+
+
+@pytest.mark.asyncio
+async def test_ensure_product_preserves_uid_on_name_change(isolated_env):
+    """Test that changing name via ensure_product doesn't change the product_uid."""
+    server = build_mcp_server()
+
+    async with Client(server) as client:
+        # Create product (using valid hex uid pattern - 8+ chars, hex only a-f0-9)
+        product_key = uuid4().hex[:12]
+        result1 = await client.call_tool("ensure_product", {"product_key": product_key, "name": "First Name"})
+        product_uid = result1.data["product_uid"]
+
+        # Update name only
+        result2 = await client.call_tool("ensure_product", {"product_key": product_key, "name": "Second Name"})
+
+        # UID should be preserved
+        assert result2.data["product_uid"] == product_uid
+        assert result2.data["product_uid"] == product_key
+        assert result2.data["name"] == "Second Name"

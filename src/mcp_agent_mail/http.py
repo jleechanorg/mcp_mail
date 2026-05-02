@@ -1,5 +1,7 @@
 """HTTP transport helpers wrapping FastMCP with FastAPI."""
 
+from __future__ import annotations
+
 import argparse
 import asyncio
 import base64
@@ -9,11 +11,10 @@ import importlib
 import json
 import logging
 import re
-import sys
 from collections import deque
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from types import ModuleType
 from typing import Any, cast
 
 import anyio
@@ -22,24 +23,45 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
-from rich.console import Console
-from sqlalchemy import func, select, text
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError, NoResultFound
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.types import Receive, Scope, Send
 
+from .app import (
+    _create_message,
+    _ensure_project,
+    _expire_stale_file_reservations,
+    _get_agent_by_name_optional,
+    _message_frontmatter,
+    _tool_metrics_snapshot,
+    build_mcp_server,
+    get_project_sibling_data,
+    refresh_project_sibling_suggestions,
+    update_project_sibling_status,
+)
 from .config import Settings, get_settings
 from .db import ensure_schema, get_session
-from .models import Agent
-from .storage import collect_lock_status
+from .storage import (
+    archive_write_lock,
+    collect_lock_status,
+    ensure_archive,
+    get_agent_communication_graph,
+    get_archive_tree,
+    get_commit_detail,
+    get_file_content,
+    get_historical_inbox_snapshot,
+    get_message_commit_sha,
+    get_recent_commits,
+    get_timeline_commits,
+    write_agent_profile,
+    write_file_reservation_record,
+    write_message_bundle,
+)
 
 # Slack webhook dedupe cache (in-memory best-effort)
-# NOTE: We use a plain deque (no maxlen) and manage eviction manually to keep
-# the set and deque in sync. Using deque(maxlen=N) causes auto-eviction that
-# would desynchronize the set, leading to unbounded memory growth.
 _slack_event_cache: set[tuple[str, str]] = set()
-_slack_event_cache_order: deque[tuple[str, str]] = deque()
-_SLACK_EVENT_CACHE_MAX_SIZE = 5000
+_slack_event_cache_order: deque[tuple[str, str]] = deque(maxlen=5000)
 _slack_event_cache_lock = asyncio.Lock()
 
 
@@ -64,57 +86,7 @@ async def _project_identifiers_from_id(pid: int | None) -> tuple[str | None, str
         return (res[0], res[1])
 
 
-async def _project_from_thread_id(thread_id: str | None) -> tuple[int, str, str] | None:
-    """Look up the project of the first message in a thread.
-
-    Returns (project_id, slug, human_key) if a message with thread_id exists,
-    otherwise None. Used to route Slack replies to the original message's project.
-    """
-    if not thread_id:
-        return None
-    await ensure_schema()
-    async with get_session() as session:
-        row = await session.execute(
-            text("""
-                SELECT p.id, p.slug, p.human_key
-                FROM messages m
-                JOIN projects p ON m.project_id = p.id
-                WHERE m.thread_id = :thread_id
-                ORDER BY m.id ASC
-                LIMIT 1
-            """),
-            {"thread_id": thread_id},
-        )
-        res = row.fetchone()
-        if res:
-            return (res[0], res[1], res[2])
-        return None
-
-
 __all__ = ["build_http_app", "main"]
-
-_APP_MODULE: ModuleType | None = None
-
-
-def _ensure_supported_python_version() -> None:
-    if sys.version_info >= (3, 14):
-        error_console = Console(stderr=True)
-        error_console.print("[bold red]❌ Error:[/bold red] Python 3.14+ is not supported.")
-        error_console.print("[yellow]MCP Mail requires Python 3.11, 3.12, or 3.13.[/yellow]")
-        error_console.print(
-            "[dim]Reason: the beartype dependency imports collections.abc.ByteString, which was removed in Python 3.14.[/dim]"
-        )
-        raise SystemExit(1)
-
-
-def _get_app_module() -> ModuleType:
-    global _APP_MODULE
-    if _APP_MODULE is None:
-        _ensure_supported_python_version()
-        from . import app as app_module
-
-        _APP_MODULE = app_module
-    return _APP_MODULE
 
 
 def _decode_jwt_header_segment(token: str) -> dict[str, object] | None:
@@ -181,6 +153,14 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         self._token = token
         self._allow_localhost = allow_localhost
 
+    @staticmethod
+    def _has_forwarded_headers(request: Request) -> bool:
+        """Detect proxy-forwarded headers to avoid trusting localhost behind proxies."""
+        headers = request.headers
+        return any(
+            name in headers for name in ("x-forwarded-for", "x-forwarded-proto", "x-forwarded-host", "forwarded")
+        )
+
     async def dispatch(self, request: Request, call_next):
         path = request.url.path or ""
         if request.method == "OPTIONS":  # allow CORS preflight
@@ -192,7 +172,11 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
             client_host = request.client.host if request.client else ""
         except Exception:
             client_host = ""
-        if self._allow_localhost and client_host in {"127.0.0.1", "::1", "localhost"}:
+        if (
+            self._allow_localhost
+            and client_host in {"127.0.0.1", "::1", "localhost"}
+            and not self._has_forwarded_headers(request)
+        ):
             return await call_next(request)
         auth_header = request.headers.get("Authorization", "")
         if auth_header != f"Bearer {self._token}":
@@ -359,20 +343,13 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS" or path.startswith("/health/"):
             return await call_next(request)
 
-        # Apply dedicated rate limiting for Slack webhooks (and bypass auth) before further processing
-        if path in {"/slack/events", "/slackbox/incoming"}:
-            if path == "/slackbox/incoming":
-                slack_rpm = int(getattr(self.settings.http, "rate_limit_slackbox_per_minute", 120) or 120)
-                slack_burst = int(getattr(self.settings.http, "rate_limit_slackbox_burst", 0) or 0)
-                route_label = "slackbox"
-            else:
-                slack_rpm = int(getattr(self.settings.http, "rate_limit_slack_per_minute", 120) or 120)
-                slack_burst = int(getattr(self.settings.http, "rate_limit_slack_burst", 0) or 0)
-                route_label = "slack"
-
+        # Apply dedicated rate limiting for Slack webhooks
+        if path == "/slack/events":
+            slack_rpm = int(getattr(self.settings.http, "rate_limit_slack_per_minute", 120) or 120)
+            slack_burst = int(getattr(self.settings.http, "rate_limit_slack_burst", 0) or 0)
             slack_burst = slack_burst if slack_burst > 0 else max(1, slack_rpm)
             client_ip = request.client.host if request.client else "unknown"
-            key = f"{route_label}:{client_ip}"
+            key = f"slack:{client_ip}"
             allowed = await self._consume_bucket(key, slack_rpm, slack_burst)
             if not allowed:
                 return JSONResponse({"detail": "Rate limit exceeded"}, status_code=status.HTTP_429_TOO_MANY_REQUESTS)
@@ -420,11 +397,11 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
                 client_host = request.client.host if request.client else ""
             except Exception:
                 client_host = ""
-            if bool(getattr(self.settings.http, "allow_localhost_unauthenticated", False)) and client_host in {
-                "127.0.0.1",
-                "::1",
-                "localhost",
-            }:
+            if (
+                bool(getattr(self.settings.http, "allow_localhost_unauthenticated", False))
+                and client_host in {"127.0.0.1", "::1", "localhost"}
+                and not BearerAuthMiddleware._has_forwarded_headers(request)
+            ):
                 roles.add("writer")
 
         # RBAC enforcement (skip for localhost when allowed)
@@ -432,11 +409,11 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
             client_host = request.client.host if request.client else ""
         except Exception:
             client_host = ""
-        is_local_ok = bool(getattr(self.settings.http, "allow_localhost_unauthenticated", False)) and client_host in {
-            "127.0.0.1",
-            "::1",
-            "localhost",
-        }
+        is_local_ok = (
+            bool(getattr(self.settings.http, "allow_localhost_unauthenticated", False))
+            and client_host in {"127.0.0.1", "::1", "localhost"}
+            and not BearerAuthMiddleware._has_forwarded_headers(request)
+        )
         # When RBAC is enabled but no authentication mechanism is available, return 401
         if self._rbac_enabled and not is_local_ok and kind in {"tools", "resources"}:
             # If JWT is not enabled AND bearer token is not configured, there's no way to authenticate
@@ -488,18 +465,15 @@ async def readiness_check() -> None:
 
 
 def build_http_app(settings: Settings, server=None) -> FastAPI:
-    _ensure_supported_python_version()
-    app_module = _get_app_module()
-
     # Configure logging once
     _configure_logging(settings)
     if server is None:
-        server = app_module.build_mcp_server()
+        server = build_mcp_server()
 
     # Build MCP HTTP sub-app with stateless mode for ASGI test transports
     mcp_http_app = server.http_app(path="/", stateless_http=True, json_response=True)
 
-    # Normalize Accept/Content-Type headers on inbound MCP HTTP calls.
+    # no-op wrapper removed; using explicit stateless adapter below
 
     # Background workers lifecycle
     async def _startup() -> None:  # pragma: no cover - service lifecycle
@@ -523,7 +497,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     released_total = 0
                     for pid in pids:
                         with contextlib.suppress(Exception):
-                            stale = await app_module._expire_stale_file_reservations(pid)
+                            stale = await _expire_stale_file_reservations(pid)
                             released_total += len(stale)
                     try:
                         rich_console = importlib.import_module("rich.console")
@@ -676,7 +650,30 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                                     hid2 = hid_row2.scalar_one_or_none()
                                                     if isinstance(hid2, int):
                                                         holder_agent_id = hid2
-                                                        # Archive storage has been removed; no profile artifacts are written.
+                                                        (
+                                                            project_slug,
+                                                            project_human_key,
+                                                        ) = await _project_identifiers_from_id(project_id)
+                                                        # Write profile.json to archive
+                                                        archive = await ensure_archive(
+                                                            settings,
+                                                            project_slug or "",
+                                                            project_key=project_human_key,
+                                                        )
+                                                        async with archive_write_lock(archive):
+                                                            await write_agent_profile(
+                                                                archive,
+                                                                {
+                                                                    "id": holder_agent_id,
+                                                                    "name": settings.ack_escalation_claim_holder_name,
+                                                                    "program": "ops",
+                                                                    "model": "system",
+                                                                    "project_slug": project_slug or "",
+                                                                    "inception_ts": now.astimezone().isoformat(),
+                                                                    "inception_iso": now.astimezone().isoformat(),
+                                                                    "task": "ops-escalation",
+                                                                },
+                                                            )
                                         async with get_session() as s2:
                                             await s2.execute(
                                                 text(
@@ -697,7 +694,27 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                                 },
                                             )
                                             await s2.commit()
-                                        # Archive storage has been removed; no file-reservation artifacts are written.
+                                        # Also write JSON artifact to archive
+                                        project_slug, project_human_key = await _project_identifiers_from_id(project_id)
+                                        archive = await ensure_archive(
+                                            settings, project_slug or "", project_key=project_human_key
+                                        )
+                                        expires_at = now + _dt.timedelta(
+                                            seconds=settings.ack_escalation_claim_ttl_seconds
+                                        )
+                                        async with archive_write_lock(archive):
+                                            await write_file_reservation_record(
+                                                archive,
+                                                {
+                                                    "project": project_slug,
+                                                    "agent": settings.ack_escalation_claim_holder_name or "ops",
+                                                    "path_pattern": pattern,
+                                                    "exclusive": settings.ack_escalation_claim_exclusive,
+                                                    "reason": "ack-overdue",
+                                                    "created_ts": now.astimezone().isoformat(),
+                                                    "expires_ts": expires_at.astimezone().isoformat(),
+                                                },
+                                            )
                                     except Exception:
                                         pass
                 except Exception:
@@ -708,7 +725,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             log = structlog.get_logger("tool.metrics")
             while True:
                 try:
-                    snapshot = app_module._tool_metrics_snapshot()
+                    snapshot = _tool_metrics_snapshot()
                     if snapshot:
                         log.info("tool_metrics_snapshot", tools=snapshot)
                 except Exception:
@@ -717,13 +734,13 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
         async def _worker_retention_quota() -> None:
             import datetime as _dt
+            from pathlib import Path as _Path
 
             while True:
                 from contextlib import suppress as _suppress
 
                 with _suppress(Exception):
-                    storage_root = await anyio.Path(settings.storage.root).expanduser()
-                    storage_root = await storage_root.resolve()
+                    storage_root = _Path(settings.storage.root).expanduser().resolve()
                     cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(
                         days=int(settings.retention_max_age_days)
                     )
@@ -735,46 +752,39 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     import fnmatch as _fnmatch
 
                     ignore_patterns = list(getattr(settings, "retention_ignore_project_patterns", []) or [])
-                    if await storage_root.exists():
-                        async for proj_dir in storage_root.iterdir():
-                            if not await proj_dir.is_dir():
-                                continue
-                            proj_name = proj_dir.name
-                            # Skip test/demo projects in real server runs
-                            if any(_fnmatch.fnmatch(proj_name, pat) for pat in ignore_patterns):
-                                continue
-                            msg_root = proj_dir / "messages"
-                            if await msg_root.exists():
-                                async for ydir in msg_root.iterdir():
-                                    if not await ydir.is_dir():
-                                        continue
-                                    async for mdir in ydir.iterdir():
-                                        if not await mdir.is_dir():
-                                            continue
-                                        async for f in mdir.iterdir():
-                                            if f.suffix.lower() == ".md":
-                                                with _suppress(Exception):
-                                                    stat = await f.stat()
-                                                    ts = _dt.datetime.fromtimestamp(stat.st_mtime, _dt.timezone.utc)
-                                                    if ts < cutoff:
-                                                        old_messages += 1
-                            # Count per-agent inbox files (agents/*/inbox/YYYY/MM/*.md)
-                            inbox_root = proj_dir / "agents"
-                            if await inbox_root.exists():
-                                count_inbox = 0
-                                async for f in inbox_root.rglob("inbox/*/*/*.md"):
-                                    with _suppress(Exception):
-                                        if await f.is_file():
-                                            count_inbox += 1
-                                per_project_inbox_counts[proj_name] = count_inbox
-                            att_root = proj_dir / "attachments"
-                            if await att_root.exists():
-                                async for sub in att_root.rglob("*.webp"):
-                                    with _suppress(Exception):
-                                        stat = await sub.stat()
-                                        sz = stat.st_size
-                                        total_attach_bytes += sz
-                                        per_project_attach[proj_name] = per_project_attach.get(proj_name, 0) + sz
+                    for proj_dir in storage_root.iterdir() if storage_root.exists() else []:
+                        if not proj_dir.is_dir():
+                            continue
+                        proj_name = proj_dir.name
+                        # Skip test/demo projects in real server runs
+                        if any(_fnmatch.fnmatch(proj_name, pat) for pat in ignore_patterns):
+                            continue
+                        msg_root = proj_dir / "messages"
+                        if msg_root.exists():
+                            for ydir in msg_root.iterdir():
+                                for mdir in ydir.iterdir() if ydir.is_dir() else []:
+                                    for f in mdir.iterdir() if mdir.is_dir() else []:
+                                        if f.suffix.lower() == ".md":
+                                            with _suppress(Exception):
+                                                ts = _dt.datetime.fromtimestamp(f.stat().st_mtime, _dt.timezone.utc)
+                                                if ts < cutoff:
+                                                    old_messages += 1
+                        # Count per-agent inbox files (agents/*/inbox/YYYY/MM/*.md)
+                        inbox_root = proj_dir / "agents"
+                        if inbox_root.exists():
+                            count_inbox = 0
+                            for f in inbox_root.rglob("inbox/*/*/*.md"):
+                                with _suppress(Exception):
+                                    if f.is_file():
+                                        count_inbox += 1
+                            per_project_inbox_counts[proj_name] = count_inbox
+                        att_root = proj_dir / "attachments"
+                        if att_root.exists():
+                            for sub in att_root.rglob("*.webp"):
+                                with _suppress(Exception):
+                                    sz = sub.stat().st_size
+                                    total_attach_bytes += sz
+                                    per_project_attach[proj_name] = per_project_attach.get(proj_name, 0) + sz
                     structlog.get_logger("maintenance").info(
                         "retention_quota_report",
                         old_messages=old_messages,
@@ -817,6 +827,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         for task in tasks:
             task.cancel()
         for task in tasks:
+            # Suppress both Exception (pre-3.11 CancelledError) and BaseException CancelledError (3.11+)
             with contextlib.suppress(Exception, asyncio.CancelledError):
                 await task
 
@@ -955,7 +966,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         slack_ts = message_info.get("slack_ts")
         slack_channel = message_info.get("slack_channel")
         cache_key = dedupe_key or ((slack_channel, slack_ts) if slack_ts and slack_channel else None)
-        cache_key_added = False
 
         if cache_key:
             async with _slack_event_cache_lock:
@@ -967,166 +977,170 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         source=source,
                     )
                     return JSONResponse({"ok": True, "message": "Duplicate Slack event skipped"})
-
-                # Evict oldest entries if at capacity (before adding new one)
-                while len(_slack_event_cache_order) >= _SLACK_EVENT_CACHE_MAX_SIZE:
+                # Pre-evict if deque is at capacity so set and deque stay in sync
+                if len(_slack_event_cache_order) >= _slack_event_cache_order.maxlen:
                     old = _slack_event_cache_order.popleft()
                     _slack_event_cache.discard(old)
-
                 _slack_event_cache.add(cache_key)
                 _slack_event_cache_order.append(cache_key)
-                cache_key_added = True
 
-        try:
-            # Determine project: Look up the original project for this thread so Slack replies
-            # go to the same project as the original message. Supports both numeric message IDs
-            # and string thread_ids (e.g., "bd-123", "slack_<channel>_<ts>").
-            thread_id = message_info.get("thread_id")
-            project = None
-
-            if thread_id:
-                async with get_session() as session:
-                    if thread_id.isdigit():
-                        # thread_id is a numeric MCP message ID - look up by message.id
-                        result = await session.execute(
-                            text(
-                                "SELECT p.id, p.slug, p.human_key FROM messages m JOIN projects p ON p.id = m.project_id WHERE m.id = :mid"
-                            ),
-                            {"mid": int(thread_id)},
-                        )
-                    else:
-                        # thread_id is a string - look up by messages.thread_id
-                        # This handles non-numeric thread_ids like "bd-123", "slack_C123_456.789"
-                        result = await session.execute(
-                            text("""
-                                SELECT p.id, p.slug, p.human_key
-                                FROM messages m
-                                JOIN projects p ON p.id = m.project_id
-                                WHERE m.thread_id = :tid
-                                ORDER BY m.id ASC
-                                LIMIT 1
-                            """),
-                            {"tid": thread_id},
-                        )
-                    row = result.fetchone()
-                    if row:
-                        from .models import Project
-
-                        project = Project(id=row[0], slug=row[1], human_key=row[2])
-                        logger.info(
-                            "slack_reply_routed_to_original_project",
-                            thread_id=thread_id,
-                            project_slug=project.slug,
-                            source=source,
-                        )
-
-            if not project:
-                # Fall back to sync_project_name for new Slack-originated threads
-                project = await app_module._ensure_project(settings.slack.sync_project_name)
-
-            sender_name = message_info["sender_name"]
-            # Agent names are globally unique. Treat Slack-derived senders as a shared/global
-            # identity: reuse the same agent across projects to avoid cross-project mutation.
-            sender_agent = await app_module._get_agent_by_name_optional(sender_name)
-            if sender_agent:
-                logger.debug(
-                    "slack_bridge_agent_reused",
-                    agent_name=sender_name,
-                    agent_project_id=sender_agent.project_id,
-                    target_project_id=project.id,
-                )
-
-            if not sender_agent:
-                if source in {"slack", "slack_events"}:
-                    program = "slack_bridge"
-                    model = "slack-events"
-                else:
-                    program = "slack_ingestion"
-                    model = "slack-webhook"
-                async with get_session() as session:
-                    sender_agent = Agent(
-                        name=sender_name,
-                        project_id=project.id,
-                        program=program,
-                        model=model,
-                        task_description="Bridges Slack messages into MCP Agent Mail",
-                        is_active=True,
-                    )
-                    session.add(sender_agent)
-                    try:
-                        await session.commit()
-                        await session.refresh(sender_agent)
-                        logger.info("slack_bridge_agent_created", agent_name=sender_name)
-                    except IntegrityError:
-                        await session.rollback()
-                        # Race: another request created this globally-unique agent first.
-                        sender_agent = await app_module._get_agent_by_name_optional(sender_name)
-                        if not sender_agent:
-                            raise
-
+        # Route to the original thread's project if thread_id is provided, so Slack
+        # ack replies land in the same project as the original message.
+        thread_id = message_info.get("thread_id")
+        project = None
+        if thread_id:
             async with get_session() as session:
-                result = await session.execute(
-                    select(Agent).where(
-                        cast(Any, Agent.project_id) == project.id,
-                        cast(Any, Agent.is_active).is_(True),
-                        cast(Any, Agent.id) != sender_agent.id,
+                if thread_id.isdigit():
+                    result = await session.execute(
+                        text(
+                            "SELECT p.id, p.slug, p.human_key FROM messages m JOIN projects p ON p.id = m.project_id WHERE m.id = :mid"
+                        ),
+                        {"mid": int(thread_id)},
                     )
+                else:
+                    result = await session.execute(
+                        text("""
+                            SELECT p.id, p.slug, p.human_key
+                            FROM messages m
+                            JOIN projects p ON p.id = m.project_id
+                            WHERE m.thread_id = :tid
+                            ORDER BY m.id ASC
+                            LIMIT 1
+                        """),
+                        {"tid": thread_id},
+                    )
+                row = result.fetchone()
+                if row:
+                    from .models import Project
+
+                    project = Project(id=row[0], slug=row[1], human_key=row[2])
+                    logger.info(
+                        "slack_reply_routed_to_original_project",
+                        thread_id=thread_id,
+                        project_slug=project.slug,
+                        source=source,
+                    )
+        if not project:
+            # Fall back to sync_project_name for new Slack-originated threads
+            project = await _ensure_project(settings.slack.sync_project_name)
+
+        sender_name = message_info["sender_name"]
+        sender_agent = await _get_agent_by_name_optional(sender_name)
+
+        if not sender_agent:
+            async with get_session() as session:
+                sender_agent = Agent(
+                    name=sender_name,
+                    project_id=project.id,
+                    program="slack_bridge",
+                    model="slack-events",
+                    task_description="Bridges Slack messages into MCP Agent Mail",
+                    is_active=True,
                 )
-                recipient_agents = list(result.scalars().all())
-
-            if not recipient_agents:
-                logger.warning("slack_no_recipients", project=project.slug, source=source)
-                return JSONResponse({"ok": True, "message": "No active recipients"})
-
-            recipients_list = [(agent, "to") for agent in recipient_agents]
-            message = await app_module._create_message(
-                project=project,
-                sender=sender_agent,
-                subject=message_info["subject"],
-                body_md=message_info["body_md"],
-                recipients=recipients_list,
-                importance="normal",
-                ack_required=False,
-                thread_id=message_info.get("thread_id"),
-                attachments=[],
-            )
-
-            logger.debug("slack_archive_write_skipped", reason="archive_removed", source=source)
-
-            slack_client_ref = None
-            try:
-                slack_client_ref = app_module._slack_client
-            except Exception:
-                slack_client_ref = None
-
-            slack_thread_ts = message_info.get("slack_thread_ts") or message_info.get("slack_ts")
-            slack_channel_id = message_info.get("slack_channel")
-            if slack_client_ref and message_info.get("thread_id") and slack_thread_ts and slack_channel_id:
+                session.add(sender_agent)
                 try:
-                    await slack_client_ref.map_thread(
-                        mcp_thread_id=message_info["thread_id"],
-                        slack_channel_id=slack_channel_id,
-                        slack_thread_ts=slack_thread_ts,
+                    await session.commit()
+                    await session.refresh(sender_agent)
+                    logger.info("slack_bridge_agent_created", agent_name=sender_name)
+                except IntegrityError:
+                    await session.rollback()
+                    result = await session.execute(
+                        select(Agent).where(
+                            cast(Any, Agent.project_id) == project.id,
+                            cast(Any, Agent.name) == sender_name,
+                        )
                     )
-                except Exception as exc:
-                    logger.warning("slack_thread_map_failed", error=str(exc), source=source)
+                    existing_agent = result.scalars().first()
+                    if not existing_agent:
+                        raise
+                    sender_agent = existing_agent
 
-            logger.info(
-                "slack_message_ingested",
-                message_id=message.id,
-                thread_id=message.thread_id,
-                slack_ts=slack_ts,
-                source=source,
+        async with get_session() as session:
+            result = await session.execute(
+                select(Agent).where(
+                    cast(Any, Agent.project_id) == project.id,
+                    cast(Any, Agent.is_active).is_(True),
+                    cast(Any, Agent.id) != sender_agent.id,
+                )
             )
+            recipient_agents = list(result.scalars().all())
 
-            return JSONResponse({"ok": True, "message": "Message created"})
+        if not recipient_agents:
+            logger.warning("slack_no_recipients", project=project.slug, source=source)
+            return JSONResponse({"ok": True, "message": "No active recipients"})
+
+        recipients_list = [(agent, "to") for agent in recipient_agents]
+        message = await _create_message(
+            project=project,
+            sender=sender_agent,
+            subject=message_info["subject"],
+            body_md=message_info["body_md"],
+            recipients=recipients_list,
+            importance="normal",
+            ack_required=False,
+            thread_id=message_info.get("thread_id"),
+            attachments=[],
+        )
+
+        to_agents = [r[0] for r in recipients_list if r[1] == "to"]
+        cc_agents = [r[0] for r in recipients_list if r[1] == "cc"]
+        bcc_agents = [r[0] for r in recipients_list if r[1] == "bcc"]
+        frontmatter = _message_frontmatter(
+            message=message,
+            project=project,
+            sender=sender_agent,
+            to_agents=to_agents,
+            cc_agents=cc_agents,
+            bcc_agents=bcc_agents,
+            attachments=[],
+        )
+
+        async def _persist_archive() -> None:
+            try:
+                archive = await ensure_archive(settings, project.slug)
+                await write_message_bundle(
+                    archive=archive,
+                    message=frontmatter,
+                    body_md=message.body_md,
+                    sender=sender_agent.name,
+                    recipients=[agent.name for agent in recipient_agents],
+                    extra_paths=[],
+                )
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.error("slack_archive_write_failed", error=str(exc), source=source)
+
+        _archive_task = asyncio.create_task(_persist_archive())
+        _ = _archive_task
+
+        slack_client_ref = None
+        try:
+            from .app import _slack_client as _global_slack_client
+
+            slack_client_ref = _global_slack_client
         except Exception:
-            if cache_key and cache_key_added:
-                async with _slack_event_cache_lock:
-                    _slack_event_cache.discard(cache_key)
-                    with contextlib.suppress(ValueError):
-                        _slack_event_cache_order.remove(cache_key)
-            raise
+            slack_client_ref = None
+
+        slack_thread_ts = message_info.get("slack_thread_ts") or message_info.get("slack_ts")
+        slack_channel_id = message_info.get("slack_channel")
+        if slack_client_ref and message_info.get("thread_id") and slack_thread_ts and slack_channel_id:
+            try:
+                await slack_client_ref.map_thread(
+                    mcp_thread_id=message_info["thread_id"],
+                    slack_channel_id=slack_channel_id,
+                    slack_thread_ts=slack_thread_ts,
+                )
+            except Exception as exc:
+                logger.warning("slack_thread_map_failed", error=str(exc), source=source)
+
+        logger.info(
+            "slack_message_ingested",
+            message_id=message.id,
+            thread_id=message.thread_id,
+            slack_ts=slack_ts,
+            source=source,
+        )
+
+        return JSONResponse({"ok": True, "message": "Message created"})
 
     # Slack Events API webhook endpoint for bidirectional sync
     @fastapi_app.post("/slack/events")
@@ -1201,120 +1215,14 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 if message_info:
                     slack_ts = message_info.get("slack_ts")
                     slack_channel = message_info.get("slack_channel")
-                    cache_key = (slack_channel, slack_ts) if slack_ts and slack_channel else None
+                    dedupe_key = (slack_channel, slack_ts) if slack_ts and slack_channel else None
 
-                    # Check for duplicate events before processing
-                    cache_key_added = False
-                    if cache_key:
-                        async with _slack_event_cache_lock:
-                            if cache_key in _slack_event_cache:
-                                logger.info(
-                                    "slack_message_duplicate_skipped",
-                                    slack_ts=slack_ts,
-                                    channel=slack_channel,
-                                )
-                                return JSONResponse({"ok": True, "message": "Duplicate Slack event skipped"})
-
-                            # Add to cache before processing to prevent concurrent duplicates
-                            while len(_slack_event_cache_order) >= _SLACK_EVENT_CACHE_MAX_SIZE:
-                                old = _slack_event_cache_order.popleft()
-                                _slack_event_cache.discard(old)
-                            _slack_event_cache.add(cache_key)
-                            _slack_event_cache_order.append(cache_key)
-                            cache_key_added = True
-
-                    # Create MCP message from Slack event
-                    try:
-                        # Determine project: use original thread's project for replies,
-                        # fall back to slack-sync or default project for new messages
-                        thread_id = message_info.get("thread_id")
-                        project = None
-                        if thread_id:
-                            thread_project = await _project_from_thread_id(thread_id)
-                            if thread_project:
-                                # Use original message's project for thread replies
-                                _project_id, slug, human_key = thread_project
-                                project = await app_module._ensure_project(human_key)
-                                logger.info(
-                                    "slack_reply_using_thread_project",
-                                    thread_id=thread_id,
-                                    project_slug=slug,
-                                )
-                        if not project:
-                            # New message or thread not found - use slack-sync or default
-                            if settings.slack.sync_project_name:
-                                project = await app_module._ensure_project(settings.slack.sync_project_name)
-                            else:
-                                project = await app_module._get_default_project()
-
-                        # Get or create SlackBridge agent
-                        sender_name = message_info["sender_name"]
-                        sender_agent = await app_module._get_agent_by_name_optional(sender_name)
-
-                        if not sender_agent:
-                            # Auto-create SlackBridge system agent; tolerate concurrent creation
-                            async with get_session() as session:
-                                sender_agent = Agent(
-                                    name=sender_name,
-                                    project_id=project.id if project else None,
-                                    program="slack_bridge",
-                                    model="slack-events",
-                                    task_description="Bridges Slack messages into MCP Agent Mail",
-                                    is_active=True,
-                                )
-                                session.add(sender_agent)
-                                try:
-                                    await session.commit()
-                                    await session.refresh(sender_agent)
-                                    logger.info("slack_bridge_agent_created", agent_name=sender_name)
-                                except IntegrityError:
-                                    await session.rollback()
-                                    # Agent names are globally unique; look up without project filter
-                                    # Must filter by is_active since unique index only covers active agents
-                                    result = await session.execute(
-                                        select(Agent).where(
-                                            func.lower(Agent.name) == func.lower(sender_name),
-                                            cast(Any, Agent.is_active).is_(True),
-                                        )
-                                    )
-                                    existing_agent = result.scalars().first()
-                                    if not existing_agent:
-                                        raise
-                                    sender_agent = existing_agent
-
-                        # Broadcast to all active agents globally (agent names are globally unique)
-                        # We intentionally avoid project scoping so Slack messages always reach active agents,
-                        # even when thread context has no project or the project was deleted.
-                        async with get_session() as session:
-                            result = await session.execute(
-                                select(Agent).where(
-                                    cast(Any, Agent.is_active).is_(True),
-                                    cast(Any, Agent.id) != sender_agent.id,
-                                )
-                            )
-                            recipient_agents = list(result.scalars().all())
-
-                        if not recipient_agents:
-                            logger.warning(
-                                "slack_no_recipients",
-                                project=(project.slug if project else app_module.DEFAULT_PROJECT_KEY),
-                            )
-                            return JSONResponse({"ok": True, "message": "No active recipients"})
-
-                        # Create message
-                        recipients_list = [(agent, "to") for agent in recipient_agents]
-                        message = await app_module._create_message(
-                            project=project,
-                            sender=sender_agent,
-                            subject=message_info["subject"],
-                            body_md=message_info["body_md"],
-                            recipients=recipients_list,
-                            importance="normal",
-                            ack_required=False,
-                            thread_id=message_info.get("thread_id"),
-                            attachments=[],
-                        )
-                        logger.debug("slack_archive_write_skipped", reason="archive_removed")
+                    return await _ingest_slack_bridge_message(
+                        message_info,
+                        logger=logger,
+                        dedupe_key=dedupe_key,
+                        source="slack_events",
+                    )
 
                         # Capture thread mapping so outbound replies stay in the same Slack thread
                         slack_client_ref = app_module._slack_client
@@ -1376,32 +1284,29 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         if not settings.slack.slackbox_enabled:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Slackbox disabled")
 
-        if not settings.slack.slackbox_token:
+        form = await request.form()
+
+        token = (form.get("token") or "").strip()
+        expected_token = (settings.slack.slackbox_token or "").strip()
+        if not expected_token:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Slackbox token not configured",
             )
 
-        form = await request.form()
-
-        token_raw = form.get("token")
-        token = token_raw.strip() if isinstance(token_raw, str) else ""
-        if not hmac.compare_digest(token, settings.slack.slackbox_token):
+        if not hmac.compare_digest(token, expected_token):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Slackbox token")
 
-        text_raw = form.get("text")
-        text = text_raw.strip() if isinstance(text_raw, str) else ""
+        text = (form.get("text") or "").strip()
         if not text:
             return JSONResponse({"ok": True, "message": "No text provided"})
 
-        channel_raw = form.get("channel_id") or form.get("channel_name")
-        channel_id = channel_raw.strip() if isinstance(channel_raw, str) else ""
+        channel_id = (form.get("channel_id") or form.get("channel_name") or "").strip()
         if settings.slack.slackbox_channels and channel_id not in settings.slack.slackbox_channels:
             logger.info("slackbox_channel_skipped", channel=channel_id)
             return JSONResponse({"ok": True, "message": "Channel not allowed"})
 
-        timestamp_raw = form.get("timestamp") or form.get("ts")
-        timestamp = timestamp_raw.strip() if isinstance(timestamp_raw, str) else ""
+        timestamp = (form.get("timestamp") or form.get("ts") or "").strip()
         dedupe_key = (channel_id, timestamp) if channel_id and timestamp else None
 
         subject_line = text.split("\n", 1)[0].strip() or "Slackbox message"
@@ -1429,9 +1334,11 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
     # A minimal stateless ASGI adapter that does not rely on ASGI lifespan management
     # and runs a fresh StreamableHTTP transport per request.
-    class MCPHeaderNormalizeASGIApp:
-        def __init__(self, app) -> None:
-            self._app = app
+    from mcp.server.streamable_http import StreamableHTTPServerTransport
+
+    class StatelessMCPASGIApp:
+        def __init__(self, mcp_server) -> None:
+            self._server = mcp_server
 
         async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
             if scope.get("type") != "http":
@@ -1454,11 +1361,57 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             new_scope = dict(scope)
             new_scope["headers"] = headers
 
-            # Ensure path is not empty (fix for mount point root handling)
-            if not new_scope.get("path"):
-                new_scope["path"] = "/"
+            http_transport = StreamableHTTPServerTransport(
+                mcp_session_id=None,
+                is_json_response_enabled=True,
+                event_store=None,
+                security_settings=None,
+            )
 
-            await self._app(new_scope, receive, send)
+            try:
+                async with http_transport.connect() as streams:
+                    read_stream, write_stream = streams
+                    server_task = asyncio.create_task(
+                        self._server._mcp_server.run(
+                            read_stream,
+                            write_stream,
+                            self._server._mcp_server.create_initialization_options(),
+                            stateless=True,
+                        )
+                    )
+                    # No response wrapping/unwrapping - just pass through MCP responses as-is
+                    # MCP clients can handle JSON-RPC format properly
+                    try:
+                        await http_transport.handle_request(new_scope, receive, send)
+                    finally:
+                        # Cancel server_task before exiting context to prevent ClosedResourceError
+                        # from the message router trying to read from closed streams
+                        server_task.cancel()
+                        # Wait briefly to allow cancellation to propagate before closing streams
+                        await asyncio.wait({server_task}, timeout=0.1)
+                        try:
+                            await http_transport.terminate()
+                        except anyio.ClosedResourceError:
+                            pass  # Expected on client disconnect
+                        except Exception as exc:
+                            structlog.get_logger().error(
+                                "Unexpected error during http_transport.terminate()",
+                                exc_info=True,
+                                exception=exc,
+                            )
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await server_task
+            except anyio.ClosedResourceError:
+                # Gracefully handle client disconnects - this is expected behavior when
+                # clients close connections during message routing (e.g., Codex, OAuth flows)
+                pass
+            except (ExceptionGroup, BaseExceptionGroup) as eg:
+                # Handle exception groups from anyio task groups - filter out ClosedResourceError
+                # and re-raise if there are other non-suppressible exceptions
+                non_closed = [e for e in eg.exceptions if not isinstance(e, anyio.ClosedResourceError)]
+                if non_closed:
+                    derived = eg.derive(non_closed) if hasattr(eg, "derive") else type(eg)(eg.args[0], non_closed)
+                    raise derived from eg
 
     # Mount at both '/base' and '/base/' to tolerate either form from clients/tests
     mount_base = settings.http.path or "/mcp"
@@ -1466,49 +1419,55 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         mount_base = "/" + mount_base
     base_no_slash = mount_base.rstrip("/") or "/"
     base_with_slash = base_no_slash if base_no_slash == "/" else base_no_slash + "/"
-    stateless_app = MCPHeaderNormalizeASGIApp(mcp_http_app)
-
-    # Add a direct route at the base path to handle POST /mcp without redirect (307)
-    # and support streaming (by using ASGI app directly instead of buffering).
-    class RootPathForceASGIApp:
-        """ASGI adapter that rewrites requests to the root path ("/").
-
-        Used to handle POST requests at the mount base path (e.g., /mcp) without
-        FastAPI's automatic redirect (307) to the trailing-slash variant. This
-        enables streaming responses at the exact base path by rewriting the
-        incoming scope path to "/".
-        """
-
-        def __init__(self, app) -> None:
-            self.app = app
-
-        async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-            new_scope = dict(scope)
-            new_scope["path"] = "/"
-            await self.app(new_scope, receive, send)
-
-    if base_no_slash == "/":
-        # CRITICAL WARNING: HTTP_PATH='/' will shadow ALL other routes including /mail UI
-        # This is a fundamental limitation of ASGI/FastAPI routing - mount() at "/" captures everything
-        # RECOMMENDED: Use HTTP_PATH='/mcp' instead
-        structlog.get_logger(__name__).warning(
-            "HTTP_PATH='/' will shadow all routes including /mail UI. "
-            "The /mail interface will NOT be accessible when HTTP_PATH='/'. "
-            "STRONGLY RECOMMENDED: Use HTTP_PATH='/mcp' instead."
-        )
-        # Mount at root - this WILL shadow /mail and other routes, but supports MCP streaming correctly
-        with contextlib.suppress(Exception):
-            fastapi_app.mount("/", stateless_app, name="mcp_root")
-    else:
-        # Fix ASGI handler signature mismatch: Use mount() instead of add_route()
-        # for the no-slash path to properly handle ASGI app signature
-        with contextlib.suppress(Exception):
-            fastapi_app.mount(base_no_slash, RootPathForceASGIApp(stateless_app), name="mcp_no_slash")
-        with contextlib.suppress(Exception):
-            fastapi_app.mount(base_with_slash, stateless_app, name="mcp_with_slash")
+    stateless_app = StatelessMCPASGIApp(server)
+    with contextlib.suppress(Exception):
+        fastapi_app.mount(base_no_slash, stateless_app)
+    with contextlib.suppress(Exception):
+        fastapi_app.mount(base_with_slash, stateless_app)
 
     # Expose composed lifespan via router
     fastapi_app.router.lifespan_context = lifespan_context
+
+    # Add a direct route at the base path without redirect to tolerate clients omitting trailing slash
+    @fastapi_app.post(base_no_slash)
+    async def _base_passthrough(request: Request) -> JSONResponse:
+        # Re-dispatch to mounted stateless app by calling it directly
+        response_body = {}
+        status_code = 200
+        headers: dict[str, str] = {}
+
+        async def _send(message: Mapping[str, Any]) -> None:
+            nonlocal response_body, status_code, headers
+            if message.get("type") == "http.response.start":
+                status_code = int(message.get("status", 200))
+                hdrs = message.get("headers") or []
+                for k, v in hdrs:
+                    headers[k.decode("latin1")] = v.decode("latin1")
+            elif message.get("type") == "http.response.body":
+                body = message.get("body") or b""
+                try:
+                    response_body = json.loads(body.decode("utf-8")) if body else {}
+                except Exception:
+                    response_body = {}
+
+        # If localhost and allow_localhost_unauthenticated, synthesize Authorization header automatically
+        scope = dict(request.scope)
+        try:
+            client_host = request.client.host if request.client else ""
+        except Exception:
+            client_host = ""
+        if settings.http.allow_localhost_unauthenticated and client_host in {"127.0.0.1", "::1", "localhost"}:
+            scope_headers = list(scope.get("headers") or [])
+            has_auth = any(k.lower() == b"authorization" for k, _ in scope_headers)
+            if not has_auth and settings.http.bearer_token:
+                scope_headers.append((b"authorization", f"Bearer {settings.http.bearer_token}".encode("latin1")))
+            scope["headers"] = scope_headers
+        await stateless_app(
+            {**scope, "path": base_with_slash},  # ensure mounted path
+            request.receive,
+            _send,
+        )
+        return JSONResponse(response_body, status_code=status_code, headers=headers)
 
     # ----- Simple SSR Mail UI -----
     def _register_mail_ui() -> None:
@@ -1657,8 +1616,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
                 sibling_map: dict[int, dict[str, Any]] = {}
                 if include_projects:
-                    await app_module.refresh_project_sibling_suggestions()
-                    sibling_map = await app_module.get_project_sibling_data()
+                    await refresh_project_sibling_suggestions()
+                    sibling_map = await get_project_sibling_data()
 
                 async with get_session() as session:
                     # Fetch recent messages with sender/project and computed recipient list
@@ -1808,8 +1767,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         async def mail_projects_list() -> HTMLResponse:
             """Projects list view (moved from /mail)"""
             await ensure_schema()
-            await app_module.refresh_project_sibling_suggestions()
-            sibling_map = await app_module.get_project_sibling_data()
+            await refresh_project_sibling_suggestions()
+            sibling_map = await get_project_sibling_data()
             async with get_session() as session:
                 rows = await session.execute(
                     text("SELECT id, slug, human_key, created_at FROM projects ORDER BY created_at DESC")
@@ -1936,7 +1895,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             }[action]
 
             try:
-                suggestion = await app_module.update_project_sibling_status(project_id, other_id, target_status)
+                suggestion = await update_project_sibling_status(project_id, other_id, target_status)
             except ValueError as exc:
                 return JSONResponse({"error": str(exc)}, status_code=status.HTTP_400_BAD_REQUEST)
             except NoResultFound:
@@ -2204,8 +2163,14 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             if body_html:
                 body_html = _html_cleaner.clean(body_html)
 
-            # Archive commit provenance has been removed.
+            # Get commit SHA for provenance badge
             commit_sha = None
+            try:
+                settings = get_settings()
+                archive = await ensure_archive(settings, prow[1], project_key=prow[2])
+                commit_sha = await get_message_commit_sha(archive, mid)
+            except Exception:
+                pass  # Commit SHA is optional
 
             return await _render(
                 "mail_message.html",
@@ -2293,7 +2258,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     )
                     await session.commit()
 
-                    count = int(getattr(result, "rowcount", 0) or 0)
+                    count = result.rowcount if result.rowcount is not None else 0
 
                     return JSONResponse(
                         {
@@ -2359,7 +2324,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     )
                     await session.commit()
 
-                    count = int(getattr(result, "rowcount", 0) or 0)
+                    count = result.rowcount if result.rowcount is not None else 0
 
                     return JSONResponse(
                         {
@@ -2729,6 +2694,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     # Extract project info consistently
                     project_id = int(prow[0])
                     project_slug = prow[1]
+                    project_human_key = prow[2]
 
                     # Get or create "HumanOverseer" agent (with race condition protection)
                     overseer_name = "HumanOverseer"
@@ -2854,6 +2820,47 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                             detail=f"None of the specified recipients exist in this project. Available agents can be seen at /mail/{project_slug}",
                         )
 
+                    # Write to Git archive BEFORE committing to database (for transaction consistency)
+                    from .storage import ensure_archive, write_message_bundle
+
+                    settings = get_settings()
+                    archive = await ensure_archive(settings, project_slug, project_key=project_human_key)
+
+                    # Build message dict for Git
+                    message_dict = {
+                        "id": message_id,
+                        "thread_id": thread_id,
+                        "project": project_human_key,
+                        "project_slug": project_slug,
+                        "from": overseer_name,
+                        "to": valid_recipients,
+                        "cc": [],
+                        "bcc": [],
+                        "subject": subject,
+                        "importance": "high",
+                        "ack_required": False,
+                        "created": now.isoformat(),
+                        "attachments": [],
+                    }
+
+                    try:
+                        # Write message bundle (canonical + outbox + inboxes) to Git
+                        await write_message_bundle(
+                            archive,
+                            message_dict,
+                            full_body,
+                            overseer_name,
+                            valid_recipients,
+                            extra_paths=None,
+                            commit_text=f"Human Overseer message: {subject}",
+                        )
+                    except Exception as git_error:
+                        # Rollback database transaction if Git write fails
+                        await session.rollback()
+                        raise HTTPException(
+                            status_code=500, detail=f"Failed to write message to Git archive: {git_error!s}"
+                        ) from git_error
+
                     # Update HumanOverseer activity timestamp (after successful Git write, before commit)
                     await session.execute(
                         text("UPDATE agents SET last_active_ts = :ts WHERE id = :id"), {"ts": now, "id": overseer_id}
@@ -2896,46 +2903,259 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             # Should match safe slug pattern
             return bool(re.match(r"^[a-z0-9_-]+$", slug, re.IGNORECASE))
 
-        @fastapi_app.get("/mail/storage-disabled/guide", response_class=HTMLResponse)
+        @fastapi_app.get("/mail/archive/guide", response_class=HTMLResponse)
         async def archive_guide() -> HTMLResponse:
-            """Archive UI has been removed."""
-            return await _render("error.html", message="Archive storage has been removed.")
+            """Display the archive access guide and overview."""
+            settings = get_settings()
+            storage_root = str(Path(settings.storage.root).expanduser().resolve())
 
-        @fastapi_app.get("/mail/storage-disabled/activity", response_class=HTMLResponse)
+            # Get basic stats
+            from pathlib import Path as P
+
+            from git import Repo as GitRepo
+
+            repo_root = P(storage_root)
+            if (repo_root / ".git").exists():
+                try:
+                    repo = GitRepo(str(repo_root))
+                    # Use efficient commit counting with limit to prevent DoS
+                    commit_count = sum(1 for _ in repo.iter_commits(max_count=10000))
+                    total_commits = "10,000+" if commit_count == 10000 else f"{commit_count:,}"
+                    last_commit = next(repo.iter_commits(max_count=1), None)
+                    last_commit_time = last_commit.authored_datetime.strftime("%b %d, %Y") if last_commit else "Never"
+
+                    # Count projects (with limit for performance)
+                    projects_dir = repo_root / "projects"
+                    if projects_dir.exists():
+                        # Use islice to avoid loading all dirs into memory
+                        from itertools import islice
+
+                        project_count = sum(1 for p in islice(projects_dir.iterdir(), 100) if p.is_dir())
+                    else:
+                        project_count = 0
+
+                    # Estimate size with timeout (run blocking 'du' in a worker thread)
+                    import asyncio as _asyncio
+                    import subprocess as _subprocess
+
+                    try:
+
+                        def _run_du():
+                            return _subprocess.run(
+                                ["du", "-sh", str(repo_root)],
+                                capture_output=True,
+                                text=True,
+                                timeout=5.0,
+                            )
+
+                        result = await _asyncio.to_thread(_run_du)
+                        repo_size = result.stdout.split()[0] if getattr(result, "returncode", 1) == 0 else "Unknown"
+                    except (_subprocess.TimeoutExpired, FileNotFoundError, PermissionError, OSError):
+                        # du not available, took too long, or other OS error
+                        repo_size = "Unknown"
+                    except Exception:
+                        # Catch-all for unexpected errors
+                        repo_size = "Unknown"
+                except Exception:
+                    total_commits = "0"
+                    project_count = 0
+                    repo_size = "Unknown"
+                    last_commit_time = "Unknown"
+            else:
+                total_commits = "0"
+                project_count = 0
+                repo_size = "0 MB"
+                last_commit_time = "Never"
+
+            # Get list of projects for picker
+            async with get_session() as session:
+                rows = await session.execute(text("SELECT slug, human_key FROM projects ORDER BY human_key"))
+                projects = [{"slug": r[0], "human_key": r[1]} for r in rows.fetchall()]
+
+            return await _render(
+                "archive_guide.html",
+                storage_root=storage_root,
+                total_commits=total_commits,
+                project_count=project_count,
+                repo_size=repo_size,
+                last_commit_time=last_commit_time,
+                projects=projects,
+            )
+
+        @fastapi_app.get("/mail/archive/activity", response_class=HTMLResponse)
         async def archive_activity(limit: int = 50) -> HTMLResponse:
-            """Archive UI has been removed."""
-            _ = limit
-            return await _render("error.html", message="Archive storage has been removed.")
+            """Display recent commits across all projects."""
+            # Validate and cap limit to prevent DoS
+            limit = max(1, min(limit, 500))  # Between 1 and 500
 
-        @fastapi_app.get("/mail/storage-disabled/commit/{sha}", response_class=HTMLResponse)
+            settings = get_settings()
+            repo_root = Path(settings.storage.root).expanduser().resolve()
+
+            from git import Repo as GitRepo
+
+            if not (repo_root / ".git").exists():
+                return await _render("archive_activity.html", commits=[])
+
+            repo = GitRepo(str(repo_root))
+            commits = await get_recent_commits(repo, limit=limit)
+
+            return await _render("archive_activity.html", commits=commits)
+
+        @fastapi_app.get("/mail/archive/commit/{sha}", response_class=HTMLResponse)
         async def archive_commit(sha: str) -> HTMLResponse:
-            """Archive UI has been removed."""
-            _ = sha
-            return await _render("error.html", message="Archive storage has been removed.")
+            """Display detailed commit information with diffs."""
+            settings = get_settings()
+            repo_root = Path(settings.storage.root).expanduser().resolve()
 
-        @fastapi_app.get("/mail/storage-disabled/timeline", response_class=HTMLResponse)
+            from git import Repo as GitRepo
+
+            if not (repo_root / ".git").exists():
+                return await _render("error.html", message="Archive repository not found")
+
+            try:
+                repo = GitRepo(str(repo_root))
+                commit = await get_commit_detail(repo, sha)
+                return await _render("archive_commit.html", commit=commit)
+            except ValueError:
+                # Validation errors (bad SHA, etc.)
+                return await _render("error.html", message="Invalid commit identifier")
+            except Exception:
+                # Don't leak error details
+                return await _render("error.html", message="Commit not found")
+
+        @fastapi_app.get("/mail/archive/timeline", response_class=HTMLResponse)
         async def archive_timeline(project: str | None = None) -> HTMLResponse:
-            """Archive UI has been removed."""
-            _ = project
-            return await _render("error.html", message="Archive storage has been removed.")
+            """Display communication timeline with Mermaid.js visualization."""
+            # Validate project slug if provided
+            if project and not _validate_project_slug(project):
+                return await _render("error.html", message="Invalid project identifier")
 
-        @fastapi_app.get("/mail/storage-disabled/browser", response_class=HTMLResponse)
+            settings = get_settings()
+            repo_root = Path(settings.storage.root).expanduser().resolve()
+
+            from git import Repo as GitRepo
+
+            if not (repo_root / ".git").exists():
+                return await _render("error.html", message="Archive repository not found")
+
+            # Default to first project if not specified
+            if not project:
+                async with get_session() as session:
+                    row = (
+                        await session.execute(text("SELECT slug, human_key FROM projects ORDER BY id LIMIT 1"))
+                    ).fetchone()
+                    if row:
+                        project = row[0]
+                    else:
+                        return await _render("error.html", message="No projects found")
+
+            # Get project name
+            project_name = project
+            async with get_session() as session:
+                row = (
+                    await session.execute(text("SELECT human_key FROM projects WHERE slug = :s"), {"s": project})
+                ).fetchone()
+                if row:
+                    project_name = row[0]
+
+            repo = GitRepo(str(repo_root))
+            commits = await get_timeline_commits(repo, project, limit=100)
+
+            return await _render("archive_timeline.html", commits=commits, project=project, project_name=project_name)
+
+        @fastapi_app.get("/mail/archive/browser", response_class=HTMLResponse)
         async def archive_browser(project: str | None = None, path: str = "") -> HTMLResponse:
-            """Archive UI has been removed."""
-            _ = (project, path)
-            return await _render("error.html", message="Archive storage has been removed.")
+            """Browse archive files and directories."""
+            if not project:
+                # Show project selector - requires project parameter
+                return await _render("error.html", message="Please select a project to browse")
 
-        @fastapi_app.get("/mail/storage-disabled/browser/{project}/file")
+            # Validate project slug
+            if not _validate_project_slug(project):
+                return await _render("error.html", message="Invalid project identifier")
+
+            async with get_session() as session:
+                human_row = (
+                    await session.execute(
+                        text("SELECT human_key FROM projects WHERE slug = :s OR human_key = :s"), {"s": project}
+                    )
+                ).fetchone()
+                project_human_key = human_row[0] if human_row else None
+
+            settings = get_settings()
+            archive = await ensure_archive(settings, project, project_key=project_human_key)
+            tree = await get_archive_tree(archive, path)
+
+            return await _render("archive_browser.html", tree=tree, project=project, path=path)
+
+        @fastapi_app.get("/mail/archive/browser/{project}/file")
         async def archive_browser_file(project: str, path: str) -> JSONResponse:
-            """Archive UI has been removed."""
-            _ = (project, path)
-            raise HTTPException(status_code=404, detail="Archive storage has been removed")
+            """Get file content from archive."""
+            # Validate project slug
+            if not _validate_project_slug(project):
+                raise HTTPException(status_code=400, detail="Invalid project identifier")
 
-        @fastapi_app.get("/mail/storage-disabled/network", response_class=HTMLResponse)
+            try:
+                async with get_session() as session:
+                    human_row = (
+                        await session.execute(
+                            text("SELECT human_key FROM projects WHERE slug = :s OR human_key = :s"), {"s": project}
+                        )
+                    ).fetchone()
+                    project_human_key = human_row[0] if human_row else None
+                settings = get_settings()
+                archive = await ensure_archive(settings, project, project_key=project_human_key)
+                content = await get_file_content(archive, path)
+
+                if content is None:
+                    raise HTTPException(status_code=404, detail="File not found")
+
+                return JSONResponse(content=content)
+            except ValueError as err:
+                # Path validation errors
+                raise HTTPException(status_code=400, detail="Invalid file path") from err
+            except Exception as err:
+                raise HTTPException(status_code=404, detail="File not found") from err
+
+        @fastapi_app.get("/mail/archive/network", response_class=HTMLResponse)
         async def archive_network(project: str | None = None) -> HTMLResponse:
-            """Archive UI has been removed."""
-            _ = project
-            return await _render("error.html", message="Archive storage has been removed.")
+            """Display agent communication network graph."""
+            # Validate project slug if provided
+            if project and not _validate_project_slug(project):
+                return await _render("error.html", message="Invalid project identifier")
+
+            settings = get_settings()
+            repo_root = Path(settings.storage.root).expanduser().resolve()
+
+            from git import Repo as GitRepo
+
+            if not (repo_root / ".git").exists():
+                return await _render("error.html", message="Archive repository not found")
+
+            # Default to first project
+            if not project:
+                async with get_session() as session:
+                    row = (
+                        await session.execute(text("SELECT slug, human_key FROM projects ORDER BY id LIMIT 1"))
+                    ).fetchone()
+                    if row:
+                        project = row[0]
+                    else:
+                        return await _render("error.html", message="No projects found")
+
+            # Get project name
+            project_name = project
+            async with get_session() as session:
+                row = (
+                    await session.execute(text("SELECT human_key FROM projects WHERE slug = :s"), {"s": project})
+                ).fetchone()
+                if row:
+                    project_name = row[0]
+
+            repo = GitRepo(str(repo_root))
+            graph = await get_agent_communication_graph(repo, project, limit=200)
+
+            return await _render("archive_network.html", graph=graph, project=project, project_name=project_name)
 
         @fastapi_app.get("/api/projects/{project}/agents")
         async def api_project_agents(project: str) -> JSONResponse:
@@ -2961,16 +3181,64 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
             return JSONResponse({"agents": agents})
 
-        @fastapi_app.get("/mail/storage-disabled/time-travel", response_class=HTMLResponse)
+        @fastapi_app.get("/mail/archive/time-travel", response_class=HTMLResponse)
         async def archive_time_travel() -> HTMLResponse:
-            """Archive UI has been removed."""
-            return await _render("error.html", message="Archive storage has been removed.")
+            """Display time-travel interface."""
+            # Get all projects
+            async with get_session() as session:
+                rows = await session.execute(text("SELECT slug FROM projects ORDER BY human_key"))
+                projects = [r[0] for r in rows.fetchall()]
 
-        @fastapi_app.get("/mail/storage-disabled/time-travel/snapshot")
+            return await _render("archive_time_travel.html", projects=projects)
+
+        @fastapi_app.get("/mail/archive/time-travel/snapshot")
         async def archive_time_travel_snapshot(project: str, agent: str, timestamp: str) -> JSONResponse:
-            """Archive UI has been removed."""
-            _ = (project, agent, timestamp)
-            raise HTTPException(status_code=404, detail="Archive storage has been removed")
+            """Get historical inbox snapshot."""
+            # Validate project slug
+            if not _validate_project_slug(project):
+                raise HTTPException(status_code=400, detail="Invalid project identifier")
+
+            # Validate agent name (alphanumeric only)
+            if not agent or not re.match(r"^[A-Za-z0-9]+$", agent):
+                raise HTTPException(status_code=400, detail="Invalid agent name format")
+
+            # Validate timestamp format (basic ISO 8601 check)
+            if not timestamp or not re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}", timestamp):
+                raise HTTPException(
+                    status_code=400, detail="Invalid timestamp format. Use ISO 8601 format (YYYY-MM-DDTHH:MM)"
+                )
+
+            try:
+                # Get project archive
+                settings = get_settings()
+                async with get_session() as session:
+                    human_row = (
+                        await session.execute(
+                            text("SELECT human_key FROM projects WHERE slug = :s OR human_key = :s"), {"s": project}
+                        )
+                    ).fetchone()
+                    project_human_key = human_row[0] if human_row else None
+                repo = await ensure_archive(settings, project, project_key=project_human_key)
+
+                # Get historical snapshot
+                snapshot = await get_historical_inbox_snapshot(repo, agent, timestamp, limit=200)
+
+                return JSONResponse(snapshot)
+
+            except Exception as e:
+                # Log error but return empty result rather than failing
+                structlog.get_logger("archive").warning(
+                    "time_travel_failed", project=project, agent=agent, timestamp=timestamp, error=str(e)
+                )
+                return JSONResponse(
+                    {
+                        "messages": [],
+                        "snapshot_time": None,
+                        "commit_sha": None,
+                        "requested_time": timestamp,
+                        "error": f"Unable to retrieve historical snapshot: {e!s}",
+                    }
+                )
 
     try:
         _register_mail_ui()
@@ -2985,7 +3253,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
 def main() -> None:
     """Run the HTTP transport using settings-specified host/port."""
-    _ensure_supported_python_version()
 
     parser = argparse.ArgumentParser(description="Run the MCP Agent Mail HTTP transport")
     parser.add_argument("--host", help="Override HTTP host", default=None)

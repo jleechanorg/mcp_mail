@@ -1,6 +1,6 @@
 import httpx
 import pytest
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, select
 
 from mcp_agent_mail.config import get_settings
 from mcp_agent_mail.db import ensure_schema, get_session
@@ -21,18 +21,17 @@ async def test_slackbox_incoming_creates_message(monkeypatch):
     app = build_http_app(settings)
     await ensure_schema()
 
-    async with app.router.lifespan_context(app):
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.post(
-                "/slackbox/incoming",
-                data={
-                    "token": "slackbox-token",
-                    "channel_id": "CCHAN123",
-                    "text": "Slackbox hello world",
-                    "timestamp": "1111.2222",
-                },
-            )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/slackbox/incoming",
+            data={
+                "token": "slackbox-token",
+                "channel_id": "CCHAN123",
+                "text": "Slackbox hello world",
+                "timestamp": "1111.2222",
+            },
+        )
 
     assert resp.status_code == 200
 
@@ -56,48 +55,45 @@ async def test_slackbox_rejects_invalid_token(monkeypatch):
     app = build_http_app(settings)
     await ensure_schema()
 
-    async with app.router.lifespan_context(app):
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.post(
-                "/slackbox/incoming",
-                data={"token": "wrong", "text": "hi"},
-            )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/slackbox/incoming",
+            data={"token": "wrong", "text": "hi"},
+        )
 
     assert resp.status_code == 401
 
 
 @pytest.mark.asyncio
-async def test_slackbox_rejects_disallowed_channel(monkeypatch):
+async def test_slackbox_requires_configured_token(monkeypatch):
     monkeypatch.setenv("SLACK_ENABLED", "1")
     monkeypatch.setenv("SLACKBOX_ENABLED", "1")
-    monkeypatch.setenv("SLACKBOX_TOKEN", "slackbox-token")
-    monkeypatch.setenv("SLACKBOX_CHANNELS", "CCHAN_ALLOWED")
+    monkeypatch.delenv("SLACKBOX_TOKEN", raising=False)
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
     settings = get_settings()
     app = build_http_app(settings)
     await ensure_schema()
 
-    async with get_session() as session:
-        before_count = (await session.execute(select(func.count(Message.id)))).scalar_one()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/slackbox/incoming",
+            data={"text": "hi"},
+        )
 
-    async with app.router.lifespan_context(app):
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.post(
-                "/slackbox/incoming",
-                data={
-                    "token": "slackbox-token",
-                    "channel_id": "COTHER",
-                    "text": "Slackbox disallowed channel",
-                    "timestamp": "2222.3333",
-                },
-            )
+    assert resp.status_code == 503
 
-    assert resp.status_code == 200
 
-    async with get_session() as session:
-        after_count = (await session.execute(select(func.count(Message.id)))).scalar_one()
+def test_slackbox_thread_pattern_allows_underscore_channel_names():
+    from mcp_agent_mail.slack_integration import _SLACK_THREAD_ID_PATTERN
 
-    assert after_count == before_count
+    thread_id = "slackbox_my_channel_1111.2222"
+    match = _SLACK_THREAD_ID_PATTERN.match(thread_id)
+
+    assert match is not None
+    channel, ts = match.groups()
+
+    assert channel == "my_channel"
+    assert ts == "1111.2222"

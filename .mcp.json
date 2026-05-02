@@ -5,7 +5,7 @@
       "type": "http",
       "url": "http://127.0.0.1:8765/mcp/",
       "headers": {
-        "Authorization": "Bearer mcp-agent-mail-default-token"
+        "Authorization": "Bearer ${MCP_AGENT_MAIL_TOKEN}"
       },
       "options": {
         "timeoutSeconds": 180,
