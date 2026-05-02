@@ -144,13 +144,16 @@ def _build_engine(settings: DatabaseSettings) -> AsyncEngine:
             "check_same_thread": False,  # Required for async SQLite
         }
 
+    is_sqlite = settings.url.startswith("sqlite")
+    pool_kwargs: dict[str, int] = (
+        {"pool_size": 5, "max_overflow": 0} if is_sqlite else {"pool_size": 10, "max_overflow": 10}
+    )
     engine = create_async_engine(
         settings.url,
         echo=settings.echo,
         future=True,
         pool_pre_ping=True,
-        pool_size=10,
-        max_overflow=10,
+        **pool_kwargs,
         connect_args=connect_args,
     )
 

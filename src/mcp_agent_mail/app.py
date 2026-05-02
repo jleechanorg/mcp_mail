@@ -910,8 +910,15 @@ async def _ensure_project(human_key: str) -> Project:
             return project
         project = Project(slug=slug, human_key=human_key)
         session.add(project)
-        await session.commit()
-        await session.refresh(project)
+        try:
+            await session.commit()
+            await session.refresh(project)
+        except IntegrityError:
+            await session.rollback()
+            result = await session.execute(select(Project).where(Project.slug == slug))
+            project = result.scalars().first()
+            if project is None:
+                raise
         # Create global inbox agent for new project
         await _ensure_global_inbox_agent(project, session)
         return project
@@ -992,9 +999,22 @@ async def _ensure_global_inbox_agent(project: Project, session: AsyncSession | N
         task_description=f"Global inbox for project '{project.slug}'.",
     )
     session.add(agent)
-    await session.commit()
-    await session.refresh(agent)
-    return agent
+    try:
+        await session.commit()
+        await session.refresh(agent)
+        return agent
+    except IntegrityError:
+        await session.rollback()
+        result = await session.execute(
+            select(Agent).where(
+                Agent.project_id == project.id,
+                Agent.name == global_inbox_name,
+            )
+        )
+        existing = result.scalars().first()
+        if existing is None:
+            raise
+        return existing
 
 
 async def _get_project_by_identifier(identifier: str) -> Project:
@@ -3065,8 +3085,9 @@ def build_mcp_server() -> FastMCP:
             seen: set[str] = set()
             ordered: list[str] = []
             for item in items:
-                if item not in seen:
-                    seen.add(item)
+                normalized = item.strip().lower()
+                if normalized not in seen:
+                    seen.add(normalized)
                     ordered.append(item)
             return ordered
 
@@ -3080,7 +3101,9 @@ def build_mcp_server() -> FastMCP:
         global_inbox_agent = await _get_agent_by_name_optional(global_inbox_name)
         # Only add to cc if sender is not the global inbox itself
         should_cc_global_inbox = (
-            global_inbox_agent is not None and sender.name != global_inbox_name and global_inbox_name not in cc_names
+            global_inbox_agent is not None
+            and sender.name != global_inbox_name
+            and global_inbox_name.lower() not in {n.lower() for n in cc_names}
         )
 
         if to_names or cc_names or bcc_names:

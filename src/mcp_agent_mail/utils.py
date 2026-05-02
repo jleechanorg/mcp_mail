@@ -5,31 +5,31 @@ import re
 from typing import Iterable, Optional
 
 ADJECTIVES: Iterable[str] = (
-    "Red",
-    "Orange",
-    "Pink",
-    "Black",
-    "Purple",
-    "Blue",
-    "Brown",
-    "White",
-    "Green",
-    "Chartreuse",
-    "Lilac",
-    "Fuchsia",
+    "red",
+    "orange",
+    "pink",
+    "black",
+    "purple",
+    "blue",
+    "brown",
+    "white",
+    "green",
+    "chartreuse",
+    "lilac",
+    "fuchsia",
 )
 NOUNS: Iterable[str] = (
-    "Stone",
-    "Lake",
-    "Dog",
-    "Creek",
-    "Pond",
-    "Cat",
-    "Bear",
-    "Mountain",
-    "Hill",
-    "Snow",
-    "Castle",
+    "stone",
+    "lake",
+    "dog",
+    "creek",
+    "pond",
+    "cat",
+    "bear",
+    "mountain",
+    "hill",
+    "snow",
+    "castle",
 )
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -46,7 +46,7 @@ def slugify(value: str) -> str:
 
 def generate_agent_name() -> str:
     """Return a random codename composed from the adjective/noun pools."""
-    adjective = random.choice(tuple(ADJECTIVES))
+    adjective = random.choice(tuple(ADJECTIVES)).capitalize()
     noun = random.choice(tuple(NOUNS))
     suffix = random.randint(100, 9999)
     return f"{adjective}{noun}{suffix}"
