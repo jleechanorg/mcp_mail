@@ -1224,44 +1224,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         source="slack_events",
                     )
 
-                        # Capture thread mapping so outbound replies stay in the same Slack thread
-                        slack_client_ref = app_module._slack_client
-
-                        if (
-                            slack_client_ref
-                            and message_info.get("thread_id")
-                            and message_info.get("slack_thread_ts")
-                            and message_info.get("slack_channel")
-                        ):
-                            try:
-                                await slack_client_ref.map_thread(
-                                    mcp_thread_id=message_info["thread_id"],
-                                    slack_channel_id=message_info["slack_channel"],
-                                    slack_thread_ts=message_info["slack_thread_ts"],
-                                )
-                            except Exception as exc:  # best-effort; do not block ingestion
-                                logger.warning("slack_thread_map_failed", error=str(exc))
-
-                        logger.info(
-                            "slack_message_created",
-                            message_id=message.id,
-                            subject=message.subject[:50],
-                            recipients=len(recipient_agents),
-                        )
-
-                        return JSONResponse({"ok": True, "message_id": str(message.id)})
-
-                    except Exception as e:
-                        # Clean up cache on failure to allow Slack retries
-                        if cache_key and cache_key_added:
-                            async with _slack_event_cache_lock:
-                                _slack_event_cache.discard(cache_key)
-                                with contextlib.suppress(ValueError):
-                                    _slack_event_cache_order.remove(cache_key)
-                        logger.error("slack_message_creation_failed", error=str(e))
-                        raise HTTPException(
-                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to create message: {e}"
-                        ) from e
                 else:
                     # Message was filtered/ignored (e.g., bot message, wrong channel)
                     return JSONResponse({"ok": True, "message": "Event ignored"})
