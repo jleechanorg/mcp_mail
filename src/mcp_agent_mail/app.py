@@ -713,6 +713,11 @@ def _project_workspace_path(project: Project) -> Optional[Path]:
     return None
 
 
+def _clamp_limit(limit: int, max_val: int = 1000) -> int:
+    """Clamp a user-supplied limit to [1, max_val]."""
+    return min(max(limit, 1), max_val)
+
+
 def _parse_json_safely(text: str) -> dict[str, Any] | None:
     """Best-effort JSON extraction supporting code fences and stray text.
 
@@ -895,6 +900,11 @@ async def _ensure_project(human_key: str) -> Project:
         result = await session.execute(select(Project).where(Project.slug == slug))
         project = result.scalars().first()
         if project:
+            # Update human_key if it has changed (supports config updates)
+            if project.human_key != human_key:
+                project.human_key = human_key
+                await session.commit()
+                await session.refresh(project)
             # Ensure global inbox agent exists for existing project
             await _ensure_global_inbox_agent(project, session)
             return project
@@ -4693,7 +4703,7 @@ def build_mcp_server() -> FastMCP:
                 Panel = _rp.Panel
                 Console().print(
                     Panel.fit(
-                        f"project={project_key}\nagent={agent_name}\nlimit={limit}\nurgent_only={urgent_only}",
+                        f"project={project_key}\nagent={agent_name}\nlimit={_clamp_limit(limit)}\nurgent_only={urgent_only}",
                         title="tool: fetch_inbox",
                         border_style="green",
                     )
@@ -4707,7 +4717,7 @@ def build_mcp_server() -> FastMCP:
             # Get project from agent's association (no fallback to avoid reading wrong inbox)
             project = await _require_project_for_agent(agent, "fetch inbox")
 
-            items = await _list_inbox(project, agent, limit, urgent_only, include_bodies, since_ts)
+            items = await _list_inbox(project, agent, _clamp_limit(limit), urgent_only, include_bodies, since_ts)
             await ctx.info(f"Fetched {len(items)} messages for '{agent.name}'. urgent_only={urgent_only}")
             return items
         except Exception as exc:
@@ -5054,7 +5064,8 @@ def build_mcp_server() -> FastMCP:
                     LIMIT :limit
                 """)
 
-                fts_limit = limit * 2 if agent_filter else limit
+                clamped_limit = _clamp_limit(limit)
+                fts_limit = clamped_limit * 2 if agent_filter else clamped_limit
                 try:
                     fts_result = await session.execute(
                         fts_stmt,
@@ -6625,11 +6636,15 @@ def build_mcp_server() -> FastMCP:
 
     # --- Product Bus (Phase 2): ensure/link/search/resources ---------------------------------
 
-    async def _get_product_by_key(session, key: str) -> Optional[Product]:
-        # Key may match product_uid or name (case-sensitive by default)
+    async def _get_product_by_key(session, key: str) -> tuple[Optional[Product], Optional[str]]:
+        """Find product by product_uid or name. Returns (product, matched_by)."""
         stmt = select(Product).where((Product.product_uid == key) | (Product.name == key))
         res = await session.execute(stmt)
-        return res.scalars().first()
+        prod = res.scalars().first()
+        if prod is None:
+            return None, None
+        matched_by = "product_uid" if prod.product_uid == key else "name"
+        return prod, matched_by
 
     @mcp.tool(name="ensure_product")
     @_instrument_tool("ensure_product", cluster=CLUSTER_PRODUCT, capabilities={"product"})
@@ -6649,24 +6664,42 @@ def build_mcp_server() -> FastMCP:
         if not key_raw:
             raise ToolExecutionError("INVALID_ARGUMENT", "Provide product_key or name.")
         async with get_session() as session:
-            prod = await _get_product_by_key(session, key_raw)
-            if prod is None:
-                # Create with strict uid pattern; otherwise generate uid and normalize name
-                import re as _re
-                import uuid as _uuid
+            normalized_key = " ".join(key_raw.split())[:128] or key_raw
+            prod, matched_by = await _get_product_by_key(session, normalized_key)
+            if prod is not None:
+                # Update name if provided and different (supports config updates)
+                # Only update if found by product_uid (not by name) to preserve idempotency
+                if name is not None and matched_by == "product_uid":
+                    normalized_name = " ".join(name.split())[:128]
+                    if not normalized_name:
+                        raise ToolExecutionError("INVALID_ARGUMENT", "Product name cannot be empty.")
+                    if prod.name != normalized_name:
+                        prod.name = normalized_name
+                        await session.commit()
+                        await session.refresh(prod)
+                return {
+                    "id": prod.id,
+                    "product_uid": prod.product_uid,
+                    "name": prod.name,
+                    "created_at": _iso(prod.created_at),
+                }
+            # Create with strict uid pattern; otherwise generate uid and normalize name
+            import re as _re
+            import uuid as _uuid
 
-                uid_pattern = _re.compile(r"^[A-Fa-f0-9]{8,64}$")
-                if product_key and uid_pattern.fullmatch(product_key.strip()):
-                    uid = product_key.strip().lower()
-                else:
-                    uid = _uuid.uuid4().hex[:20]
-                display_name = (name or key_raw).strip()
-                # Collapse internal whitespace and cap length
-                display_name = " ".join(display_name.split())[:255] or uid
-                prod = Product(product_uid=uid, name=display_name)
-                session.add(prod)
-                await session.commit()
-                await session.refresh(prod)
+            uid_pattern = _re.compile(r"^[A-Fa-f0-9]{8,64}$")
+            if product_key and uid_pattern.fullmatch(product_key.strip()):
+                uid = product_key.strip().lower()
+            else:
+                uid = _uuid.uuid4().hex[:20]
+            raw_display_name = name if name is not None else key_raw
+            display_name = raw_display_name.strip()
+            # Collapse internal whitespace and cap length
+            display_name = " ".join(display_name.split())[:128] or uid
+            prod = Product(product_uid=uid, name=display_name)
+            session.add(prod)
+            await session.commit()
+            await session.refresh(prod)
         return {"id": prod.id, "product_uid": prod.product_uid, "name": prod.name, "created_at": _iso(prod.created_at)}
 
     @mcp.tool(name="products_link")
@@ -6681,7 +6714,7 @@ def build_mcp_server() -> FastMCP:
         """
         await ensure_schema()
         async with get_session() as session:
-            prod = await _get_product_by_key(session, product_key.strip())
+            prod, _ = await _get_product_by_key(session, product_key.strip())
             if prod is None:
                 raise ToolExecutionError("NOT_FOUND", f"Product '{product_key}' not found.", recoverable=True)
             # Resolve project
@@ -6741,7 +6774,7 @@ def build_mcp_server() -> FastMCP:
         async def _load() -> dict[str, Any]:
             await ensure_schema()
             async with get_session() as session:
-                prod = await _get_product_by_key(session, key.strip())
+                prod, _ = await _get_product_by_key(session, key.strip())
                 if prod is None:
                     raise ToolExecutionError("NOT_FOUND", f"Product '{key}' not found.", recoverable=True)
                 proj_rows = await session.execute(
@@ -6777,7 +6810,7 @@ def build_mcp_server() -> FastMCP:
         """
         await ensure_schema()
         async with get_session() as session:
-            prod = await _get_product_by_key(session, product_key.strip())
+            prod, _ = await _get_product_by_key(session, product_key.strip())
             if prod is None:
                 raise ToolExecutionError("NOT_FOUND", f"Product '{product_key}' not found.", recoverable=True)
             proj_ids_rows = await session.execute(
@@ -6840,7 +6873,7 @@ def build_mcp_server() -> FastMCP:
         await ensure_schema()
         # Collect linked projects
         async with get_session() as session:
-            prod = await _get_product_by_key(session, product_key.strip())
+            prod, _ = await _get_product_by_key(session, product_key.strip())
             if prod is None:
                 raise ToolExecutionError("NOT_FOUND", f"Product '{product_key}' not found.", recoverable=True)
             proj_rows = await session.execute(
@@ -6894,7 +6927,7 @@ def build_mcp_server() -> FastMCP:
             criteria.append(Message.id == seed_id)
 
         async with get_session() as session:
-            prod = await _get_product_by_key(session, product_key.strip())
+            prod, _ = await _get_product_by_key(session, product_key.strip())
             if prod is None:
                 raise ToolExecutionError("NOT_FOUND", f"Product '{product_key}' not found.", recoverable=True)
             proj_ids_rows = await session.execute(
