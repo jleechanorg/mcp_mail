@@ -826,7 +826,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         for task in tasks:
             task.cancel()
         for task in tasks:
-            with contextlib.suppress(Exception):
+            # Suppress both Exception (pre-3.11 CancelledError) and BaseException CancelledError (3.11+)
+            with contextlib.suppress(Exception, asyncio.CancelledError):
                 await task
 
     from contextlib import asynccontextmanager
