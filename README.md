@@ -115,7 +115,7 @@ This fork extends the original MCP Agent Mail with **11 core enhancements** focu
 
 ### 🌐 Global Architecture (No Boundaries)
 
-> **Projects are informational labels** (e.g., repo paths, team names). They do **NOT** isolate agents — any agent can message any other agent regardless of project. The `project_key` parameter on every tool is metadata only.
+> **Projects are informational labels** (e.g., repo paths, team names). They do **NOT** isolate agents — any agent can message any other agent regardless of project. `project_key` is retained for compatibility and labeling, but agent lookup and backend message queries do **not** use it to restrict reachability.
 
 - **🌍 Projects as Informational Metadata** - Projects don't create barriers:
   - Projects are **metadata only** (badges, tags, context) - NOT organizational boundaries
@@ -123,6 +123,7 @@ This fork extends the original MCP Agent Mail with **11 core enhancements** focu
   - Backend queries ignore project filters (messages fetched by agent, not project)
   - Agent lookup is **global by name**; `project_key` is never used to restrict which agents are reachable
   - Consistent treatment across all layers (UI, database, tools)
+  - Note: `project_key` is still used for labeling and compatibility (e.g., where artifacts are written, how projects are labeled in logs/UI)
   - **Why**: Agents work seamlessly across multiple repos/projects
   - **Implementation**: `src/mcp_agent_mail/app.py` (`_get_agent`, `_get_message_by_id_global`)
 
@@ -146,9 +147,9 @@ await client.call_tool("send_message", {
     "body_md": "Hi from frontend!",
 })
 
-# Bob fetches inbox and sees the message — no cross-project barrier
+# Bob fetches inbox and sees the message — even with a different project_key
 inbox = await client.call_tool("fetch_inbox", {
-    "project_key": "repo-backend", "agent_name": "Bob"
+    "project_key": "repo-frontend", "agent_name": "Bob"
 })
 ```
 
@@ -318,7 +319,7 @@ When an agent sends a message via `send_message`, here's what happens:
 
 > **Important: DATABASE_URL must point to the same database for all agents.**
 > The default is an absolute path under your home directory:
-> `DATABASE_URL=sqlite+aiosqlite:///{home}/.mcp_agent_mail_git_mailbox_repo/storage.sqlite3`
+> `DATABASE_URL=sqlite+aiosqlite:///$HOME/.mcp_agent_mail_git_mailbox_repo/storage.sqlite3`
 > If you override it with a **relative** SQLite URL and run the server from different directories (e.g., multiple workspace tabs), each will create its own separate database and agents cannot see each other's messages.
 > For multi-workspace or Conductor setups, set an **absolute path**:
 > ```bash
@@ -2074,7 +2075,7 @@ result = await client.call_tool("list_extended_tools", {})
 | `OTEL_SERVICE_NAME` | `mcp-agent-mail` | Service name for telemetry |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` |  | OTLP exporter endpoint URL |
 | `APP_ENVIRONMENT` | `development` | Environment name (development/production) |
-| `DATABASE_URL` | `sqlite+aiosqlite:///{home}/.mcp_agent_mail_git_mailbox_repo/storage.sqlite3` | SQLAlchemy async database URL |
+| `DATABASE_URL` | `sqlite+aiosqlite:///$HOME/.mcp_agent_mail_git_mailbox_repo/storage.sqlite3` | SQLAlchemy async database URL |
 | `DATABASE_ECHO` | `false` | Echo SQL statements for debugging |
 | `GIT_AUTHOR_NAME` | `mcp-agent` | Git commit author name |
 | `GIT_AUTHOR_EMAIL` | `mcp-agent@example.com` | Git commit author email |
