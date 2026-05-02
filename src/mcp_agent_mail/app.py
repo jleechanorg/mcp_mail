@@ -1054,28 +1054,20 @@ async def _get_active_project_agents(
     Limits to max_recipients + 1 to detect overflow.
     Returns (agents, is_truncated) where agents has at most max_recipients items.
     """
-    limit = max_recipients + 1
+    stmt = (
+        select(Agent)
+        .where(Agent.project_id == project_id)
+        .where(cast(Any, Agent.is_active).is_(True))
+        .where(cast(Any, Agent.is_placeholder).is_(False))
+        .order_by(func.lower(Agent.name))
+        .limit(max_recipients + 1)
+    )
     if session is None:
         async with get_session() as new_session:
-            result = await new_session.execute(
-                select(Agent)
-                .where(Agent.project_id == project_id)
-                .where(cast(Any, Agent.is_active).is_(True))
-                .where(cast(Any, Agent.is_placeholder).is_(False))
-                .order_by(func.lower(Agent.name))
-                .limit(limit)
-            )
-            rows = list(result.scalars().all())
+            result = await new_session.execute(stmt)
     else:
-        result = await session.execute(
-            select(Agent)
-            .where(Agent.project_id == project_id)
-            .where(cast(Any, Agent.is_active).is_(True))
-            .where(cast(Any, Agent.is_placeholder).is_(False))
-            .order_by(func.lower(Agent.name))
-            .limit(limit)
-        )
-        rows = list(result.scalars().all())
+        result = await session.execute(stmt)
+    rows = list(result.scalars().all())
     is_truncated = len(rows) > max_recipients
     return rows[:max_recipients], is_truncated
 
