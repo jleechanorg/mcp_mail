@@ -61,6 +61,7 @@ from .storage import (
 # Slack webhook dedupe cache (in-memory best-effort)
 _slack_event_cache: set[tuple[str, str]] = set()
 _slack_event_cache_order: deque[tuple[str, str]] = deque(maxlen=5000)
+_slack_event_cache_lock = asyncio.Lock()
 
 
 async def _project_slug_from_id(pid: int | None) -> str | None:
@@ -964,14 +965,22 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         slack_channel = message_info.get("slack_channel")
         cache_key = dedupe_key or ((slack_channel, slack_ts) if slack_ts and slack_channel else None)
 
-        if cache_key and cache_key in _slack_event_cache:
-            logger.info(
-                "slack_message_duplicate_skipped",
-                slack_ts=slack_ts,
-                channel=slack_channel,
-                source=source,
-            )
-            return JSONResponse({"ok": True, "message": "Duplicate Slack event skipped"})
+        if cache_key:
+            async with _slack_event_cache_lock:
+                if cache_key in _slack_event_cache:
+                    logger.info(
+                        "slack_message_duplicate_skipped",
+                        slack_ts=slack_ts,
+                        channel=slack_channel,
+                        source=source,
+                    )
+                    return JSONResponse({"ok": True, "message": "Duplicate Slack event skipped"})
+                # Pre-evict if deque is at capacity so set and deque stay in sync
+                if len(_slack_event_cache_order) >= _slack_event_cache_order.maxlen:
+                    old = _slack_event_cache_order.popleft()
+                    _slack_event_cache.discard(old)
+                _slack_event_cache.add(cache_key)
+                _slack_event_cache_order.append(cache_key)
 
         project = await _ensure_project(settings.slack.sync_project_name)
 
@@ -1062,14 +1071,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
         _archive_task = asyncio.create_task(_persist_archive())
         _ = _archive_task
-
-        if cache_key:
-            # Evict oldest entry if deque is at capacity so set and deque stay in sync
-            if len(_slack_event_cache_order) >= _slack_event_cache_order.maxlen:
-                old = _slack_event_cache_order.popleft()
-                _slack_event_cache.discard(old)
-            _slack_event_cache.add(cache_key)
-            _slack_event_cache_order.append(cache_key)
 
         slack_client_ref = None
         try:

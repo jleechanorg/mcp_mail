@@ -626,6 +626,11 @@ async def handle_slack_message_event(
     message_ts = event.get("ts")
     thread_ts = event.get("thread_ts")  # If reply in thread
 
+    # Guard against None channel_id which would produce malformed thread IDs
+    if not channel_id:
+        logger.debug("No channel_id in Slack event, skipping")
+        return None
+
     # Check if this channel is configured for sync
     if not settings.slack.sync_enabled:
         logger.debug("Slack sync is disabled")
