@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-from mcp_agent_mail.utils import (
-    generate_agent_name,
-    sanitize_agent_name,
-    validate_agent_name_format,
-)
+from mcp_agent_mail.utils import generate_agent_name, sanitize_agent_name, validate_agent_name_format
 
 
 def test_validate_agent_name_format_valid_names():

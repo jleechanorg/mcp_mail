@@ -474,10 +474,28 @@ main() {
 
   echo
   ok "All set!"
+  echo ""
   echo "Next runs:"
   echo "  cd \"${REPO_DIR}\""
   echo "  source .venv/bin/activate"
   echo "  bash scripts/run_server_with_token.sh"
+  echo ""
+  info "Credentials setup (optional):"
+  echo "  For Slack integration and other features, create ~/.mcp_mail/credentials.json:"
+  echo ""
+  echo "    mkdir -p ~/.mcp_mail"
+  echo "    cat > ~/.mcp_mail/credentials.json <<'EOF'"
+  echo "    {"
+  echo "      \"SLACK_ENABLED\": \"true\","
+  echo "      \"SLACK_BOT_TOKEN\": \"xoxb-your-bot-token\","
+  echo "      \"SLACK_SIGNING_SECRET\": \"your-signing-secret\","
+  echo "      \"SLACK_WEBHOOK_URL\": \"https://your-public-url/slack/events\""
+  echo "    }"
+  echo "    EOF"
+  echo "    chmod 600 ~/.mcp_mail/credentials.json"
+  echo ""
+  echo "  Credential precedence: env vars > ~/.mcp_mail/credentials.json > .env > defaults"
+  echo "  For public URLs, use Tunnelmole: npm i -g tunnelmole && tmole 8765"
 }
 
 main "$@"

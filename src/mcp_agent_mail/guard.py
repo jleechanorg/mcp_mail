@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 
 from .config import Settings
-from .storage import ProjectArchive, archive_write_lock, ensure_archive
+from .storage import ensure_archive, ensure_runtime_project_root, is_archive_enabled
 
 __all__ = [
     "install_guard",
@@ -19,14 +19,12 @@ __all__ = [
 ]
 
 
-def render_precommit_script(archive: ProjectArchive) -> str:
-    """Return the pre-commit script content for the given archive.
+def render_precommit_script(file_reservations_dir: Path) -> str:
+    """Return the pre-commit script content for the given file_reservations directory.
 
     Construct with explicit lines at column 0 to avoid indentation errors.
     """
-
-    file_reservations_dir = str((archive.root / "file_reservations").resolve())
-    storage_root = str(archive.root.resolve())
+    file_reservations_dir_str = str(file_reservations_dir.resolve())
     lines = [
         "#!/usr/bin/env python3",
         "import json",
@@ -37,8 +35,7 @@ def render_precommit_script(archive: ProjectArchive) -> str:
         "from fnmatch import fnmatch",
         "from datetime import datetime, timezone",
         "",
-        f'FILE_RESERVATIONS_DIR = Path("{file_reservations_dir}")',
-        f'STORAGE_ROOT = Path("{storage_root}")',
+        f'FILE_RESERVATIONS_DIR = Path("{file_reservations_dir_str}")',
         'AGENT_NAME = os.environ.get("AGENT_NAME")',
         "if not AGENT_NAME:",
         '    sys.stderr.write("[pre-commit] AGENT_NAME environment variable is required.\\n")',
@@ -71,6 +68,10 @@ def render_precommit_script(archive: ProjectArchive) -> str:
         "for file_reservation in load_file_reservations():",
         '    if file_reservation.get("agent") == AGENT_NAME:',
         "        continue",
+        '    if file_reservation.get("released_ts"):',
+        "        continue",
+        '    if not file_reservation.get("exclusive", True):',
+        "        continue",
         '    expires = file_reservation.get("expires_ts")',
         "    if expires:",
         "        try:",
@@ -82,8 +83,19 @@ def render_precommit_script(archive: ProjectArchive) -> str:
         '    pattern = file_reservation.get("path_pattern")',
         "    if not pattern:",
         "        continue",
+        '    fallback = pattern.replace("**/","")',
         "    for path_value in paths:",
-        "        if fnmatch(path_value, pattern) or fnmatch(pattern, path_value):",
+        "        a = path_value.replace('\\\\\\\\','/').lstrip('/')",
+        "        b = pattern.replace('\\\\\\\\','/').lstrip('/')",
+        "        b_fallback = fallback.replace('\\\\\\\\','/').lstrip('/')",
+        "        if (",
+        "            fnmatch(a, b)",
+        "            or fnmatch(b, a)",
+        "            or fnmatch(a, b_fallback)",
+        "            or fnmatch(b_fallback, a)",
+        "            or (a == b)",
+        "            or (a == b_fallback)",
+        "        ):",
         '            conflicts.append((path_value, file_reservation.get("agent"), pattern))',
         "",
         "if conflicts:",
@@ -98,12 +110,12 @@ def render_precommit_script(archive: ProjectArchive) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_prepush_script(archive: ProjectArchive) -> str:
+def render_prepush_script(file_reservations_dir: Path) -> str:
     """Return the pre-push script content that checks conflicts across pushed commits.
 
     Python script to avoid external shell assumptions; NUL-safe and respects gate/advisory mode.
     """
-    file_reservations_dir = str((archive.root / "file_reservations").resolve())
+    file_reservations_dir_str = str(file_reservations_dir.resolve())
     lines = [
         "#!/usr/bin/env python3",
         "import json",
@@ -114,7 +126,7 @@ def render_prepush_script(archive: ProjectArchive) -> str:
         "from pathlib import Path",
         "from datetime import datetime, timezone",
         "",
-        f'FILE_RESERVATIONS_DIR = Path("{file_reservations_dir}")',
+        f'FILE_RESERVATIONS_DIR = Path("{file_reservations_dir_str}")',
         "",
         "# Ensure uvx (uv tool shim) is available for presubmit checks.",
         "LOCAL_BIN = Path.home() / '.local' / 'bin'",
@@ -208,6 +220,8 @@ def render_prepush_script(archive: ProjectArchive) -> str:
         "for file_reservation in load_file_reservations():",
         '    if file_reservation.get("agent") == AGENT_NAME:',
         "        continue",
+        '    if file_reservation.get("released_ts"):',
+        "        continue",
         '    if not file_reservation.get("exclusive", True):',
         "        continue",
         '    expires = file_reservation.get("expires_ts")',
@@ -226,7 +240,15 @@ def render_prepush_script(archive: ProjectArchive) -> str:
         "        import fnmatch as _fn",
         '        a = path_value.replace("\\\\","/").lstrip("/")',
         '        b = pattern.replace("\\\\","/").lstrip("/")',
-        "        if _fn.fnmatchcase(a,b) or _fn.fnmatchcase(b,a) or (a==b):",
+        '        b_fallback = b.replace("**/","")',
+        "        if (",
+        "            _fn.fnmatchcase(a, b)",
+        "            or _fn.fnmatchcase(b, a)",
+        "            or _fn.fnmatchcase(a, b_fallback)",
+        "            or _fn.fnmatchcase(b_fallback, a)",
+        "            or (a == b)",
+        "            or (a == b_fallback)",
+        "        ):",
         '            conflicts.append((path_value, file_reservation.get("agent"), pattern))',
         "",
         "if conflicts:",
@@ -245,67 +267,76 @@ def render_prepush_script(archive: ProjectArchive) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _git(cwd: Path, *args: str) -> str | None:
+    try:
+        cp = subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True, text=True)
+        return cp.stdout.strip()
+    except Exception:
+        return None
+
+
+def _resolve_hooks_dir(repo: Path) -> Path:
+    hooks_path = _git(repo, "config", "--get", "core.hooksPath")
+    if hooks_path:
+        # Check if absolute path: Unix (/foo) or Windows (C:\foo or C:/foo)
+        if hooks_path.startswith("/") or (len(hooks_path) > 1 and hooks_path[1] == ":"):
+            resolved = Path(hooks_path)
+        else:
+            root = _git(repo, "rev-parse", "--show-toplevel") or str(repo)
+            resolved = Path(root) / hooks_path
+        return resolved
+    git_dir = _git(repo, "rev-parse", "--git-dir")
+    if git_dir:
+        g = Path(git_dir)
+        if not g.is_absolute():
+            g = repo / g
+        return g / "hooks"
+    return repo / ".git" / "hooks"
+
+
 async def install_guard(settings: Settings, project_slug: str, repo_path: Path) -> Path:
     """Install the pre-commit guard for the given project into the repo."""
 
-    archive = await ensure_archive(settings, project_slug, project_key=str(repo_path))
-    hooks_dir = repo_path / ".git" / "hooks"
-    if not hooks_dir.is_dir():
-        raise ValueError(f"No git hooks directory at {hooks_dir}")
+    if is_archive_enabled(settings):
+        archive = await ensure_archive(settings, project_slug, project_key=str(repo_path))
+        file_reservations_dir = archive.root / "file_reservations"
+    else:
+        runtime_project_root = await ensure_runtime_project_root(settings, project_slug)
+        file_reservations_dir = runtime_project_root / "file_reservations"
+
+    hooks_dir = _resolve_hooks_dir(repo_path)
+    await asyncio.to_thread(hooks_dir.mkdir, parents=True, exist_ok=True)
 
     hook_path = hooks_dir / "pre-commit"
-    script = render_precommit_script(archive)
-
-    async with archive_write_lock(archive):
-        await asyncio.to_thread(hooks_dir.mkdir, parents=True, exist_ok=True)
-        await asyncio.to_thread(hook_path.write_text, script, "utf-8")
-        await asyncio.to_thread(os.chmod, hook_path, 0o755)
+    script = render_precommit_script(file_reservations_dir)
+    await asyncio.to_thread(hook_path.write_text, script, "utf-8")
+    await asyncio.to_thread(os.chmod, hook_path, 0o755)
     return hook_path
 
 
 async def install_prepush_guard(settings: Settings, project_slug: str, repo_path: Path) -> Path:
     """Install the pre-push guard for the given project into the repo."""
-    archive = await ensure_archive(settings, project_slug, project_key=str(repo_path))
-
-    def _git(cwd: Path, *args: str) -> str | None:
-        try:
-            cp = subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True, text=True)
-            return cp.stdout.strip()
-        except Exception:
-            return None
-
-    def _resolve_hooks_dir(repo: Path) -> Path:
-        hooks_path = _git(repo, "config", "--get", "core.hooksPath")
-        if hooks_path:
-            # Check if absolute path: Unix (/foo) or Windows (C:\foo or C:/foo)
-            if hooks_path.startswith("/") or (len(hooks_path) > 1 and hooks_path[1] == ":"):
-                resolved = Path(hooks_path)
-            else:
-                root = _git(repo, "rev-parse", "--show-toplevel") or str(repo)
-                resolved = Path(root) / hooks_path
-            return resolved
-        git_dir = _git(repo, "rev-parse", "--git-dir")
-        if git_dir:
-            g = Path(git_dir)
-            if not g.is_absolute():
-                g = repo / g
-            return g / "hooks"
-        return repo / ".git" / "hooks"
+    if is_archive_enabled(settings):
+        archive = await ensure_archive(settings, project_slug, project_key=str(repo_path))
+        file_reservations_dir = archive.root / "file_reservations"
+    else:
+        runtime_project_root = await ensure_runtime_project_root(settings, project_slug)
+        file_reservations_dir = runtime_project_root / "file_reservations"
 
     hooks_dir = _resolve_hooks_dir(repo_path)
     await asyncio.to_thread(hooks_dir.mkdir, parents=True, exist_ok=True)
     hook_path = hooks_dir / "pre-push"
-    script = render_prepush_script(archive)
-    async with archive_write_lock(archive):
-        await asyncio.to_thread(hook_path.write_text, script, "utf-8")
-        await asyncio.to_thread(os.chmod, hook_path, 0o755)
+    script = render_prepush_script(file_reservations_dir)
+    await asyncio.to_thread(hook_path.write_text, script, "utf-8")
+    await asyncio.to_thread(os.chmod, hook_path, 0o755)
     return hook_path
 
 
 async def uninstall_guard(repo_path: Path) -> bool:
     """Remove the pre-commit guard from repo, returning True if removed."""
 
-    hook_path = repo_path / ".git" / "hooks" / "pre-commit"
+    hooks_dir = _resolve_hooks_dir(repo_path)
+    hook_path = hooks_dir / "pre-commit"
     if hook_path.exists():
         await asyncio.to_thread(hook_path.unlink)
         return True

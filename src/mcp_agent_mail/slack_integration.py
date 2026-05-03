@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -73,11 +74,36 @@ class SlackClient:
     - Socket Mode event streaming (for bidirectional sync)
 
     Thread Mapping Limitation:
-        Thread mappings between MCP threads and Slack threads are stored in-memory
+    Thread mappings between MCP threads and Slack threads are stored in-memory
         and will be lost on server restart. After a restart, messages in an existing
         MCP thread will create new top-level Slack messages instead of replying to
         the existing Slack thread. For production use, persist mappings to database.
     """
+
+    _instance: Optional["SlackClient"] = None
+    _instance_lock: asyncio.Lock | None = None
+    _instance_lock_init = threading.Lock()
+
+    @classmethod
+    async def get_instance(cls, settings: SlackSettings) -> "SlackClient":
+        """Get or create singleton instance of SlackClient.
+
+        This ensures thread mappings are shared across all callers.
+        """
+        if cls._instance_lock is None:
+            with cls._instance_lock_init:
+                if cls._instance_lock is None:
+                    cls._instance_lock = asyncio.Lock()
+
+        lock = cls._instance_lock
+        if lock is None:
+            raise SlackIntegrationError("Slack client lock not initialized")
+
+        async with lock:
+            if cls._instance is None:
+                cls._instance = cls(settings)
+                await cls._instance.connect()
+            return cls._instance
 
     def __init__(self, settings: SlackSettings):
         """Initialize Slack client with settings.
@@ -129,6 +155,8 @@ class SlackClient:
         if self._http_client:
             await self._http_client.aclose()
             self._http_client = None
+        # Reset singleton to allow clean reinitialization after shutdown
+        self.__class__._instance = None
 
     def _check_client(self) -> None:
         """Ensure client is connected."""
@@ -247,39 +275,158 @@ class SlackClient:
         return permalink
 
     async def map_thread(self, mcp_thread_id: str, slack_channel_id: str, slack_thread_ts: str) -> None:
-        """Map an MCP thread ID to a Slack thread."""
+        """Map an MCP thread ID to a Slack thread. Persists to database."""
+        from .db import get_session
+        from .models import SlackThreadMapping as SlackThreadMappingModel
+
         mapping = SlackThreadMapping(
             mcp_thread_id=mcp_thread_id,
             slack_channel_id=slack_channel_id,
             slack_thread_ts=slack_thread_ts,
             created_at=datetime.now(timezone.utc),
         )
+        # Update in-memory cache
         async with self._mappings_lock:
             self._thread_mappings[mcp_thread_id] = mapping
             self._reverse_thread_mappings[(slack_channel_id, slack_thread_ts)] = mcp_thread_id
+
+        # Persist to database (upsert pattern to handle duplicates)
+        try:
+            from sqlalchemy import select
+
+            async with get_session() as session:
+                # Check for existing mapping
+                stmt = select(SlackThreadMappingModel).where(
+                    SlackThreadMappingModel.slack_channel_id == slack_channel_id,
+                    SlackThreadMappingModel.slack_thread_ts == slack_thread_ts,
+                )
+                result = await session.execute(stmt)
+                existing = result.scalar_one_or_none()
+
+                if existing:
+                    # Update existing mapping
+                    existing.mcp_thread_id = mcp_thread_id
+                    logger.debug(
+                        f"Updated existing thread mapping in DB: MCP={mcp_thread_id} -> Slack={slack_channel_id}/{slack_thread_ts}"
+                    )
+                else:
+                    # Insert new mapping
+                    db_mapping = SlackThreadMappingModel(
+                        mcp_thread_id=mcp_thread_id,
+                        slack_channel_id=slack_channel_id,
+                        slack_thread_ts=slack_thread_ts,
+                    )
+                    session.add(db_mapping)
+                    logger.debug(
+                        f"Persisted new thread mapping to DB: MCP={mcp_thread_id} -> Slack={slack_channel_id}/{slack_thread_ts}"
+                    )
+                await session.commit()
+        except Exception as e:
+            # Log but don't fail - in-memory cache is still valid
+            logger.warning(f"Failed to persist thread mapping to DB: {e}")
+
         logger.debug(f"Mapped thread: MCP={mcp_thread_id} -> Slack={slack_channel_id}/{slack_thread_ts}")
 
     async def get_slack_thread(self, mcp_thread_id: str) -> Optional[SlackThreadMapping]:
-        """Get Slack thread mapping for an MCP thread ID."""
+        """Get Slack thread mapping for an MCP thread ID. Checks DB if not in memory."""
+        from sqlalchemy import select
+
+        from .db import get_session
+        from .models import SlackThreadMapping as SlackThreadMappingModel
+
+        # Check in-memory cache first
         async with self._mappings_lock:
-            return self._thread_mappings.get(mcp_thread_id)
+            if mcp_thread_id in self._thread_mappings:
+                return self._thread_mappings[mcp_thread_id]
+
+        # Query database
+        try:
+            async with get_session() as session:
+                result = await session.execute(
+                    select(SlackThreadMappingModel).where(SlackThreadMappingModel.mcp_thread_id == mcp_thread_id)
+                )
+                db_mapping = result.scalars().first()
+                if db_mapping:
+                    mapping = SlackThreadMapping(
+                        mcp_thread_id=db_mapping.mcp_thread_id,
+                        slack_channel_id=db_mapping.slack_channel_id,
+                        slack_thread_ts=db_mapping.slack_thread_ts,
+                        created_at=db_mapping.created_at,
+                    )
+                    # Update in-memory cache
+                    async with self._mappings_lock:
+                        self._thread_mappings[mcp_thread_id] = mapping
+                        self._reverse_thread_mappings[(db_mapping.slack_channel_id, db_mapping.slack_thread_ts)] = (
+                            mcp_thread_id
+                        )
+                    return mapping
+        except Exception as e:
+            logger.warning(f"Failed to query thread mapping from DB: {e}")
+
+        return None
 
     async def get_mcp_thread_id(self, slack_channel_id: str, slack_thread_ts: str) -> Optional[str]:
-        """Get MCP thread ID for a Slack thread."""
+        """Get MCP thread ID for a Slack thread. Checks DB if not in memory."""
+        from sqlalchemy import select
+
+        from .db import get_session
+        from .models import SlackThreadMapping as SlackThreadMappingModel
+
+        # Check in-memory cache first
         async with self._mappings_lock:
-            return self._reverse_thread_mappings.get((slack_channel_id, slack_thread_ts))
+            cached = self._reverse_thread_mappings.get((slack_channel_id, slack_thread_ts))
+            if cached:
+                return cached
+
+        # Query database
+        try:
+            async with get_session() as session:
+                result = await session.execute(
+                    select(SlackThreadMappingModel).where(
+                        SlackThreadMappingModel.slack_channel_id == slack_channel_id,
+                        SlackThreadMappingModel.slack_thread_ts == slack_thread_ts,
+                    )
+                )
+                db_mapping = result.scalars().first()
+                if db_mapping:
+                    # Update in-memory cache
+                    async with self._mappings_lock:
+                        self._reverse_thread_mappings[(slack_channel_id, slack_thread_ts)] = db_mapping.mcp_thread_id
+                        # Also cache the forward mapping
+                        mapping = SlackThreadMapping(
+                            mcp_thread_id=db_mapping.mcp_thread_id,
+                            slack_channel_id=db_mapping.slack_channel_id,
+                            slack_thread_ts=db_mapping.slack_thread_ts,
+                            created_at=db_mapping.created_at,
+                        )
+                        self._thread_mappings[db_mapping.mcp_thread_id] = mapping
+                    return db_mapping.mcp_thread_id
+        except Exception as e:
+            logger.warning(f"Failed to query reverse thread mapping from DB: {e}")
+
+        return None
 
     @staticmethod
     def verify_signature(*, signing_secret: Optional[str], timestamp: str, signature: str, body: bytes) -> bool:
         """Verify Slack request signature for webhook security."""
+        # Allow bypassing signature verification for debugging (DANGEROUS - only for initial setup)
+        if os.environ.get("SLACK_SKIP_SIGNATURE_VERIFICATION") == "1":
+            logger.warning("SLACK_SKIP_SIGNATURE_VERIFICATION=1: Skipping signature verification (INSECURE)")
+            return True
         if not signing_secret:
             logger.warning("SLACK_SIGNING_SECRET not set, rejecting request (signature verification required)")
             return False
         try:
             request_time = int(timestamp)
             current_time = int(time.time())
-            if abs(current_time - request_time) > 60 * 5:
-                logger.warning("Slack request timestamp too old")
+            # Tolerance in seconds - configurable via env for debugging, default 5 minutes per Slack recommendations
+            tolerance = int(os.environ.get("SLACK_TIMESTAMP_TOLERANCE", 60 * 5))
+            diff = abs(current_time - request_time)
+            if diff > tolerance:
+                logger.warning(
+                    f"Slack request timestamp outside tolerance: diff={diff}s (tolerance={tolerance}s, "
+                    f"request_time={request_time}, current_time={current_time})"
+                )
                 return False
 
             sig_basestring = f"v0:{timestamp}:{body.decode('utf-8')}"
@@ -583,6 +730,7 @@ async def notify_slack_ack(
         channel = settings.slack.default_channel
         slack_thread_ts: Optional[str] = None
         thread_key = thread_id or message_id
+        thread_mapping: SlackThreadMapping | None = None
 
         if thread_key:
             thread_mapping = await client.get_slack_thread(thread_key)
@@ -602,9 +750,9 @@ async def notify_slack_ack(
             thread_ts=slack_thread_ts,
         )
 
-        if thread_key and not slack_thread_ts:
-            msg_ts = response.get("ts")
-            channel_id = response.get("channel")
+        if thread_key and not thread_mapping:
+            msg_ts = slack_thread_ts or response.get("ts")
+            channel_id = response.get("channel") or channel
             if msg_ts and channel_id:
                 await client.map_thread(thread_key, channel_id, msg_ts)
 
@@ -652,10 +800,15 @@ async def handle_slack_message_event(
     """
     # Ignore bot messages to prevent loops
     if event.get("bot_id") or event.get("subtype") == "bot_message":
-        logger.debug("Ignoring bot message to prevent loop")
+        logger.debug("slack_ignoring_bot_message")
         return None
 
-    channel_id = event.get("channel")
+    channel_id_raw = event.get("channel")
+    if not isinstance(channel_id_raw, str) or not channel_id_raw:
+        logger.debug("Slack event missing channel id")
+        return None
+
+    channel_id = channel_id_raw
     text = event.get("text", "")
     user_id = event.get("user")
     message_ts = event.get("ts")
@@ -679,12 +832,29 @@ async def handle_slack_message_event(
     sender_name = "SlackBridge"
 
     # Determine MCP thread_id from Slack thread
-    # Use Slack thread_ts when present, otherwise top-level ts, so dedupe and replies work
+    # First check if there's an existing mapping from MCP -> this Slack thread
+    # This allows replies to MCP-originated messages to be properly linked
+    mcp_thread_id: Optional[str] = None
     if settings.slack.sync_thread_replies:
         base_ts = thread_ts or message_ts
-        mcp_thread_id = f"slack_{channel_id}_{base_ts}" if base_ts else None
-    else:
-        mcp_thread_id = None
+        if base_ts:
+            base_ts_str = str(base_ts)
+            # Try to get client to check reverse mapping
+            try:
+                client = await SlackClient.get_instance(settings.slack)
+                # Check reverse mapping: (channel, thread_ts) -> mcp_thread_id
+                existing_mcp_thread = await client.get_mcp_thread_id(channel_id, base_ts_str)
+                if existing_mcp_thread:
+                    mcp_thread_id = existing_mcp_thread
+                    logger.debug(
+                        f"Found existing MCP thread mapping: Slack ({channel_id}, {base_ts_str}) -> MCP {existing_mcp_thread}"
+                    )
+                else:
+                    # No existing mapping, create new slack-based thread_id
+                    mcp_thread_id = f"slack_{channel_id}_{base_ts_str}"
+            except Exception:
+                # If client unavailable, fall back to generating thread_id
+                mcp_thread_id = f"slack_{channel_id}_{base_ts_str}"
 
     # Create subject from first line of text
     subject_parts = text.split("\n", 1)
