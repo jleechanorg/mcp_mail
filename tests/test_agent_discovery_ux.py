@@ -267,6 +267,8 @@ class TestWhoisGlobalLookup:
     @pytest.mark.asyncio
     async def test_whois_not_found_returns_suggestions(self, isolated_env):
         """Test that whois returns suggestions when agent is not found."""
+        from fastmcp.exceptions import ToolError
+
         mcp = build_mcp_server()
         async with Client(mcp) as client:
             await client.call_tool("ensure_project", arguments={"human_key": "/tmp/test"})
@@ -281,38 +283,38 @@ class TestWhoisGlobalLookup:
             )
 
             # Search for a typo/similar name
-            result = await client.call_tool(
-                "whois",
-                arguments={
-                    "project_key": "/tmp/test",
-                    "agent_name": "BlueLakeAgent",  # Close but not exact
-                },
-            )
+            with pytest.raises(ToolError) as excinfo:
+                await client.call_tool(
+                    "whois",
+                    arguments={
+                        "project_key": "/tmp/test",
+                        "agent_name": "BlueLakeAgent",  # Close but not exact
+                    },
+                )
 
-            assert "error" in result.data
-            assert "suggestions" in result.data
-            assert "BlueLake" in result.data["suggestions"]
-            assert "_tip" in result.data
+            # The error message should contain the suggestions
+            error_msg = str(excinfo.value)
+            assert "BlueLake" in error_msg
+            assert "Did you mean one of" in error_msg
 
     @pytest.mark.asyncio
     async def test_whois_not_found_error_structure(self, isolated_env):
         """Test the error response structure when agent is not found."""
+        from fastmcp.exceptions import ToolError
+
         mcp = build_mcp_server()
         async with Client(mcp) as client:
             await client.call_tool("ensure_project", arguments={"human_key": "/tmp/test"})
 
-            result = await client.call_tool(
-                "whois",
-                arguments={
-                    "project_key": "/tmp/test",
-                    "agent_name": "NonExistentAgent",
-                },
-            )
+            with pytest.raises(ToolError) as excinfo:
+                await client.call_tool(
+                    "whois",
+                    arguments={
+                        "project_key": "/tmp/test",
+                        "agent_name": "NonExistentAgent",
+                    },
+                )
 
-            assert "error" in result.data
-            assert "agent_name" in result.data
-            assert result.data["agent_name"] == "NonExistentAgent"
-            assert "suggestions" in result.data
-            assert isinstance(result.data["suggestions"], list)
-            assert "_tip" in result.data
-            assert "resource://agents" in result.data["_tip"]
+            error_msg = str(excinfo.value)
+            assert "NonExistentAgent" in error_msg
+            assert "not registered" in error_msg

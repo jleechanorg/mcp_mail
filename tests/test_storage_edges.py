@@ -23,6 +23,10 @@ async def test_data_uri_embed_without_conversion(isolated_env, monkeypatch):
     monkeypatch.setenv("CONVERT_IMAGES", "false")
     from mcp_agent_mail import config as _config
 
+    # Intentionally ignore any errors when clearing the settings cache here.
+    # This test only needs to exercise the "cache cleared" path; failures in
+    # clear_settings_cache() itself are covered elsewhere and would make this
+    # setup brittle if we asserted on a broad Exception type.
     with contextlib.suppress(Exception):
         _config.clear_settings_cache()
     server = build_mcp_server()
@@ -46,5 +50,8 @@ async def test_data_uri_embed_without_conversion(isolated_env, monkeypatch):
                 "convert_images": False,
             },
         )
-        attachments = (res.data.get("deliveries") or [{}])[0].get("payload", {}).get("attachments") or []
+        deliveries = res.data.get("deliveries") or []
+        assert deliveries, "Expected at least one delivery"
+        attachments = deliveries[0].get("payload", {}).get("attachments") or []
+        assert attachments, "Expected at least one attachment"
         assert any(att.get("type") == "inline" for att in attachments)

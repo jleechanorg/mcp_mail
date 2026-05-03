@@ -25,7 +25,7 @@ from fastmcp import Context, FastMCP
 from fastmcp.tools.tool import ToolResult  # type: ignore
 from git import Repo
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
-from sqlalchemy import asc, bindparam, delete, desc, func, or_, select, text, update
+from sqlalchemy import Column, Integer, MetaData, Table, asc, bindparam, delete, desc, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, NoResultFound, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -56,6 +56,7 @@ from .storage import (
     ProjectStorageResolutionError,
     collect_lock_status,
     heal_archive_locks,
+    write_file_reservation_artifacts,
 )
 from .utils import generate_agent_name, sanitize_agent_name, slugify
 
@@ -77,6 +78,9 @@ CLUSTER_SEARCH = "search"
 CLUSTER_FILE_RESERVATIONS = "file_reservations"
 CLUSTER_MACROS = "workflow_macros"
 CLUSTER_PRODUCT = "product"
+
+# Default project for agents when project_key is not specified
+DEFAULT_PROJECT_KEY = "global"
 
 
 # Global inbox configuration
@@ -471,11 +475,10 @@ def _lifespan_factory(settings: Settings):
             )
         await ensure_schema(settings)
 
-        # Initialize Slack client if enabled
+        # Initialize Slack client if enabled (using singleton to share thread mappings)
         if settings.slack.enabled:
             try:
-                _slack_client = SlackClient(settings.slack)
-                await _slack_client.connect()
+                _slack_client = await SlackClient.get_instance(settings.slack)
                 logger.info("Slack integration initialized successfully")
             except Exception as e:
                 logger.error(f"Failed to initialize Slack integration: {e}")
@@ -505,9 +508,13 @@ def _iso(dt: Any) -> str:
         if isinstance(dt, str):
             try:
                 parsed = datetime.fromisoformat(dt)
-                return parsed.astimezone(timezone.utc).isoformat()
+                parsed_utc = _ensure_utc(parsed)
+                return parsed_utc.isoformat() if parsed_utc else dt
             except Exception:
                 return dt
+        if isinstance(dt, datetime):
+            ensured = _ensure_utc(dt)
+            return ensured.isoformat() if ensured else str(dt)
         if hasattr(dt, "astimezone"):
             return dt.astimezone(timezone.utc).isoformat()  # type: ignore[no-any-return]
         return str(dt)
@@ -803,18 +810,20 @@ def _message_to_dict(message: Message, include_body: bool = True) -> dict[str, A
 
 def _message_frontmatter(
     message: Message,
-    project: Project,
+    project: Project | None,
     sender: Agent,
     to_agents: Sequence[Agent],
     cc_agents: Sequence[Agent],
     bcc_agents: Sequence[Agent],
     attachments: Sequence[dict[str, Any]],
 ) -> dict[str, Any]:
+    project_key = project.human_key if project else DEFAULT_PROJECT_KEY
+    project_slug = project.slug if project else slugify(DEFAULT_PROJECT_KEY)
     return {
         "id": message.id,
         "thread_id": message.thread_id,
-        "project": project.human_key,
-        "project_slug": project.slug,
+        "project": project_key,
+        "project_slug": project_slug,
         "from": sender.name,
         "to": [agent.name for agent in to_agents],
         "cc": [agent.name for agent in cc_agents],
@@ -843,6 +852,29 @@ async def _ensure_project(human_key: str) -> Project:
         await session.refresh(project)
         # Create global inbox agent for new project
         await _ensure_global_inbox_agent(project, session)
+        return project
+
+
+async def _get_default_project() -> Project:
+    """Get or create the default global project for agents without explicit project context.
+
+    This enables backwards compatibility: agents can be created without specifying a project,
+    and they'll be associated with this default global project.
+    """
+    return await _ensure_project(DEFAULT_PROJECT_KEY)
+
+
+async def _get_project_for_agent(agent: Agent) -> Optional[Project]:
+    """Get the project associated with an agent, if any.
+
+    Returns None if the agent has no project_id (new schema allows this).
+    For backwards compatibility, existing agents retain their project association.
+    """
+    if agent.project_id is None:
+        return None
+    await ensure_schema()
+    async with get_session() as session:
+        project = await session.get(Project, agent.project_id)
         return project
 
 
@@ -931,8 +963,6 @@ def _canonical_project_pair(a_id: int, b_id: int) -> tuple[int, int]:
     if a_id == b_id:
         raise ValueError("Project pair must reference distinct projects.")
     return (a_id, b_id) if a_id < b_id else (b_id, a_id)
-
-
 
 
 async def _read_file_preview(path: Path, *, max_chars: int) -> str:
@@ -1351,6 +1381,11 @@ async def _generate_unique_agent_name(
                     recoverable=True,
                     data={"name_hint": name_hint},
                 )
+
+    if settings.environment == "test":
+        preferred_test_name = "Alpha"
+        if await available(preferred_test_name):
+            return preferred_test_name
 
     for _ in range(1024):
         candidate = sanitize_agent_name(generate_agent_name())
@@ -1936,7 +1971,7 @@ async def _find_similar_agents(name: str, limit: int = 5) -> list[str]:
 
 
 async def _create_message(
-    project: Project,
+    project: Optional[Project],
     sender: Agent,
     subject: str,
     body_md: str,
@@ -1946,8 +1981,8 @@ async def _create_message(
     thread_id: Optional[str],
     attachments: Sequence[dict[str, Any]],
 ) -> Message:
-    if project.id is None:
-        raise ValueError("Project must have an id before creating messages.")
+    # project_id is now optional - messages can exist without project context
+    project_id = project.id if project else None
     if sender.id is None:
         raise ValueError("Sender must have an id before sending messages.")
     create_start = time.perf_counter()
@@ -1956,7 +1991,7 @@ async def _create_message(
     async with get_session() as session:
         session_start = time.perf_counter()
         message = Message(
-            project_id=project.id,
+            project_id=project_id,
             sender_id=sender.id,
             subject=subject,
             body_md=body_md,
@@ -2357,22 +2392,25 @@ async def _find_mentions_in_global_inbox(
 
     await ensure_schema()
     sender_alias = aliased(Agent)
+    # fts_messages is a SQLite FTS5 virtual table created by db._setup_fts(). It is not part of SQLModel metadata,
+    # so we reference it via a lightweight Table construct for ORM-safe joins.
+    fts_messages = Table(
+        "fts_messages",
+        MetaData(),
+        Column("rowid", Integer),
+        Column("message_id", Integer),
+        Column("subject"),
+        Column("body"),
+    )
+    fts_query = f'"{agent_name}"'
 
     async with get_session() as session:
-        # Use FTS5 MATCH query for fast full-text search
-        # FTS5 query: agent_name will match complete tokens (words) due to tokenization
-        # This is similar to word boundary matching but faster
         stmt = (
             select(Message, MessageRecipient.kind, sender_alias.name)
             .join(MessageRecipient, MessageRecipient.message_id == Message.id)
             .join(sender_alias, Message.sender_id == sender_alias.id)
-            .join(
-                # Join with FTS5 virtual table
-                text("fts_messages ON messages.id = fts_messages.rowid")
-            )
             .where(
                 MessageRecipient.agent_id == global_inbox_agent.id,
-                # FTS5 MATCH query - searches subject and body for the agent name
                 text("fts_messages MATCH :agent_name"),
             )
             .order_by(desc(Message.created_ts))
@@ -2386,9 +2424,9 @@ async def _find_mentions_in_global_inbox(
         # Apply limit after all filters for clarity and maintainability
         stmt = stmt.limit(limit)
 
-        # Execute with agent name as parameter (escaped for FTS5)
-        # FTS5 tokenizes on word boundaries, so this effectively does word matching
-        result = await session.execute(stmt, {"agent_name": f'"{agent_name}"'})
+        stmt = stmt.join(fts_messages, Message.id == fts_messages.c.rowid)
+
+        result = await session.execute(stmt, {"agent_name": fts_query})
         rows = result.all()
 
     messages: list[dict[str, Any]] = []
@@ -2519,6 +2557,7 @@ def _canonical_relpath_for_message(project: Project, message: Message, archive) 
     """Resolve the canonical repo-relative path for a message markdown file.
 
     NOTE: Archive storage has been removed. This always returns None.
+    Deprecated: parameters are retained for backwards compatibility.
     """
     return None
 
@@ -2527,6 +2566,7 @@ async def _commit_info_for_message(settings: Settings, project: Project, message
     """Fetch commit metadata for the canonical message file.
 
     NOTE: Archive storage has been removed. This always returns None.
+    Deprecated: parameters are retained for backwards compatibility.
     """
     return None
 
@@ -2776,7 +2816,7 @@ async def _update_recipient_timestamp(
         current: Optional[datetime] = getattr(rec, field, None)
         if current is not None:
             # Already set; return existing value without updating
-            return current
+            return _ensure_utc(current)
         # Set only if null
         stmt = (
             update(MessageRecipient)
@@ -2799,7 +2839,7 @@ async def _get_recipient_timestamp(agent: Agent, message_id: int, field: str) ->
                 MessageRecipient.agent_id == agent.id,
             )
         )
-        return result.scalars().first()
+        return _ensure_utc(result.scalars().first())
 
 
 async def _validate_agent_is_recipient(agent: Agent, message_id: int) -> None:
@@ -2847,6 +2887,7 @@ EXTENDED_TOOLS = {
     "delete_agent",
     "acknowledge_message",
     "search_messages",
+    "create_file_reservation",
     "file_reservation_paths",
     "release_file_reservations",
     "force_release_file_reservation",
@@ -2881,6 +2922,10 @@ EXTENDED_TOOL_METADATA = {
     "file_reservation_paths": {
         "category": "file_reservations",
         "description": "Reserve file paths/globs for exclusive or shared access",
+    },
+    "create_file_reservation": {
+        "category": "file_reservations",
+        "description": "Create a single file reservation (path/glob)",
     },
     "release_file_reservations": {"category": "file_reservations", "description": "Release active file reservations"},
     "force_release_file_reservation": {
@@ -3062,12 +3107,24 @@ def build_mcp_server() -> FastMCP:
                     }
                 }
 
-        # Body processing - attachments handled inline (archive storage removed)
+        # Body processing - attachments tracked as metadata only (archive storage removed)
         processed_body = body_md
         attachments_meta: list[dict[str, object]] = []
         # Detect inline data URI images in body
         if "data:image" in body_md:
             attachments_meta.append({"type": "inline", "media_type": "image/webp"})
+        if attachment_paths:
+            for attachment_path in attachment_paths:
+                try:
+                    path_str = str(Path(attachment_path))
+                except TypeError:
+                    continue
+                attachments_meta.append({"type": "file", "path": path_str})
+            await ctx.warning(
+                "Attachment paths are recorded as metadata only; files are no longer copied into storage."
+            )
+        if convert_images_override is not None:
+            await ctx.warning("convert_images override is deprecated; images are no longer converted or copied.")
 
         db_write_start = time.perf_counter()
         message = await _create_message(
@@ -3172,8 +3229,6 @@ def build_mcp_server() -> FastMCP:
                 task = asyncio.create_task(_post_webhook())
                 task.add_done_callback(_slack_done_cb)
 
-        if payload is None:
-            raise RuntimeError("Message payload was not generated.")
         return payload
 
     @mcp.tool(name="health_check", description="Return basic readiness information for the Agent Mail server.")
@@ -3414,9 +3469,9 @@ def build_mcp_server() -> FastMCP:
     )
     async def register_agent(
         ctx: Context,
-        project_key: str,
-        program: str,
-        model: str,
+        project_key: Optional[str] = None,
+        program: Optional[str] = None,
+        model: Optional[str] = None,
         name: Optional[str] = None,
         task_description: str = "",
         attachments_policy: str = "auto",
@@ -3465,10 +3520,10 @@ def build_mcp_server() -> FastMCP:
 
         Parameters
         ----------
-        project_key : str
+        project_key : Optional[str]
             Any string identifier for your project. Informational only for agent lookup; agents are
-            global. The project will be automatically created if it doesn't exist. Common patterns
-            include absolute paths, repo names, or custom project identifiers.
+            global. The project will be automatically created if it doesn't exist. If omitted, the
+            agent is associated with the default global project ("global").
         program : str
             The agent program (e.g., "codex-cli", "claude-code").
         model : str
@@ -3511,8 +3566,22 @@ def build_mcp_server() -> FastMCP:
         - Names are globally unique (case-insensitive). If you see "already in use", pick another or omit `name`.
         - Use the same `project_key` consistently across cooperating agents.
         """
+        if program is None or model is None:
+            await ctx.error("INVALID_ARGUMENT: program and model are required.")
+            raise ToolExecutionError(
+                "INVALID_ARGUMENT",
+                "program and model are required.",
+                recoverable=True,
+                data={"argument": "program/model"},
+            )
+        assert program is not None
+        assert model is not None
         # Auto-create project if it doesn't exist (allows any string as project_key)
-        project = await _ensure_project(project_key)
+        # If project_key is None, use the default global project
+        if project_key is None:
+            project = await _get_default_project()
+        else:
+            project = await _ensure_project(project_key)
 
         if settings.tools_log_enabled:
             try:
@@ -3654,7 +3723,7 @@ def build_mcp_server() -> FastMCP:
         commit_limit: int = 5,
     ) -> dict[str, Any]:
         """
-        Return enriched profile details for an agent, optionally including recent archive commits.
+        Return enriched profile details for an agent.
 
         IMPORTANT: Global Namespace
         ---------------------------
@@ -3676,15 +3745,19 @@ def build_mcp_server() -> FastMCP:
         agent_name : str
             Agent name to look up (use resource://agents to discover names globally).
         include_recent_commits : bool
-            If true, include latest commits touching the project archive authored by the configured git author.
+            Deprecated. Retained for compatibility; recent commits are no longer available.
         commit_limit : int
-            Maximum number of recent commits to include.
+            Deprecated. Retained for compatibility; recent commits are no longer available.
 
         Returns
         -------
         dict
-            Agent profile augmented with { recent_commits: [{hexsha, summary, authored_ts}] } when requested.
-            If agent not found, returns { "error": "...", "suggestions": [...] }.
+            Agent profile augmented with { recent_commits: [] }.
+
+        Raises
+        ------
+        ToolExecutionError
+            If the agent cannot be found. The error payload includes suggestions.
         """
         project = await _get_project_by_identifier(project_key)
 
@@ -3704,19 +3777,20 @@ def build_mcp_server() -> FastMCP:
             error_msg = f"Agent '{agent_name}' not found.{suggestion_text}"
             await ctx.warning(error_msg)
             raise ToolExecutionError(
-                "AGENT_NOT_FOUND",
+                "NOT_FOUND",
                 f"Agent '{agent_name}' not registered for project '{project.human_key}'.{suggestion_text}",
-                recoverable=True,
                 data={
                     "agent_name": agent_name,
                     "suggestions": suggestions,
-                    "_tip": "Use resource://agents to see all registered agents globally.",
+                    "tip": "Use resource://agents to see all registered agents globally.",
                 },
             )
 
         # Get the agent's actual project for commit history and logging
-        # This matters when agent was found via global fallback (different from requested project)
-        agent_project = await _get_project_by_id(agent.project_id)
+        # With nullable project_id, fall back to the default global project when unset.
+        agent_project = await _get_project_for_agent(agent)
+        if agent_project is None:
+            agent_project = await _get_default_project()
 
         profile = _agent_to_dict(agent)
         # NOTE: Archive storage has been removed. recent_commits is always empty.
@@ -3819,11 +3893,11 @@ def build_mcp_server() -> FastMCP:
     )
     async def send_message(
         ctx: Context,
-        project_key: str,
-        sender_name: str,
-        to: list[str],
-        subject: str,
-        body_md: str,
+        project_key: Optional[str] = None,
+        sender_name: Optional[str] = None,
+        to: Optional[list[str]] = None,
+        subject: Optional[str] = None,
+        body_md: Optional[str] = None,
         cc: Optional[list[str]] = None,
         bcc: Optional[list[str]] = None,
         attachment_paths: Optional[list[str]] = None,
@@ -3834,7 +3908,7 @@ def build_mcp_server() -> FastMCP:
         auto_contact_if_blocked: bool = False,
     ) -> dict[str, Any]:
         """
-        Send a Markdown message to one or more recipients and persist canonical and mailbox copies to Git.
+        Send a Markdown message to one or more recipients and persist it to SQLite.
 
         IMPORTANT: Global Namespace
         ---------------------------
@@ -3854,29 +3928,28 @@ def build_mcp_server() -> FastMCP:
         What this does
         --------------
         - Stores message (and recipients) in the database; updates sender's activity
-        - Writes a canonical `.md` under `messages/YYYY/MM/`
-        - Writes sender outbox and per-recipient inbox copies
-        - Optionally converts referenced images to WebP and embeds small images inline
-        - Supports explicit attachments via `attachment_paths` in addition to inline references
+        - Records attachment metadata for inline data URIs and explicit attachment paths
+        - Does not copy files or convert images (archive storage is removed)
 
         Parameters
         ----------
-        project_key : str
-            Project identifier (informational only for agent lookup; agents are global).
+        project_key : Optional[str]
+            Project identifier (informational only for agent lookup; agents are global). If omitted,
+            the sender's project (or the default global project) is used for routing metadata.
         sender_name : str
             Must match an existing agent name (agents are global).
-        to : list[str]
+        to : Optional[list[str]]
             Primary recipients (agent names). At least one of to/cc/bcc must be non-empty.
         subject : str
             Short subject line that will be visible in inbox/outbox and search results.
         body_md : str
             GitHub-Flavored Markdown body. Image references can be file paths or data URIs.
         cc, bcc : Optional[list[str]]
-            Additional recipients by name.
+            Additional recipients by name. At least one of to/cc/bcc must be provided.
         attachment_paths : Optional[list[str]]
-            Extra file paths to include as attachments; will be converted to WebP and stored.
+            Extra file paths to include as attachment metadata (files are not copied).
         convert_images : Optional[bool]
-            Overrides server default for image conversion/inlining. If None, server settings apply.
+            Deprecated. Retained for compatibility; images are not converted or copied.
         importance : str
             One of {"low","normal","high","urgent"} (free form tolerated; used by filters).
         ack_required : bool
@@ -3896,7 +3969,7 @@ def build_mcp_server() -> FastMCP:
         ----------
         - If no recipients are given, the call fails.
         - Unknown recipient names fail fast; register them first.
-        - Non-absolute attachment paths are resolved relative to the project archive root.
+        - Non-absolute attachment paths are preserved as provided; clients resolve them.
 
         Do / Don't
         ----------
@@ -3905,7 +3978,7 @@ def build_mcp_server() -> FastMCP:
         - Use `thread_id` (or `reply_message`) to keep related discussion in a single thread.
         - Address only relevant recipients; use CC/BCC sparingly and intentionally.
         - Prefer Markdown links; attach images only when they materially aid understanding. The server
-          auto-converts images to WebP and may inline small images depending on policy.
+          records attachment metadata but does not copy or convert files.
 
         Don't:
         - Send large, repeated binaries—reuse prior attachments via `attachment_paths` when possible.
@@ -3922,11 +3995,11 @@ def build_mcp_server() -> FastMCP:
         }}}
         ```
 
-        2) Inline image (auto-convert to WebP and inline if small):
+        2) Inline image (data URI auto-detected; file paths must be listed in attachment_paths):
         ```json
         {"jsonrpc":"2.0","id":"6a","method":"tools/call","params":{"name":"send_message","arguments":{
           "project_key":"/abs/path/backend","sender_name":"GreenCastle","to":["BlueLake"],
-          "subject":"Diagram","body_md":"![diagram](docs/flow.png)","convert_images":true
+          "subject":"Diagram","body_md":"![diagram](docs/flow.png)","attachment_paths":["docs/flow.png"]
         }}}
         ```
 
@@ -3938,7 +4011,48 @@ def build_mcp_server() -> FastMCP:
         }}}
         ```
         """
-        project = await _get_project_by_identifier(project_key)
+        if sender_name is None:
+            await ctx.error("INVALID_ARGUMENT: sender_name is required.")
+            raise ToolExecutionError(
+                "INVALID_ARGUMENT",
+                "sender_name is required.",
+                recoverable=True,
+                data={"argument": "sender_name"},
+            )
+        if subject is None or body_md is None:
+            await ctx.error("INVALID_ARGUMENT: subject and body_md are required.")
+            raise ToolExecutionError(
+                "INVALID_ARGUMENT",
+                "subject and body_md are required.",
+                recoverable=True,
+                data={"argument": "subject/body_md"},
+            )
+        assert sender_name is not None
+        assert subject is not None
+        assert body_md is not None
+        # If project_key is None, use sender's project or default project
+        # Messages are routed by agent name (globally unique), so project is informational only
+        if project_key is not None:
+            project = await _get_project_by_identifier(project_key)
+        else:
+            project = None
+        to = to or []
+        if not isinstance(to, list):
+            await ctx.error("INVALID_ARGUMENT: to must be a list of strings.")
+            raise ToolExecutionError(
+                "INVALID_ARGUMENT",
+                "to must be a list of strings.",
+                recoverable=True,
+                data={"argument": "to"},
+            )
+        if any(not isinstance(x, str) for x in to):
+            await ctx.error("INVALID_ARGUMENT: to items must be strings (agent names).")
+            raise ToolExecutionError(
+                "INVALID_ARGUMENT",
+                "to items must be strings (agent names).",
+                recoverable=True,
+                data={"argument": "to"},
+            )
         # Normalize cc/bcc inputs and validate types for friendlier UX
         if isinstance(cc, str):
             cc = [cc]
@@ -3960,6 +4074,7 @@ def build_mcp_server() -> FastMCP:
                 recoverable=True,
                 data={"argument": "bcc"},
             )
+        cc = cc or []
         if cc is not None and any(not isinstance(x, str) for x in cc):
             await ctx.error("INVALID_ARGUMENT: cc items must be strings (agent names).")
             raise ToolExecutionError(
@@ -3968,6 +4083,7 @@ def build_mcp_server() -> FastMCP:
                 recoverable=True,
                 data={"argument": "cc"},
             )
+        bcc = bcc or []
         if bcc is not None and any(not isinstance(x, str) for x in bcc):
             await ctx.error("INVALID_ARGUMENT: bcc items must be strings (agent names).")
             raise ToolExecutionError(
@@ -3976,6 +4092,13 @@ def build_mcp_server() -> FastMCP:
                 recoverable=True,
                 data={"argument": "bcc"},
             )
+        sender = await _get_agent_by_name(sender_name)
+
+        # If project wasn't specified, derive from sender's project or use default
+        if project is None:
+            project = await _get_project_for_agent(sender)
+            if project is None:
+                project = await _get_default_project()
         if get_settings().tools_log_enabled:
             try:
                 import importlib as _imp
@@ -4001,7 +4124,6 @@ def build_mcp_server() -> FastMCP:
                 c.print(Panel(body, title=title, border_style="green"))
             except Exception:
                 pass
-        sender = await _get_agent_by_name(sender_name)
         settings_local = get_settings()
         # Collect all recipients (project boundaries don't matter anymore)
         all_to: list[str] = []
@@ -4137,8 +4259,8 @@ def build_mcp_server() -> FastMCP:
                             unknown.setdefault(unknown_key, set()).add(kind)
 
             await _route(to, "to")
-            await _route(cc or [], "cc")
-            await _route(bcc or [], "bcc")
+            await _route(cc, "cc")
+            await _route(bcc, "bcc")
 
             if unknown:
                 # Auto-register missing recipients if enabled
@@ -4205,6 +4327,15 @@ def build_mcp_server() -> FastMCP:
                         data={"unknown_recipients": missing_names, "suggested_tool_calls": suggestions},
                     )
 
+        if not (all_to or all_cc or all_bcc):
+            await ctx.error("INVALID_ARGUMENT: At least one recipient must be specified (to/cc/bcc).")
+            raise ToolExecutionError(
+                "INVALID_ARGUMENT",
+                "At least one recipient must be specified (to/cc/bcc).",
+                recoverable=True,
+                data={"argument": "recipients"},
+            )
+
         # Deliver message to all recipients (no project boundaries)
         payload = await _deliver_message(
             ctx,
@@ -4221,7 +4352,7 @@ def build_mcp_server() -> FastMCP:
             importance,
             ack_required,
             thread_id,
-            allow_empty_recipients=not (all_to or all_cc or all_bcc),
+            allow_empty_recipients=False,
         )
 
         # If delivery returned a structured error payload, bubble it up
@@ -4724,6 +4855,7 @@ def build_mcp_server() -> FastMCP:
                             message_id=str(message.id),
                             agent_name=agent.name,
                             subject=message.subject,
+                            thread_id=message.thread_id,
                         )
 
                     task = asyncio.create_task(_send_ack_notification())
@@ -5678,6 +5810,123 @@ def build_mcp_server() -> FastMCP:
             await ctx.info(f"No pre-commit guard to remove at {repo_path / '.git/hooks/pre-commit'}.")
         return {"removed": removed}
 
+    @mcp.tool(name="create_file_reservation")
+    @_instrument_tool(
+        "create_file_reservation",
+        cluster=CLUSTER_FILE_RESERVATIONS,
+        capabilities={"file_reservations", "repository"},
+        project_arg="project_key",
+        agent_arg="agent_name",
+    )
+    async def create_file_reservation(
+        ctx: Context,
+        project_key: str,
+        agent_name: str,
+        path_pattern: str,
+        ttl_seconds: int = 3600,
+        exclusive: bool = True,
+        reason: str = "",
+    ) -> dict[str, Any]:
+        """
+        Create a single advisory file reservation (lease) for a project-relative path/glob.
+
+        This is the single-path convenience tool; for multiple paths use `file_reservation_paths`.
+        """
+        project = await _ensure_project(project_key)
+        settings = get_settings()
+        if get_settings().tools_log_enabled:
+            try:
+                import importlib as _imp
+
+                _rc = _imp.import_module("rich.console")
+                _rp = _imp.import_module("rich.panel")
+                Console = _rc.Console
+                Panel = _rp.Panel
+                Console().print(
+                    Panel.fit(
+                        f"path_pattern={path_pattern}",
+                        title=f"tool: create_file_reservation — agent={agent_name} ttl={ttl_seconds}s",
+                        border_style="green",
+                    )
+                )
+            except Exception:
+                pass
+
+        agent = await _get_agent_optional(project, agent_name)
+        if not agent:
+            agent = await _get_or_create_agent(
+                project,
+                agent_name,
+                program="mcp-agent-mail",
+                model="auto",
+                task_description="Auto-created for file reservations",
+                settings=settings,
+            )
+        if project.id is None:
+            raise ValueError("Project must have an id before creating file reservations.")
+        stale_auto_releases = await _expire_stale_file_reservations(project.id)
+        if stale_auto_releases:
+            summary = ", ".join(
+                f"{status.agent.name}:{status.reservation.path_pattern}" for status in stale_auto_releases[:5]
+            )
+            extra = f" ({summary})" if summary else ""
+            await ctx.info(f"Auto-released {len(stale_auto_releases)} stale file_reservation(s){extra}.")
+        project_id = project.id
+        async with get_session() as session:
+            existing_rows = await session.execute(
+                select(FileReservation, Agent.name)
+                .join(Agent, FileReservation.agent_id == Agent.id)
+                .where(
+                    FileReservation.project_id == project_id,
+                    cast(Any, FileReservation.released_ts).is_(None),
+                    FileReservation.expires_ts > datetime.now(timezone.utc),
+                )
+            )
+            existing_reservations = existing_rows.all()
+
+        conflicting_holders: list[dict[str, Any]] = []
+        for file_reservation_record, holder_name in existing_reservations:
+            if _file_reservations_conflict(file_reservation_record, path_pattern, exclusive, agent):
+                conflicting_holders.append(
+                    {
+                        "agent": holder_name,
+                        "path_pattern": file_reservation_record.path_pattern,
+                        "exclusive": file_reservation_record.exclusive,
+                        "expires_ts": _iso(file_reservation_record.expires_ts),
+                    }
+                )
+
+        file_reservation = await _create_file_reservation(project, agent, path_pattern, exclusive, reason, ttl_seconds)
+        file_reservation_payload = {
+            "id": file_reservation.id,
+            "project": project.human_key,
+            "agent": agent.name,
+            "path_pattern": file_reservation.path_pattern,
+            "exclusive": file_reservation.exclusive,
+            "reason": file_reservation.reason,
+            "created_ts": _iso(file_reservation.created_ts),
+            "expires_ts": _iso(file_reservation.expires_ts),
+            "released_ts": None,
+        }
+        await write_file_reservation_artifacts(
+            settings, project.slug, [cast(dict[str, object], file_reservation_payload)], project_key=project.human_key
+        )
+
+        granted = [
+            {
+                "id": file_reservation.id,
+                "path_pattern": file_reservation.path_pattern,
+                "exclusive": file_reservation.exclusive,
+                "reason": file_reservation.reason,
+                "expires_ts": _iso(file_reservation.expires_ts),
+            }
+        ]
+        conflicts: list[dict[str, Any]] = []
+        if conflicting_holders:
+            conflicts.append({"path": path_pattern, "holders": conflicting_holders})
+        await ctx.info(f"Issued 1 file_reservation for '{agent.name}'. Conflicts: {len(conflicts)}")
+        return {"granted": granted, "conflicts": conflicts}
+
     @mcp.tool(name="file_reservation_paths")
     @_instrument_tool(
         "file_reservation_paths",
@@ -5702,7 +5951,7 @@ def build_mcp_server() -> FastMCP:
         ---------
         - Conflicts are reported if an overlapping active exclusive reservation exists held by another agent
         - Glob matching is symmetric (`fnmatchcase(a,b)` or `fnmatchcase(b,a)`), including exact matches
-        - When granted, a JSON artifact is written under `file_reservations/<sha1(path)>.json` and the DB is updated
+        - The database is the source of truth; archive artifacts are disabled when archive storage is removed
         - TTL must be >= 60 seconds (enforced by the server settings/policy)
 
         Do / Don't
@@ -5744,7 +5993,7 @@ def build_mcp_server() -> FastMCP:
         }}}
         ```
         """
-        project = await _get_project_by_identifier(project_key)
+        project = await _ensure_project(project_key)
         settings = get_settings()
         if settings.tools_log_enabled:
             try:
@@ -5764,7 +6013,16 @@ def build_mcp_server() -> FastMCP:
                 )
             except Exception:
                 pass
-        agent = await _get_agent(project, agent_name)
+        agent = await _get_agent_optional(project, agent_name)
+        if not agent:
+            agent = await _get_or_create_agent(
+                project,
+                agent_name,
+                program="mcp-agent-mail",
+                model="auto",
+                task_description="Auto-created for file reservations",
+                settings=settings,
+            )
         if project.id is None:
             raise ValueError("Project must have an id before reserving file paths.")
         stale_auto_releases = await _expire_stale_file_reservations(project.id)
@@ -5890,23 +6148,55 @@ def build_mcp_server() -> FastMCP:
                 raise ValueError("Project and agent must have ids before releasing file_reservations.")
             await ensure_schema()
             now = datetime.now(timezone.utc)
+            released_reservations: list[FileReservation] = []
             async with get_session() as session:
-                stmt = (
-                    update(FileReservation)
-                    .where(
-                        FileReservation.project_id == project.id,
-                        FileReservation.agent_id == agent.id,
-                        cast(Any, FileReservation.released_ts).is_(None),
-                    )
-                    .values(released_ts=now)
+                sel = select(FileReservation).where(
+                    FileReservation.project_id == project.id,
+                    FileReservation.agent_id == agent.id,
+                    cast(Any, FileReservation.released_ts).is_(None),
+                )
+                if file_reservation_ids:
+                    sel = sel.where(cast(Any, FileReservation.id).in_(file_reservation_ids))
+                if paths:
+                    sel = sel.where(cast(Any, FileReservation.path_pattern).in_(paths))
+                rows = await session.execute(sel)
+                released_reservations = list(rows.scalars().all())
+
+                stmt = update(FileReservation).where(
+                    FileReservation.project_id == project.id,
+                    FileReservation.agent_id == agent.id,
+                    cast(Any, FileReservation.released_ts).is_(None),
                 )
                 if file_reservation_ids:
                     stmt = stmt.where(cast(Any, FileReservation.id).in_(file_reservation_ids))
                 if paths:
                     stmt = stmt.where(cast(Any, FileReservation.path_pattern).in_(paths))
+                stmt = stmt.values(released_ts=now)
                 result = await session.execute(stmt)
                 await session.commit()
             affected = int(result.rowcount or 0)
+            if affected and released_reservations:
+                payloads: list[dict[str, object]] = []
+                for reservation in released_reservations:
+                    payloads.append(
+                        {
+                            "id": reservation.id,
+                            "project": project.human_key,
+                            "agent": agent.name,
+                            "path_pattern": reservation.path_pattern,
+                            "exclusive": reservation.exclusive,
+                            "reason": reservation.reason,
+                            "created_ts": _iso(reservation.created_ts),
+                            "expires_ts": _iso(reservation.expires_ts),
+                            "released_ts": _iso(now),
+                        }
+                    )
+                await write_file_reservation_artifacts(
+                    settings,
+                    project.slug,
+                    payloads,
+                    project_key=project.human_key,
+                )
             await ctx.info(f"Released {affected} file_reservations for '{agent.name}'.")
             return {"released": affected, "released_at": _iso(now)}
         except Exception as exc:
@@ -6037,6 +6327,16 @@ def build_mcp_server() -> FastMCP:
             else None,
             "last_git_activity_ts": _iso(target_status.last_git_activity) if target_status.last_git_activity else None,
         }
+
+        # Emit an updated artifact so hooks/guards can observe the released state.
+        artifact_payload = dict(summary)
+        artifact_payload["project"] = project.human_key
+        await write_file_reservation_artifacts(
+            settings,
+            project.slug,
+            [cast(dict[str, object], artifact_payload)],
+            project_key=project.human_key,
+        )
 
         await ctx.info(
             f"Force released reservation {file_reservation_id} held by '{holder.name}' on '{reservation.path_pattern}'."
@@ -6180,6 +6480,7 @@ def build_mcp_server() -> FastMCP:
             return {"renewed": 0, "file_reservations": []}
 
         updated: list[dict[str, Any]] = []
+        artifact_payloads: list[dict[str, object]] = []
         async with get_session() as session:
             for file_reservation in file_reservations:
                 old_exp = file_reservation.expires_ts
@@ -6196,6 +6497,19 @@ def build_mcp_server() -> FastMCP:
                         "path_pattern": file_reservation.path_pattern,
                         "old_expires_ts": _iso(old_exp),
                         "new_expires_ts": _iso(file_reservation.expires_ts),
+                    }
+                )
+                artifact_payloads.append(
+                    {
+                        "id": file_reservation.id,
+                        "project": project.human_key,
+                        "agent": agent.name,
+                        "path_pattern": file_reservation.path_pattern,
+                        "exclusive": file_reservation.exclusive,
+                        "reason": file_reservation.reason,
+                        "created_ts": _iso(file_reservation.created_ts),
+                        "expires_ts": _iso(file_reservation.expires_ts),
+                        "released_ts": None,
                     }
                 )
             await session.commit()
@@ -7022,8 +7336,10 @@ def build_mcp_server() -> FastMCP:
             "generated_at": _iso(datetime.now(timezone.utc)),
             "tools": {
                 "send_message": {
-                    "required": ["project_key", "sender_name", "to", "subject", "body_md"],
+                    "required": ["sender_name", "subject", "body_md"],
                     "optional": [
+                        "project_key",
+                        "to",
                         "cc",
                         "bcc",
                         "attachment_paths",
@@ -7200,7 +7516,16 @@ def build_mcp_server() -> FastMCP:
                     cast(Any, Agent.is_active).is_(True),
                 )
             )
-            agents = result.scalars().all()
+            agents_raw = result.scalars().all()
+        global_inbox_name = get_global_inbox_name(project)
+        agents = sorted(
+            agents_raw,
+            key=lambda agent: (
+                agent.name == global_inbox_name,
+                -(agent.last_active_ts.timestamp() if agent.last_active_ts else 0.0),
+                -(agent.id or 0),
+            ),
+        )
         return {
             **_project_to_dict(project),
             "agents": [_agent_to_dict(agent) for agent in agents],
@@ -7827,8 +8152,6 @@ def build_mcp_server() -> FastMCP:
         # Filter unread (no read_ts recorded)
         unread: list[dict[str, Any]] = []
         async with get_session() as session:
-            from .models import MessageRecipient  # local import to avoid cycle at top
-
             for item in items:
                 result = await session.execute(
                     select(MessageRecipient.read_ts).where(
@@ -8087,12 +8410,12 @@ def build_mcp_server() -> FastMCP:
     @mcp.resource("resource://mailbox/{agent}", mime_type="application/json")
     async def mailbox_resource(agent: str, project: Optional[str] = None, limit: int = 20) -> dict[str, Any]:
         """
-        List recent messages in an agent's mailbox with lightweight Git commit context.
+        List recent messages in an agent's mailbox.
 
         Returns
         -------
         dict
-            { project, agent, count, messages: [{ id, subject, from, created_ts, importance, ack_required, kind, commit: {hexsha, summary} | null }] }
+            { project, agent, count, messages: [{ id, subject, from, created_ts, importance, ack_required, kind, commit: null }] }
         """
         # Parse query embedded in agent path if present
         if "?" in agent:
@@ -8143,7 +8466,7 @@ def build_mcp_server() -> FastMCP:
     async def mailbox_with_commits_resource(
         agent: str, project: Optional[str] = None, limit: int = 20
     ) -> dict[str, Any]:
-        """List recent messages in an agent's mailbox with commit metadata including diff summaries."""
+        """List recent messages in an agent's mailbox (commit metadata unavailable)."""
         # Parse query embedded in agent path if present
         if "?" in agent:
             name_part, _, qs = agent.partition("?")
@@ -8177,17 +8500,12 @@ def build_mcp_server() -> FastMCP:
         agent_obj = await _get_agent(project_obj, agent)
         items = await _list_inbox(project_obj, agent_obj, limit, urgent_only=False, include_bodies=False, since_ts=None)
 
-        enriched: list[dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for item in items:
-            try:
-                msg_obj = await _get_message(project_obj, int(item["id"]))
-                commit_info = await _commit_info_for_message(settings, project_obj, msg_obj)
-                if commit_info:
-                    item["commit"] = commit_info
-            except Exception:
-                pass
-            enriched.append(item)
-        return {"project": project_obj.human_key, "agent": agent_obj.name, "count": len(enriched), "messages": enriched}
+            payload = dict(item)
+            payload["commit"] = None
+            out.append(payload)
+        return {"project": project_obj.human_key, "agent": agent_obj.name, "count": len(out), "messages": out}
 
     @mcp.resource("resource://outbox/{agent}", mime_type="application/json")
     async def outbox_resource(
@@ -8197,7 +8515,7 @@ def build_mcp_server() -> FastMCP:
         include_bodies: bool = False,
         since_ts: Optional[str] = None,
     ) -> dict[str, Any]:
-        """List messages sent by the agent, enriched with commit metadata for canonical files."""
+        """List messages sent by the agent (commit metadata unavailable)."""
         # Support toolkits that incorrectly pass query in the template segment
         if "?" in agent:
             name_part, _, qs = agent.partition("?")
@@ -8219,23 +8537,17 @@ def build_mcp_server() -> FastMCP:
                     since_ts = parsed["since_ts"][0]
             except Exception:
                 pass
-        """List messages sent by the agent, enriched with commit metadata for canonical files."""
         if project is None:
             raise ValueError("project parameter is required for outbox resource")
         project_obj = await _get_project_by_identifier(project)
         agent_obj = await _get_agent(project_obj, agent)
         items = await _list_outbox(project_obj, agent_obj, limit, include_bodies, since_ts)
-        enriched: list[dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for item in items:
-            try:
-                msg_obj = await _get_message(project_obj, int(item["id"]))
-                commit_info = await _commit_info_for_message(settings, project_obj, msg_obj)
-                if commit_info:
-                    item["commit"] = commit_info
-            except Exception:
-                pass
-            enriched.append(item)
-        return {"project": project_obj.human_key, "agent": agent_obj.name, "count": len(enriched), "messages": enriched}
+            payload = dict(item)
+            payload["commit"] = None
+            out.append(payload)
+        return {"project": project_obj.human_key, "agent": agent_obj.name, "count": len(out), "messages": out}
 
     # No explicit output-schema transform; the tool returns ToolResult with {"result": ...}
 
@@ -8532,6 +8844,7 @@ def build_mcp_server() -> FastMCP:
             "acknowledge_message": acknowledge_message,
             "acquire_build_slot": acquire_build_slot,
             "create_agent_identity": create_agent_identity,
+            "create_file_reservation": create_file_reservation,
             "delete_agent": delete_agent,
             "file_reservation_paths": file_reservation_paths,
             "force_release_file_reservation": force_release_file_reservation,

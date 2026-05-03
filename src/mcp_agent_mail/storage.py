@@ -7,7 +7,9 @@ All message storage is handled via SQLite database.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,8 +36,8 @@ class ProjectArchive:
     slug: str
     root: Path
     repo: Any = field(default=None)  # Was: Repo
-    lock_path: Path = field(default_factory=lambda: Path("/dev/null"))
-    repo_root: Path = field(default_factory=lambda: Path("/dev/null"))
+    lock_path: Path = Path("/dev/null")
+    repo_root: Path = Path("/dev/null")
 
     @property
     def attachments_dir(self) -> Path:
@@ -207,3 +209,22 @@ async def get_historical_inbox_snapshot(
         "requested_time": timestamp,
         "note": "Archive functionality has been removed",
     }
+
+
+async def write_file_reservation_artifacts(
+    settings: Settings,
+    project_slug: str,
+    payloads: list[dict[str, object]],
+    *,
+    project_key: str | None = None,
+) -> list[Path]:
+    """Stub function - archive functionality has been removed."""
+    return []
+
+
+async def ensure_runtime_project_root(settings: Settings, project_slug: str) -> Path:
+    """Stub function - archive functionality has been removed."""
+    base = Path(tempfile.gettempdir()) / "mcp_mail_dummy_runtime"
+    path = base / project_slug
+    await asyncio.to_thread(path.mkdir, parents=True, exist_ok=True)
+    return path

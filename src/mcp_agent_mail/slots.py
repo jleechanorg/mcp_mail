@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from mcp_agent_mail.config import Settings
-
 
 async def acquire_build_slot(
     project_key: str,
@@ -68,7 +66,7 @@ async def release_build_slot(
     return {"disabled": True, "reason": "Archive storage has been removed"}
 
 
-def _worktrees_enabled(settings: Settings | None = None) -> bool:
+def _worktrees_enabled() -> bool:
     """Return True when worktree-aware coordination is enabled.
 
     NOTE: Always returns False since archive storage has been removed.

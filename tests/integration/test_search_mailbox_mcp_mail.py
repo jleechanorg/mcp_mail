@@ -121,7 +121,7 @@ async def test_search_with_mcp_mail_storage_structure(mcp_mail_search_env):
     # Verify .mcp_mail/ structure was created
     assert storage_dir.exists(), ".mcp_mail/ should exist"
     assert (storage_dir / "storage.sqlite3").exists(), "SQLite database should exist"
-    assert (storage_dir / "projects").exists(), "projects/ directory should exist"
+    assert not (storage_dir / "projects").exists(), "projects/ directory should not exist (archive storage removed)"
 
 
 @pytest.mark.asyncio
