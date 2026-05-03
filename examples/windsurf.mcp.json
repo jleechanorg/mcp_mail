@@ -4,12 +4,12 @@
       "type": "http",
       "url": "http://127.0.0.1:8765/mcp/",
       "core": true,
-      "headers": { "Authorization": "Bearer 5e0682fe59f724f6aaa7cc04afcf1d1eb5add7c227d3b39e9ab642f8b3f570ae" },
+      "headers": { "Authorization": "Bearer ${HTTP_BEARER_TOKEN}" },
       "options": {
         "timeoutSeconds": 180,
         "initTimeoutSeconds": 30
       },
-      "note": "Import or configure this server in Cline's MCP settings"
+      "note": "Import or configure this server in Windsurf's MCP settings"
     }
   }
 }

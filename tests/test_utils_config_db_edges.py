@@ -23,6 +23,52 @@ def test_config_csv_and_bool_parsing(monkeypatch):
     assert s.http.rate_limit_enabled is True
 
 
+def test_config_credentials_precedence_for_slack_settings(monkeypatch):
+    import mcp_agent_mail.config as _config
+
+    # Ensure env vars don't override credentials-derived values
+    for key in (
+        "SLACK_SYNC_CHANNELS",
+        "SLACK_SYNC_THREAD_REPLIES",
+        "SLACK_SYNC_REACTIONS",
+        "SLACK_USE_BLOCKS",
+        "SLACK_INCLUDE_ATTACHMENTS",
+        "SLACK_WEBHOOK_URL",
+        "SLACKBOX_CHANNELS",
+        "SLACKBOX_SENDER_NAME",
+        "SLACKBOX_SUBJECT_PREFIX",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    monkeypatch.setattr(
+        _config,
+        "_user_credentials",
+        {
+            "SLACK_SYNC_CHANNELS": "C111, C222",
+            "SLACK_SYNC_THREAD_REPLIES": "false",
+            "SLACK_SYNC_REACTIONS": "false",
+            "SLACK_USE_BLOCKS": "false",
+            "SLACK_INCLUDE_ATTACHMENTS": "false",
+            "SLACK_WEBHOOK_URL": "https://hooks.slack.com/services/test",
+            "SLACKBOX_CHANNELS": "CHAN_A, CHAN_B",
+            "SLACKBOX_SENDER_NAME": "SlackboxCreds",
+            "SLACKBOX_SUBJECT_PREFIX": "[SlackboxCreds]",
+        },
+    )
+
+    clear_settings_cache()
+    s = get_settings()
+    assert s.slack.sync_channels == ["C111", "C222"]
+    assert s.slack.sync_thread_replies is False
+    assert s.slack.sync_reactions is False
+    assert s.slack.use_blocks is False
+    assert s.slack.include_attachments is False
+    assert s.slack.webhook_url == "https://hooks.slack.com/services/test"
+    assert s.slack.slackbox_channels == ["CHAN_A", "CHAN_B"]
+    assert s.slack.slackbox_sender_name == "SlackboxCreds"
+    assert s.slack.slackbox_subject_prefix == "[SlackboxCreds]"
+
+
 def test_db_engine_reset_and_reinit(isolated_env):
     # Reset and ensure engine can be re-initialized and schema ensured
     reset_database_state()

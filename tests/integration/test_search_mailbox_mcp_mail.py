@@ -40,7 +40,6 @@ async def mcp_mail_search_env(tmp_path, monkeypatch):
 
     # Configure environment to use .mcp_mail/ storage
     monkeypatch.setenv("STORAGE_ROOT", str(mcp_mail_dir))
-    monkeypatch.setenv("STORAGE_LOCAL_ARCHIVE_ENABLED", "true")
     monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{mcp_mail_dir}/storage.sqlite3")
     monkeypatch.setenv("GIT_AUTHOR_NAME", "test-agent")
     monkeypatch.setenv("GIT_AUTHOR_EMAIL", "test@example.com")
@@ -121,7 +120,7 @@ async def test_search_with_mcp_mail_storage_structure(mcp_mail_search_env):
     # Verify .mcp_mail/ structure was created
     assert storage_dir.exists(), ".mcp_mail/ should exist"
     assert (storage_dir / "storage.sqlite3").exists(), "SQLite database should exist"
-    assert (storage_dir / "projects").exists(), "projects/ directory should exist"
+    assert not (storage_dir / "projects").exists(), "projects/ directory should not exist (archive storage removed)"
 
 
 @pytest.mark.asyncio

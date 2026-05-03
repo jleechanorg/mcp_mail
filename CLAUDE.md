@@ -33,7 +33,7 @@ bash -lc "cd /Users/jleechan/mcp_agent_mail && ./scripts/run_server_local_build.
 This script:
 - Uses the wheel file from `dist/` (built with `uv build`)
 - Installs in an isolated temporary virtual environment
-- Uses Python 3.11-3.13 (avoiding Python 3.14 RC due to Pydantic compatibility issues)
+- Uses Python 3.11-3.13 (Python 3.14+ not supported due to beartype dependency incompatibility with collections.abc.ByteString removal)
 - Runs the server from the locally built package
 
 ## General Notes
@@ -43,6 +43,103 @@ This script:
 - Launch Claude Code/Claude Desktop **after** the command above succeeds so it can reuse the existing HTTP MCP endpoint at `http://127.0.0.1:8765/mcp/`.
 
 With the server running, Claude agents can call `ensure_project`, `register_agent`, `fetch_inbox`, and the other MCP tools without additional setup.
+
+## Claude Code Settings and Hooks
+
+### Settings.json Format
+
+**CRITICAL: Always use the correct hook format** to avoid breaking Claude Code. The settings file uses a **matcher-based hook structure**.
+
+**Correct format for SessionStart hooks:**
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "your-command-here"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**Common mistakes:**
+
+❌ **Wrong** (missing `hooks` array wrapper):
+```json
+{
+  "SessionStart": [
+    {
+      "type": "command",
+      "command": "..."
+    }
+  ]
+}
+```
+
+✅ **Correct** (with `hooks` array):
+```json
+{
+  "SessionStart": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "..."
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Hook Structure
+
+All hooks follow this pattern:
+
+```json
+{
+  "HookType": [
+    {
+      "matcher": {...},  // Optional for SessionStart, required for Pre/PostToolUse
+      "hooks": [         // REQUIRED: Array of hook objects
+        {
+          "type": "command",
+          "command": "..."
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Official Documentation
+
+**Before modifying settings.json, always check the official docs:**
+
+- **Hooks Reference**: https://code.claude.com/docs/en/hooks
+- **Settings Reference**: https://code.claude.com/docs/en/settings
+
+**To find latest documentation:**
+```bash
+# Web search for current year to get latest docs
+"Claude Code hooks settings.json format 2026"
+"Claude Code SessionStart hook documentation"
+```
+
+### Validation
+
+After editing `.claude/settings.json`:
+1. Restart Claude Code
+2. Check for settings errors in the startup output
+3. If errors appear, compare your format against official docs
+4. Fix immediately - invalid settings break the entire hooks system
 
 ## GitHub Authentication
 
@@ -157,6 +254,43 @@ When adding new API tokens or credentials:
 Current credentials configured in `~/.bashrc`:
 - `GITHUB_TOKEN` - GitHub API access (see GitHub Authentication section above)
 - `PYPI_TOKEN` - PyPI package publishing
+
+### MCP Agent Mail Credentials
+
+For MCP Agent Mail server credentials (especially Slack integration), use the dedicated credentials file at `~/.mcp_mail/credentials.json`. This is the **preferred location for PyPI installs** where there's no local `.env` file.
+
+**Credential precedence** (highest to lowest):
+1. Environment variables
+2. `~/.mcp_mail/credentials.json` (user-level, recommended)
+3. Local `.env` file (development)
+4. Built-in defaults
+
+**Example `~/.mcp_mail/credentials.json`:**
+```json
+{
+  "SLACK_ENABLED": "true",
+  "SLACK_BOT_TOKEN": "xoxb-your-bot-token",
+  "SLACK_SIGNING_SECRET": "your-signing-secret",
+  "SLACK_WEBHOOK_URL": "https://your-tunnel-url.example.com/slack/events",
+  "SLACK_SYNC_PROJECT_NAME": "slack-sync",
+  "SLACK_ALLOWED_CHANNELS": "",
+  "SLACK_IGNORE_BOT_MESSAGES": "true",
+  "SLACKBOX_ENABLED": "false",
+  "SLACKBOX_TOKEN": "",
+  "SLACKBOX_CHANNELS": ""
+}
+```
+
+**Setup steps:**
+1. Create the directory: `mkdir -p ~/.mcp_mail`
+2. Create the credentials file with your values
+3. Secure permissions: `chmod 600 ~/.mcp_mail/credentials.json`
+4. Restart the MCP Agent Mail server
+
+**Where to get Slack credentials:**
+- `SLACK_BOT_TOKEN`: Slack App > OAuth & Permissions > Bot User OAuth Token (`xoxb-...`)
+- `SLACK_SIGNING_SECRET`: Slack App > Basic Information > App Credentials > Signing Secret
+- `SLACK_WEBHOOK_URL`: Your public URL for receiving Slack events (use Tunnelmole: `npm i -g tunnelmole && tmole 8765`)
 
 ### Best Practices
 

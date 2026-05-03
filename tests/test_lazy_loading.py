@@ -5,12 +5,8 @@ from __future__ import annotations
 import pytest
 from fastmcp import Client
 
-from mcp_agent_mail.app import (
-    _EXTENDED_TOOL_REGISTRY,
-    CORE_TOOLS,
-    EXTENDED_TOOLS,
-    build_mcp_server,
-)
+from mcp_agent_mail.app import _EXTENDED_TOOL_REGISTRY, CORE_TOOLS, EXTENDED_TOOLS, PRODUCT_TOOLS, build_mcp_server
+from mcp_agent_mail.config import clear_settings_cache
 
 
 @pytest.mark.asyncio
@@ -26,12 +22,11 @@ async def test_list_extended_tools(isolated_env):
         assert "by_category" in result
         assert "tools" in result
 
-        # Check correct count (21 extended tools)
-        assert result["total"] == 21
+        # Check correct count (keep in sync with EXTENDED_TOOLS)
         assert result["total"] == len(EXTENDED_TOOLS)
 
         # Check all tools have valid metadata
-        assert len(result["tools"]) == 21
+        assert len(result["tools"]) == len(EXTENDED_TOOLS)
         for tool in result["tools"]:
             assert "name" in tool
             assert "category" in tool
@@ -44,9 +39,9 @@ async def test_list_extended_tools(isolated_env):
         all_categorized_tools = []
         for tools_list in result["by_category"].values():
             all_categorized_tools.extend(tools_list)
-        # All 21 extended tools should be categorized
+        # All extended tools should be categorized
         # (contact-related tools were removed from EXTENDED_TOOLS entirely)
-        assert len(all_categorized_tools) == 21
+        assert len(all_categorized_tools) == len(EXTENDED_TOOLS)
 
 
 @pytest.mark.asyncio
@@ -138,11 +133,46 @@ def test_core_and_extended_tools_disjoint():
     assert len(overlap) == 0, f"Core and extended tools should not overlap, but found: {overlap}"
 
 
+def test_tool_sets_all_disjoint():
+    """Test that CORE_TOOLS, EXTENDED_TOOLS, and PRODUCT_TOOLS are mutually disjoint."""
+    assert len(CORE_TOOLS & EXTENDED_TOOLS) == 0
+    assert len(CORE_TOOLS & PRODUCT_TOOLS) == 0
+    assert len(EXTENDED_TOOLS & PRODUCT_TOOLS) == 0
+
+
 def test_extended_tools_count():
-    """Test that we have exactly 21 extended tools (includes 3 build-slot tools and 3 Slack tools)."""
-    assert len(EXTENDED_TOOLS) == 21, f"Expected 21 extended tools, but found {len(EXTENDED_TOOLS)}"
+    """Test that we have exactly 22 extended tools (includes build-slot and Slack tools)."""
+    assert len(EXTENDED_TOOLS) == 22, f"Expected 22 extended tools, but found {len(EXTENDED_TOOLS)}"
 
 
 def test_core_tools_count():
     """Test that we have exactly 9 core tools."""
     assert len(CORE_TOOLS) == 9, f"Expected 9 core tools, but found {len(CORE_TOOLS)}"
+
+
+def test_product_tools_count():
+    """Test that we have exactly 5 product bus tools."""
+    assert len(PRODUCT_TOOLS) == 5, f"Expected 5 product tools, but found {len(PRODUCT_TOOLS)}"
+    expected = {
+        "ensure_product",
+        "products_link",
+        "search_messages_product",
+        "fetch_inbox_product",
+        "summarize_thread_product",
+    }
+    assert expected == PRODUCT_TOOLS, f"PRODUCT_TOOLS mismatch: {PRODUCT_TOOLS}"
+
+
+@pytest.mark.asyncio
+async def test_core_mode_hides_product_tools(isolated_env, monkeypatch):
+    """Test that core mode removes product tools from MCP exposure."""
+    monkeypatch.setenv("MCP_TOOLS_MODE", "core")
+    clear_settings_cache()
+    mcp = build_mcp_server()
+    async with Client(mcp) as client:
+        tools = await client.list_tools()
+        tool_names = {t.name for t in tools}
+        for tool_name in PRODUCT_TOOLS:
+            assert tool_name not in tool_names, f"Product tool {tool_name!r} should be hidden in core mode"
+        for tool_name in CORE_TOOLS:
+            assert tool_name in tool_names, f"Core tool {tool_name!r} should be exposed in core mode"
