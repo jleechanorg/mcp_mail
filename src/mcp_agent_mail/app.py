@@ -1,7 +1,5 @@
 """Application factory for the MCP Agent Mail server."""
 
-from __future__ import annotations
-
 import asyncio
 import fnmatch
 import functools
@@ -19,10 +17,11 @@ from difflib import SequenceMatcher
 from functools import wraps
 from pathlib import Path
 from typing import Any, Optional, cast
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qs, parse_qsl, urlparse
 
 from fastmcp import Context, FastMCP
-from fastmcp.tools.tool import ToolResult  # type: ignore
+from fastmcp.server.dependencies import get_http_request
+from fastmcp.tools.tool import ToolResult
 from git import Repo
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
 from sqlalchemy import Column, Integer, MetaData, Table, asc, bindparam, delete, desc, func, or_, select, text, update
@@ -457,6 +456,125 @@ def _capabilities_for(agent: Optional[str], project: Optional[str]) -> list[str]
     return sorted(caps)
 
 
+def _extract_raw_uri_params(ctx: Context, agent_segment: Optional[str] = None) -> dict[str, list[str]]:
+    """
+    Workaround for FastMCP stripping query parameters from resource URIs.
+
+    Checks:
+    1. HTTP request query if available (production).
+    2. Embedded parameters in the 'agent' path segment (fallback for tests).
+    3. Various Context/SDK-specific locations.
+    4. FastMCP private internals (best-effort fallback).
+    """
+    params: dict[str, list[str]] = {}
+
+    # 1. Try path-embedded params if agent segment provided
+    if agent_segment and "?" in agent_segment:
+        _, _, qs = agent_segment.partition("?")
+        params.update(parse_qs(qs, keep_blank_values=False))
+
+    # 2. Try standard HTTP request query
+    try:
+        request = get_http_request()
+        if request and request.url.query:
+            for k, v in parse_qs(request.url.query, keep_blank_values=False).items():
+                if k not in params:
+                    params[k] = v
+    except Exception:
+        pass
+
+    # 3. Fallback for unit tests using Client(server)
+    try:
+        potential_uri = None
+
+        # Public attributes
+        if hasattr(ctx, "uri"):
+            potential_uri = str(ctx.uri)
+
+        # Nested request properties
+        if not potential_uri and hasattr(ctx, "request"):
+            req = ctx.request
+            if hasattr(req, "uri"):
+                potential_uri = str(req.uri)
+            elif hasattr(req, "params") and isinstance(req.params, dict):
+                potential_uri = req.params.get("uri")
+
+        if not potential_uri:
+            for attr in ["_request", "_session", "session", "request_context"]:
+                if hasattr(ctx, attr):
+                    obj = getattr(ctx, attr)
+                    if hasattr(obj, "uri"):
+                        potential_uri = str(obj.uri)
+                        break
+                    # Try to find a request by ID if possible
+                    if attr == "request_context":
+                        req = getattr(obj, "request", None)
+                        if req and hasattr(req, "uri"):
+                            potential_uri = str(req.uri)
+                            break
+                    # Look deep into session internals if it's a ServerSession
+                    if "Session" in type(obj).__name__:
+                        # Any member matching current request_id?
+                        rid = getattr(ctx, "request_id", None)
+                        for subattr in dir(obj):
+                            if not subattr.startswith("__"):
+                                try:
+                                    val = getattr(obj, subattr)
+                                    if isinstance(val, dict) and rid in val:
+                                        req_obj = val[rid]
+                                        if hasattr(req_obj, "uri"):
+                                            potential_uri = str(req_obj.uri)
+                                            break
+                                except Exception:
+                                    pass
+                    if potential_uri:
+                        break
+
+        if potential_uri and "?" in str(potential_uri):
+            _, _, qs = str(potential_uri).partition("?")
+            for k, v in parse_qs(qs, keep_blank_values=False).items():
+                if k not in params:
+                    params[k] = v
+    except Exception:
+        pass
+
+    # 4. Best-effort parsing via FastMCP private internals
+    try:
+        if ctx and hasattr(ctx, "request_context") and hasattr(ctx, "session"):
+            req_id = ctx.request_context.request_id
+            session = ctx.session
+            if hasattr(session, "_in_flight") and req_id in session._in_flight:
+                responder = session._in_flight[req_id]
+                if hasattr(responder, "request"):
+                    raw_req = responder.request
+                    actual_req = raw_req.root if hasattr(raw_req, "root") else raw_req
+                    raw_uri_str = None
+                    if hasattr(actual_req, "params") and actual_req.params:
+                        params_obj = actual_req.params
+                        if isinstance(params_obj, dict):
+                            raw_uri_str = str(params_obj.get("uri", ""))
+                        elif hasattr(params_obj, "uri"):
+                            raw_uri_str = str(params_obj.uri)
+                        elif hasattr(params_obj, "model_dump"):
+                            try:
+                                dump = params_obj.model_dump()
+                                if isinstance(dump, dict) and "uri" in dump:
+                                    raw_uri_str = str(dump["uri"])
+                            except Exception:
+                                pass
+
+                    if raw_uri_str:
+                        parsed = urlparse(raw_uri_str)
+                        for k, v in parse_qs(parsed.query, keep_blank_values=False).items():
+                            if k not in params:
+                                params[k] = v
+    except AttributeError as e:
+        logger.debug("FastMCP internal structure changed, query params unavailable: %s", e)
+    except Exception as e:
+        logger.warning("Failed to manually parse resource URI params: %s", e)
+    return params
+
+
 def _lifespan_factory(settings: Settings):
     @asynccontextmanager
     async def lifespan(app: FastMCP):
@@ -516,7 +634,7 @@ def _iso(dt: Any) -> str:
             ensured = _ensure_utc(dt)
             return ensured.isoformat() if ensured else str(dt)
         if hasattr(dt, "astimezone"):
-            return dt.astimezone(timezone.utc).isoformat()  # type: ignore[no-any-return]
+            return dt.astimezone(timezone.utc).isoformat()
         return str(dt)
     except Exception:
         return str(dt)
@@ -557,6 +675,63 @@ def _coerce_flag_to_bool(value: str, *, default: bool) -> bool:
     if normalized in _FALSE_FLAG_VALUES:
         return False
     return default
+
+
+def _first_param(params: dict[str, list[str]], key: str) -> Optional[str]:
+    values = params.get(key)
+    if not values:
+        return None
+    return values[0]
+
+
+def _coerce_param_bool(params: dict[str, list[str]], key: str, *, default: bool) -> bool:
+    value = _first_param(params, key)
+    if value is None:
+        return default
+    return _coerce_flag_to_bool(value, default=default)
+
+
+def _merge_query_params_from_context(
+    ctx: Context,
+    kwargs: dict[str, Any],
+    param_keys: list[str],
+    bool_params: Optional[list[str]] = None,
+) -> None:
+    """
+    Helper function to extract query parameters from Context and merge them into kwargs.
+
+    This centralizes the query parameter extraction pattern used across 13+ resource handlers,
+    reducing code duplication and making it easier to update when FastMCP internals change.
+
+    NOTE: This helper is being gradually adopted across all resource handlers. As of this commit,
+    several handlers still use the inline pattern (params = _extract_raw_uri_params(ctx) followed
+    by manual _first_param calls). Both patterns are functionally equivalent and safe.
+    The inline pattern will be migrated to this helper in future updates.
+
+    Args:
+        ctx: FastMCP Context object
+        kwargs: Dictionary to merge parameters into (modified in-place)
+        param_keys: List of string parameter keys to extract (e.g., ['project', 'agent'])
+        bool_params: Optional list of boolean parameter keys that need _coerce_param_bool
+
+    The function safely handles missing or empty parameter lists and only updates kwargs
+    if the current value is None (for strings) or uses the current value as default (for bools).
+    """
+    params = _extract_raw_uri_params(ctx)
+
+    # Handle string parameters
+    for key in param_keys:
+        # Only update if current value is None
+        if kwargs.get(key) is None:
+            value = _first_param(params, key)
+            if value is not None:
+                kwargs[key] = value
+
+    # Handle boolean parameters
+    if bool_params:
+        for key in bool_params:
+            current = kwargs.get(key, False)
+            kwargs[key] = _coerce_param_bool(params, key, default=current)
 
 
 @dataclass(slots=True)
@@ -3198,8 +3373,12 @@ def build_mcp_server() -> FastMCP:
         if settings.slack.enabled and settings.slack.notify_on_message:
 
             def _slack_done_cb(t: asyncio.Task) -> None:
+                if t.cancelled():
+                    return
                 try:
                     _ = t.result()
+                except asyncio.CancelledError:
+                    pass
                 except Exception as e:
                     logger.exception("Failed to send Slack notification", exc_info=e)
 
@@ -7412,19 +7591,23 @@ def build_mcp_server() -> FastMCP:
         return collect_lock_status(settings_local)
 
     @mcp.resource("resource://tooling/capabilities/{agent}", mime_type="application/json")
-    def tooling_capabilities_resource(agent: str, project: Optional[str] = None) -> dict[str, Any]:
+    def tooling_capabilities_resource(agent: str, ctx: Context, project: Optional[str] = None) -> dict[str, Any]:
         # Parse query embedded in agent path if present (robust to FastMCP variants)
         if "?" in agent:
             name_part, _, qs = agent.partition("?")
             agent = name_part
             try:
-                from urllib.parse import parse_qs
-
                 parsed = parse_qs(qs, keep_blank_values=False)
-                if project is None and parsed.get("project"):
-                    project = parsed["project"][0]
+                project_value = _first_param(parsed, "project")
+                if project is None and project_value:
+                    project = project_value
             except Exception:
                 pass
+
+        # Workaround for FastMCP stripping query parameters - centralized helper
+        kwargs = {"project": project}
+        _merge_query_params_from_context(ctx, kwargs, ["project"])
+        project = kwargs["project"]
         caps = _capabilities_for(agent, project)
         return {
             "generated_at": _iso(datetime.now(timezone.utc)),
@@ -7436,6 +7619,7 @@ def build_mcp_server() -> FastMCP:
     @mcp.resource("resource://tooling/recent/{window_seconds}", mime_type="application/json")
     def tooling_recent_resource(
         window_seconds: str,
+        ctx: Context,
         agent: Optional[str] = None,
         project: Optional[str] = None,
     ) -> dict[str, Any]:
@@ -7444,13 +7628,17 @@ def build_mcp_server() -> FastMCP:
             seg, _, qs = window_seconds.partition("?")
             window_seconds = seg
             try:
-                from urllib.parse import parse_qs
-
                 parsed = parse_qs(qs, keep_blank_values=False)
-                agent = agent or (parsed.get("agent") or [None])[0]
-                project = project or (parsed.get("project") or [None])[0]
+                agent = agent or _first_param(parsed, "agent")
+                project = project or _first_param(parsed, "project")
             except Exception:
                 pass
+
+        # Workaround for FastMCP stripping query parameters - centralized helper
+        kwargs = {"agent": agent, "project": project}
+        _merge_query_params_from_context(ctx, kwargs, ["agent", "project"])
+        agent = kwargs["agent"]
+        project = kwargs["project"]
         try:
             win = int(window_seconds)
         except Exception:
@@ -7766,8 +7954,8 @@ def build_mcp_server() -> FastMCP:
             "agents": agent_data,
         }
 
-    @mcp.resource("resource://file_reservations/{slug}", mime_type="application/json")
-    async def file_reservations_resource(slug: str, active_only: bool = False) -> list[dict[str, Any]]:
+    @mcp.resource("resource://file_reservations/{slug}{?active_only}", mime_type="application/json")
+    async def file_reservations_resource(slug: str, ctx: Context, active_only: bool = False) -> list[dict[str, Any]]:
         """
         List file_reservations for a project, optionally filtering to active-only.
 
@@ -7813,6 +8001,11 @@ def build_mcp_server() -> FastMCP:
         if "active_only" in query_params:
             active_only = _coerce_flag_to_bool(query_params["active_only"], default=active_only)
 
+        # Workaround for FastMCP stripping query parameters - centralized helper
+        kwargs = {"active_only": active_only}
+        _merge_query_params_from_context(ctx, kwargs, [], bool_params=["active_only"])
+        active_only = kwargs["active_only"]
+
         project = await _get_project_by_identifier(slug_value)
         await ensure_schema()
         if project.id is None:
@@ -7847,7 +8040,11 @@ def build_mcp_server() -> FastMCP:
         return payload
 
     @mcp.resource("resource://message/{message_id}", mime_type="application/json")
-    async def message_resource(message_id: str, project: Optional[str] = None) -> dict[str, Any]:
+    async def message_resource(
+        message_id: str,
+        ctx: Context,
+        project: Optional[str] = None,
+    ) -> dict[str, Any]:
         """
         Read a single message by id within a project.
 
@@ -7883,13 +8080,18 @@ def build_mcp_server() -> FastMCP:
             id_part, _, qs = message_id.partition("?")
             message_id = id_part
             try:
-                from urllib.parse import parse_qs
-
                 parsed = parse_qs(qs, keep_blank_values=False)
-                if project is None and parsed.get("project"):
-                    project = parsed["project"][0]
+                project_value = _first_param(parsed, "project")
+                if project is None and project_value:
+                    project = project_value
             except Exception:
                 pass
+
+        # Workaround for FastMCP stripping query parameters
+        params = _extract_raw_uri_params(ctx)
+        project_value = _first_param(params, "project")
+        if project is None and project_value:
+            project = project_value
         if project is None:
             # Try to infer project by message id when unique
             async with get_session() as s_auto:
@@ -7912,9 +8114,10 @@ def build_mcp_server() -> FastMCP:
         payload["from"] = sender.name
         return payload
 
-    @mcp.resource("resource://thread/{thread_id*}", mime_type="application/json")
+    @mcp.resource("resource://thread/{thread_id*}{?project,include_bodies}", mime_type="application/json")
     async def thread_resource(
         thread_id: str,
+        ctx: Context,
         project: Optional[str] = None,
         include_bodies: bool = False,
     ) -> dict[str, Any]:
@@ -7958,17 +8161,19 @@ def build_mcp_server() -> FastMCP:
             id_part, _, qs = thread_id.partition("?")
             thread_id = id_part
             try:
-                from urllib.parse import parse_qs
-
                 parsed = parse_qs(qs, keep_blank_values=False)
-                if project is None and "project" in parsed and parsed["project"]:
-                    project = parsed["project"][0]
-                # Always parse include_bodies from query string if present, overriding any default
-                if parsed.get("include_bodies"):
-                    include_bodies = _coerce_flag_to_bool(parsed["include_bodies"][0], default=False)
+                project_value = _first_param(parsed, "project")
+                if project is None and project_value:
+                    project = project_value
+                include_bodies = _coerce_param_bool(parsed, "include_bodies", default=include_bodies)
             except Exception:
                 pass
 
+        # Workaround for FastMCP stripping query parameters - centralized helper
+        kwargs = {"project": project, "include_bodies": include_bodies}
+        _merge_query_params_from_context(ctx, kwargs, ["project"], bool_params=["include_bodies"])
+        project = kwargs["project"]
+        include_bodies = kwargs["include_bodies"]
         logger.debug(
             f"thread_resource called: thread_id={thread_id!r}, project={project!r}, include_bodies={include_bodies!r}"
         )
@@ -8037,6 +8242,7 @@ def build_mcp_server() -> FastMCP:
     )
     async def inbox_resource(
         agent: str,
+        ctx: Context,
         project: Optional[str] = None,
         since_ts: Optional[str] = None,
         urgent_only: bool = False,
@@ -8083,24 +8289,36 @@ def build_mcp_server() -> FastMCP:
             name_part, _, qs = agent.partition("?")
             agent = name_part
             try:
-                from urllib.parse import parse_qs
-
                 parsed = parse_qs(qs, keep_blank_values=False)
-                if project is None and "project" in parsed and parsed["project"]:
-                    project = parsed["project"][0]
-                if since_ts is None and "since_ts" in parsed and parsed["since_ts"]:
-                    since_ts = parsed["since_ts"][0]
-                if parsed.get("urgent_only"):
-                    val = parsed["urgent_only"][0].strip().lower()
-                    urgent_only = val in ("1", "true", "t", "yes", "y")
-                if parsed.get("include_bodies"):
-                    val = parsed["include_bodies"][0].strip().lower()
-                    include_bodies = val in ("1", "true", "t", "yes", "y")
-                if parsed.get("limit"):
+                project_value = _first_param(parsed, "project")
+                if project is None and project_value:
+                    project = project_value
+                since_value = _first_param(parsed, "since_ts")
+                if since_ts is None and since_value:
+                    since_ts = since_value
+                urgent_only = _coerce_param_bool(parsed, "urgent_only", default=urgent_only)
+                include_bodies = _coerce_param_bool(parsed, "include_bodies", default=include_bodies)
+                limit_value = _first_param(parsed, "limit")
+                if limit_value:
                     with suppress(Exception):
-                        limit = int(parsed["limit"][0])
+                        limit = int(limit_value)
             except Exception:
                 pass
+
+        # Workaround for FastMCP stripping query parameters
+        params = _extract_raw_uri_params(ctx)
+        project_value = _first_param(params, "project")
+        if project is None and project_value:
+            project = project_value
+        since_value = _first_param(params, "since_ts")
+        if since_value:
+            since_ts = since_value
+        urgent_only = _coerce_param_bool(params, "urgent_only", default=urgent_only)
+        include_bodies = _coerce_param_bool(params, "include_bodies", default=include_bodies)
+        limit_value = _first_param(params, "limit")
+        if limit_value:
+            with suppress(ValueError):
+                limit = int(limit_value)
 
         if project is None:
             # Auto-detect project by agent name if uniquely identifiable
@@ -8139,7 +8357,9 @@ def build_mcp_server() -> FastMCP:
         }
 
     @mcp.resource("resource://views/urgent-unread/{agent}", mime_type="application/json")
-    async def urgent_unread_view(agent: str, project: Optional[str] = None, limit: int = 20) -> dict[str, Any]:
+    async def urgent_unread_view(
+        agent: str, ctx: Context, project: Optional[str] = None, limit: int = 20
+    ) -> dict[str, Any]:
         """
         Convenience view listing urgent and high-importance messages that are unread for an agent.
 
@@ -8157,16 +8377,26 @@ def build_mcp_server() -> FastMCP:
             name_part, _, qs = agent.partition("?")
             agent = name_part
             try:
-                from urllib.parse import parse_qs
-
                 parsed = parse_qs(qs, keep_blank_values=False)
-                if project is None and parsed.get("project"):
-                    project = parsed["project"][0]
-                if parsed.get("limit"):
+                project_value = _first_param(parsed, "project")
+                if project is None and project_value:
+                    project = project_value
+                limit_value = _first_param(parsed, "limit")
+                if limit_value:
                     with suppress(Exception):
-                        limit = int(parsed["limit"][0])
+                        limit = int(limit_value)
             except Exception:
                 pass
+
+        # Workaround for FastMCP stripping query parameters
+        params = _extract_raw_uri_params(ctx)
+        project_value = _first_param(params, "project")
+        if project is None and project_value:
+            project = project_value
+        limit_value = _first_param(params, "limit")
+        if limit_value:
+            with suppress(ValueError):
+                limit = int(limit_value)
 
         if project is None:
             async with get_session() as s_auto:
@@ -8205,7 +8435,9 @@ def build_mcp_server() -> FastMCP:
         }
 
     @mcp.resource("resource://views/ack-required/{agent}", mime_type="application/json")
-    async def ack_required_view(agent: str, project: Optional[str] = None, limit: int = 20) -> dict[str, Any]:
+    async def ack_required_view(
+        agent: str, ctx: Context, project: Optional[str] = None, limit: int = 20
+    ) -> dict[str, Any]:
         """
         Convenience view listing messages requiring acknowledgement for an agent where ack is pending.
 
@@ -8223,16 +8455,26 @@ def build_mcp_server() -> FastMCP:
             name_part, _, qs = agent.partition("?")
             agent = name_part
             try:
-                from urllib.parse import parse_qs
-
                 parsed = parse_qs(qs, keep_blank_values=False)
-                if project is None and parsed.get("project"):
-                    project = parsed["project"][0]
-                if parsed.get("limit"):
+                project_value = _first_param(parsed, "project")
+                if project is None and project_value:
+                    project = project_value
+                limit_value = _first_param(parsed, "limit")
+                if limit_value:
                     with suppress(Exception):
-                        limit = int(parsed["limit"][0])
+                        limit = int(limit_value)
             except Exception:
                 pass
+
+        # Workaround for FastMCP stripping query parameters
+        params = _extract_raw_uri_params(ctx)
+        project_value = _first_param(params, "project")
+        if project is None and project_value:
+            project = project_value
+        limit_value = _first_param(params, "limit")
+        if limit_value:
+            with suppress(ValueError):
+                limit = int(limit_value)
 
         if project is None:
             async with get_session() as s_auto:
@@ -8276,6 +8518,7 @@ def build_mcp_server() -> FastMCP:
     @mcp.resource("resource://views/acks-stale/{agent}", mime_type="application/json")
     async def acks_stale_view(
         agent: str,
+        ctx: Context,
         project: Optional[str] = None,
         ttl_seconds: Optional[int] = None,
         limit: int = 20,
@@ -8294,24 +8537,24 @@ def build_mcp_server() -> FastMCP:
         limit : int
             Max number of messages to return.
         """
-        # Parse query embedded in agent path if present
+        # Use unified helper for robust parameter extraction
+        params = _extract_raw_uri_params(ctx, agent)
         if "?" in agent:
-            name_part, _, qs = agent.partition("?")
-            agent = name_part
-            try:
-                from urllib.parse import parse_qs
+            agent = agent.partition("?")[0]
 
-                parsed = parse_qs(qs, keep_blank_values=False)
-                if project is None and parsed.get("project"):
-                    project = parsed["project"][0]
-                if parsed.get("ttl_seconds"):
-                    with suppress(Exception):
-                        ttl_seconds = int(parsed["ttl_seconds"][0])
-                if parsed.get("limit"):
-                    with suppress(Exception):
-                        limit = int(parsed["limit"][0])
-            except Exception:
-                pass
+        proj_val = _first_param(params, "project")
+        if project is None and proj_val:
+            project = proj_val
+
+        ttl_val = _first_param(params, "ttl_seconds")
+        if ttl_val:
+            with suppress(ValueError):
+                ttl_seconds = int(ttl_val)
+
+        limit_val = _first_param(params, "limit")
+        if limit_val:
+            with suppress(ValueError):
+                limit = int(limit_val)
 
         if project is None:
             async with get_session() as s_auto:
@@ -8322,10 +8565,10 @@ def build_mcp_server() -> FastMCP:
                     .limit(2)
                 )
                 projects = [row[0] for row in rows.all()]
-            if len(projects) == 1:
-                project_obj = projects[0]
-            else:
-                raise ValueError("project parameter is required for stale acks view")
+                if len(projects) == 1:
+                    project_obj = projects[0]
+                else:
+                    raise ValueError("project parameter is required for stale acks view")
         else:
             project_obj = await _get_project_by_identifier(project)
         agent_obj = await _get_agent(project_obj, agent)
@@ -8370,33 +8613,33 @@ def build_mcp_server() -> FastMCP:
             "messages": out,
         }
 
-    @mcp.resource("resource://views/ack-overdue/{agent}", mime_type="application/json")
+    @mcp.resource("resource://views/ack-overdue/{agent}{?project,ttl_minutes,limit}", mime_type="application/json")
     async def ack_overdue_view(
         agent: str,
+        ctx: Context,
         project: Optional[str] = None,
         ttl_minutes: int = 60,
         limit: int = 50,
     ) -> dict[str, Any]:
         """List messages requiring acknowledgement older than ttl_minutes without ack."""
         # Parse query embedded in agent path if present
+        params = _extract_raw_uri_params(ctx, agent)
         if "?" in agent:
-            name_part, _, qs = agent.partition("?")
-            agent = name_part
-            try:
-                from urllib.parse import parse_qs
+            agent = agent.partition("?")[0]
 
-                parsed = parse_qs(qs, keep_blank_values=False)
-                if project is None and parsed.get("project"):
-                    project = parsed["project"][0]
-                if parsed.get("ttl_minutes"):
-                    with suppress(Exception):
-                        ttl_minutes = int(parsed["ttl_minutes"][0])
-                if parsed.get("limit"):
-                    with suppress(Exception):
-                        limit = int(parsed["limit"][0])
-            except Exception:
-                pass
+        project_value = _first_param(params, "project")
+        if project is None and project_value:
+            project = project_value
 
+        ttl_value = _first_param(params, "ttl_minutes")
+        if ttl_value:
+            with suppress(ValueError):
+                ttl_minutes = int(ttl_value)
+
+        limit_value = _first_param(params, "limit")
+        if limit_value:
+            with suppress(ValueError):
+                limit = int(limit_value)
         if project is None:
             async with get_session() as s_auto:
                 rows = await s_auto.execute(
@@ -8444,7 +8687,9 @@ def build_mcp_server() -> FastMCP:
         return {"project": project_obj.human_key, "agent": agent_obj.name, "count": len(out), "messages": out}
 
     @mcp.resource("resource://mailbox/{agent}", mime_type="application/json")
-    async def mailbox_resource(agent: str, project: Optional[str] = None, limit: int = 20) -> dict[str, Any]:
+    async def mailbox_resource(
+        agent: str, ctx: Context, project: Optional[str] = None, limit: int = 20
+    ) -> dict[str, Any]:
         """
         List recent messages in an agent's mailbox.
 
@@ -8458,16 +8703,26 @@ def build_mcp_server() -> FastMCP:
             name_part, _, qs = agent.partition("?")
             agent = name_part
             try:
-                from urllib.parse import parse_qs
-
                 parsed = parse_qs(qs, keep_blank_values=False)
-                if project is None and parsed.get("project"):
-                    project = parsed["project"][0]
-                if parsed.get("limit"):
+                project_value = _first_param(parsed, "project")
+                if project is None and project_value:
+                    project = project_value
+                limit_value = _first_param(parsed, "limit")
+                if limit_value:
                     with suppress(Exception):
-                        limit = int(parsed["limit"][0])
+                        limit = int(limit_value)
             except Exception:
                 pass
+
+        # Workaround for FastMCP stripping query parameters
+        params = _extract_raw_uri_params(ctx)
+        project_value = _first_param(params, "project")
+        if project is None and project_value:
+            project = project_value
+        limit_value = _first_param(params, "limit")
+        if limit_value:
+            with suppress(ValueError):
+                limit = int(limit_value)
 
         if project is None:
             async with get_session() as s_auto:
@@ -8500,7 +8755,7 @@ def build_mcp_server() -> FastMCP:
         mime_type="application/json",
     )
     async def mailbox_with_commits_resource(
-        agent: str, project: Optional[str] = None, limit: int = 20
+        agent: str, ctx: Context, project: Optional[str] = None, limit: int = 20
     ) -> dict[str, Any]:
         """List recent messages in an agent's mailbox (commit metadata unavailable)."""
         # Parse query embedded in agent path if present
@@ -8508,16 +8763,26 @@ def build_mcp_server() -> FastMCP:
             name_part, _, qs = agent.partition("?")
             agent = name_part
             try:
-                from urllib.parse import parse_qs
-
                 parsed = parse_qs(qs, keep_blank_values=False)
-                if project is None and parsed.get("project"):
-                    project = parsed["project"][0]
-                if parsed.get("limit"):
+                project_value = _first_param(parsed, "project")
+                if project is None and project_value:
+                    project = project_value
+                limit_value = _first_param(parsed, "limit")
+                if limit_value:
                     with suppress(Exception):
-                        limit = int(parsed["limit"][0])
+                        limit = int(limit_value)
             except Exception:
                 pass
+
+        # Workaround for FastMCP stripping query parameters
+        params = _extract_raw_uri_params(ctx)
+        project_value = _first_param(params, "project")
+        if project is None and project_value:
+            project = project_value
+        limit_value = _first_param(params, "limit")
+        if limit_value:
+            with suppress(ValueError):
+                limit = int(limit_value)
         if project is None:
             async with get_session() as s_auto:
                 rows = await s_auto.execute(
@@ -8546,6 +8811,7 @@ def build_mcp_server() -> FastMCP:
     @mcp.resource("resource://outbox/{agent}", mime_type="application/json")
     async def outbox_resource(
         agent: str,
+        ctx: Context,
         project: Optional[str] = None,
         limit: int = 20,
         include_bodies: bool = False,
@@ -8557,25 +8823,49 @@ def build_mcp_server() -> FastMCP:
             name_part, _, qs = agent.partition("?")
             agent = name_part
             try:
-                from urllib.parse import parse_qs
-
                 parsed = parse_qs(qs, keep_blank_values=False)
-                if project is None and parsed.get("project"):
-                    project = parsed["project"][0]
-                if parsed.get("limit"):
-                    from contextlib import suppress
-
+                project_value = _first_param(parsed, "project")
+                if project is None and project_value:
+                    project = project_value
+                limit_value = _first_param(parsed, "limit")
+                if limit_value:
                     with suppress(Exception):
-                        limit = int(parsed["limit"][0])
-                if parsed.get("include_bodies"):
-                    include_bodies = parsed["include_bodies"][0].lower() in {"1", "true", "t", "yes", "y"}
-                if parsed.get("since_ts"):
-                    since_ts = parsed["since_ts"][0]
+                        limit = int(limit_value)
+                include_bodies = _coerce_param_bool(parsed, "include_bodies", default=include_bodies)
+                since_value = _first_param(parsed, "since_ts")
+                if since_value:
+                    since_ts = since_value
             except Exception:
                 pass
+
+        # Workaround for FastMCP stripping query parameters
+        params = _extract_raw_uri_params(ctx)
+        project_value = _first_param(params, "project")
+        if project is None and project_value:
+            project = project_value
+        limit_value = _first_param(params, "limit")
+        if limit_value:
+            with suppress(ValueError):
+                limit = int(limit_value)
+        include_bodies = _coerce_param_bool(params, "include_bodies", default=include_bodies)
+        since_value = _first_param(params, "since_ts")
+        if since_value:
+            since_ts = since_value
         if project is None:
-            raise ValueError("project parameter is required for outbox resource")
-        project_obj = await _get_project_by_identifier(project)
+            async with get_session() as s_auto:
+                rows = await s_auto.execute(
+                    select(Project)
+                    .join(Agent, Agent.project_id == Project.id)
+                    .where(func.lower(Agent.name) == agent.lower(), cast(Any, Agent.is_active).is_(True))
+                    .limit(2)
+                )
+                projects = [row[0] for row in rows.all()]
+            if len(projects) == 1:
+                project_obj = projects[0]
+            else:
+                raise ValueError("project parameter is required for outbox resource")
+        else:
+            project_obj = await _get_project_by_identifier(project)
         agent_obj = await _get_agent(project_obj, agent)
         items = await _list_outbox(project_obj, agent_obj, limit, include_bodies, since_ts)
         out: list[dict[str, Any]] = []
