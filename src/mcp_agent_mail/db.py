@@ -3,19 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from functools import wraps
 from typing import Any, TypeVar
 
-from sqlalchemy.exc import DatabaseError, IntegrityError, OperationalError
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 
 from .config import DatabaseSettings, Settings, get_settings
 
 T = TypeVar("T")
+
+logger = logging.getLogger(__name__)
 
 _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
@@ -64,11 +67,8 @@ def retry_on_db_lock(max_retries: int = 5, base_delay: float = 0.1, max_delay: f
                     jitter = delay * 0.25 * (2 * random.random() - 1)  # ±25% jitter
                     total_delay = delay + jitter
 
-                    # Log the retry (if logging is available)
-                    import logging
-
                     func_name = getattr(func, "__name__", getattr(func, "__qualname__", "<callable>"))
-                    logging.warning(
+                    logger.warning(
                         f"Database locked, retrying {func_name} "
                         f"(attempt {attempt + 1}/{max_retries}) after {total_delay:.2f}s"
                     )
@@ -146,7 +146,7 @@ def _build_engine(settings: DatabaseSettings) -> AsyncEngine:
     if is_sqlite:
 
         @event.listens_for(engine.sync_engine, "connect")
-        def set_sqlite_pragma(dbapi_conn, connection_record):
+        def set_sqlite_pragma(dbapi_conn: Any, connection_record: Any) -> None:  # pragma: no cover - db hook
             """Set SQLite PRAGMAs for better concurrent performance on each connection."""
             cursor = dbapi_conn.cursor()
             # Enable WAL mode for concurrent reads/writes
@@ -155,6 +155,8 @@ def _build_engine(settings: DatabaseSettings) -> AsyncEngine:
             cursor.execute("PRAGMA synchronous=NORMAL")
             # Set busy timeout (wait up to 60 seconds for locks, increased from 30)
             cursor.execute("PRAGMA busy_timeout=60000")
+            # Enforce foreign key constraints (SQLite defaults to OFF)
+            cursor.execute("PRAGMA foreign_keys=ON")
             cursor.close()
 
     return engine
@@ -237,10 +239,6 @@ def _check_and_fix_duplicate_agent_names(connection) -> None:
     This handles migration from the old schema (per-project uniqueness) to the new schema
     (global uniqueness). Any duplicate names are automatically renamed by appending a number.
     """
-    import logging
-
-    logger = logging.getLogger(__name__)
-
     # Find all duplicate names (case-insensitive)
     cursor = connection.exec_driver_sql(
         """
@@ -400,10 +398,6 @@ def _migrate_project_id_nullable(connection) -> None:
 
     Existing data retains its project_id values; new records can have NULL.
     """
-    import logging
-
-    logger = logging.getLogger(__name__)
-
     # Check if agents.project_id is NOT NULL
     agents_info = connection.exec_driver_sql("PRAGMA table_info('agents')").fetchall()
     agents_project_id_notnull = False
@@ -434,6 +428,41 @@ def _migrate_project_id_nullable(connection) -> None:
 
 def _recreate_agents_table_nullable_project_id(connection) -> None:
     """Recreate agents table with nullable project_id."""
+    # Clean up orphaned project references so FK enforcement does not break migration
+    orphaned_projects_result = connection.exec_driver_sql(
+        """
+        SELECT COUNT(*)
+        FROM agents a
+        LEFT JOIN projects p ON p.id = a.project_id
+        WHERE a.project_id IS NOT NULL
+          AND p.id IS NULL
+        """
+    )
+    orphaned_projects = orphaned_projects_result.scalar_one()
+    if orphaned_projects:
+        logger.warning(
+            "Found %s agent(s) with orphaned project_id; setting project_id to NULL before migration",
+            orphaned_projects,
+        )
+        connection.exec_driver_sql(
+            """
+            UPDATE agents
+            SET project_id = NULL
+            WHERE project_id IS NOT NULL
+              AND project_id NOT IN (SELECT id FROM projects)
+            """
+        )
+
+    invalid_count_result = connection.exec_driver_sql(
+        """
+        SELECT COUNT(*)
+        FROM agents
+        WHERE name IS NULL OR program IS NULL OR model IS NULL
+        """
+    )
+    invalid_count = invalid_count_result.scalar_one()
+    if invalid_count > 0:
+        raise RuntimeError("Cannot migrate agents table: rows contain NULL in required columns (name/program/model).")
     # Create new table with nullable project_id
     connection.exec_driver_sql(
         """
@@ -455,42 +484,7 @@ def _recreate_agents_table_nullable_project_id(connection) -> None:
         """
     )
 
-    # Validate data before copying from old table
-    invalid_count_result = connection.exec_driver_sql(
-        """
-        SELECT COUNT(*)
-        FROM agents
-        WHERE name IS NULL
-           OR program IS NULL
-           OR model IS NULL
-        """
-    )
-    invalid_count = invalid_count_result.scalar_one()
-    if invalid_count > 0:
-        raise RuntimeError(
-            f"Cannot migrate agents table: {invalid_count} row(s) have NULL values "
-            "in required columns (name, program, or model)."
-        )
-
-    # Validate no duplicate active agent names (case-insensitive)
-    duplicate_names_result = connection.exec_driver_sql(
-        """
-        SELECT lower(name) as name_lower, COUNT(*) as cnt
-        FROM agents
-        WHERE is_active = 1
-        GROUP BY lower(name)
-        HAVING COUNT(*) > 1
-        """
-    )
-    duplicate_names = duplicate_names_result.fetchall()
-    if duplicate_names:
-        duplicate_list = ", ".join([f"'{row[0]}' (count: {row[1]})" for row in duplicate_names])
-        raise RuntimeError(
-            f"Cannot migrate agents table: duplicate active agent names found (case-insensitive): {duplicate_list}. "
-            "Agent names must be globally unique."
-        )
-
-    # Copy data from old table with explicit error handling
+    # Copy data from old table
     try:
         connection.exec_driver_sql(
             """
@@ -506,7 +500,7 @@ def _recreate_agents_table_nullable_project_id(connection) -> None:
             FROM agents
             """
         )
-    except (IntegrityError, OperationalError, DatabaseError) as exc:  # pragma: no cover - critical migration error handling
+    except Exception as exc:  # pragma: no cover - defensive logging
         raise RuntimeError("Failed to migrate data from agents to agents_new") from exc
 
     # Drop old table and rename new one
@@ -516,21 +510,69 @@ def _recreate_agents_table_nullable_project_id(connection) -> None:
     # Recreate indexes
     connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_agents_project_id ON agents(project_id)")
     connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_agents_name ON agents(name)")
-    # Create unique index for case-insensitive agent name uniqueness (global across all projects)
     connection.exec_driver_sql(
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_agents_name_ci "
-        "ON agents(lower(name)) WHERE is_active = 1"
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_agents_name_ci ON agents(lower(name)) WHERE is_active = 1"
     )
 
 
 def _recreate_messages_table_nullable_project_id(connection) -> None:
-    """Recreate messages table with nullable project_id.
-    
-    Note: SQLite does not enforce foreign key constraints by default unless
-    PRAGMA foreign_keys=ON is set. The REFERENCES clauses are included in the
-    schema for documentation and compatibility, but constraint enforcement is
-    not active in this database configuration.
-    """
+    """Recreate messages table with nullable project_id."""
+    # Clean up orphaned project references so FK enforcement does not break migration
+    orphaned_projects_result = connection.exec_driver_sql(
+        """
+        SELECT COUNT(*)
+        FROM messages m
+        LEFT JOIN projects p ON p.id = m.project_id
+        WHERE m.project_id IS NOT NULL
+          AND p.id IS NULL
+        """
+    )
+    orphaned_projects = orphaned_projects_result.scalar_one()
+    if orphaned_projects:
+        logger.warning(
+            "Found %s message(s) with orphaned project_id; setting project_id to NULL before migration",
+            orphaned_projects,
+        )
+        connection.exec_driver_sql(
+            """
+            UPDATE messages
+            SET project_id = NULL
+            WHERE project_id IS NOT NULL
+              AND project_id NOT IN (SELECT id FROM projects)
+            """
+        )
+
+    # Validate sender references remain resolvable once FK enforcement is applied
+    orphaned_senders_result = connection.exec_driver_sql(
+        """
+        SELECT COUNT(*)
+        FROM messages m
+        LEFT JOIN agents a ON a.id = m.sender_id
+        WHERE a.id IS NULL
+        """
+    )
+    orphaned_senders = orphaned_senders_result.scalar_one()
+    if orphaned_senders:
+        raise RuntimeError(
+            "Cannot migrate messages table: sender_id references missing agents "
+            f"({orphaned_senders} orphaned row(s)). Please recreate the referenced agents "
+            "or remove the invalid rows before retrying."
+        )
+
+    invalid_count_result = connection.exec_driver_sql(
+        """
+        SELECT COUNT(*)
+        FROM messages
+        WHERE sender_id IS NULL
+           OR subject IS NULL
+           OR body_md IS NULL
+        """
+    )
+    invalid_count = invalid_count_result.scalar_one()
+    if invalid_count > 0:
+        raise RuntimeError(
+            "Cannot migrate messages table: NULL values found in required columns (sender_id/subject/body_md)."
+        )
     # Create new table with nullable project_id
     connection.exec_driver_sql(
         """
@@ -549,24 +591,7 @@ def _recreate_messages_table_nullable_project_id(connection) -> None:
         """
     )
 
-    # Validate data before copying from old table
-    invalid_count_result = connection.exec_driver_sql(
-        """
-        SELECT COUNT(*)
-        FROM messages
-        WHERE sender_id IS NULL
-           OR subject IS NULL
-           OR body_md IS NULL
-        """
-    )
-    invalid_count = invalid_count_result.scalar_one()
-    if invalid_count > 0:
-        raise RuntimeError(
-            f"Cannot migrate messages table: {invalid_count} row(s) have NULL values "
-            "in required columns (sender_id, subject, or body_md)."
-        )
-
-    # Copy data from old table with explicit error handling
+    # Copy data from old table
     try:
         connection.exec_driver_sql(
             """
@@ -580,7 +605,7 @@ def _recreate_messages_table_nullable_project_id(connection) -> None:
             FROM messages
             """
         )
-    except (IntegrityError, OperationalError, DatabaseError) as exc:  # pragma: no cover - critical migration error handling
+    except Exception as exc:  # pragma: no cover - defensive logging
         raise RuntimeError("Failed to migrate data from messages to messages_new") from exc
 
     # Drop old table and rename new one

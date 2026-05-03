@@ -9,13 +9,26 @@ from pathlib import Path
 from typing import Any
 
 from mcp_agent_mail.config import Settings, get_settings
-from mcp_agent_mail.storage import AsyncFileLock, ensure_archive
+from mcp_agent_mail.storage import AsyncFileLock, ensure_archive, ensure_runtime_project_root, is_archive_enabled
 from mcp_agent_mail.utils import safe_filesystem_component, slugify
 
 
 def _normalize_branch(value: str | None) -> str:
     branch = (value or "main").strip()
     return branch or "main"
+
+
+async def _resolve_project_root(settings: Settings, project_key: str) -> Path:
+    """Return the filesystem root where build slot artifacts should be stored.
+
+    Prefer the Git-backed project archive when enabled; fall back to a runtime
+    root when archive storage is disabled.
+    """
+    if is_archive_enabled(settings):
+        archive = await ensure_archive(settings, project_key)
+        return archive.root
+    slug = slugify(project_key)
+    return await ensure_runtime_project_root(settings, slug)
 
 
 def _slot_dir(archive_root: Path, slot: str) -> Path:
@@ -73,12 +86,10 @@ async def acquire_build_slot(
     # Enforce minimum TTL
     ttl_seconds = max(60, ttl_seconds)
 
-    # Resolve project archive
-    slug = slugify(project_key)
-    archive = await ensure_archive(settings, slug, project_key=project_key)
+    project_root = await _resolve_project_root(settings, project_key)
 
     # Create slot directory
-    slot_dir = _slot_dir(archive.root, slot)
+    slot_dir = _slot_dir(project_root, slot)
     branch = _normalize_branch(os.environ.get("BRANCH"))
     holder = safe_filesystem_component(f"{agent_name}__{branch}")
     lease_path = slot_dir / f"{holder}.json"
@@ -178,10 +189,9 @@ async def renew_build_slot(
     if not _worktrees_enabled(settings):
         return {"disabled": True}
 
-    slug = slugify(project_key)
-    archive = await ensure_archive(settings, slug, project_key=project_key)
+    project_root = await _resolve_project_root(settings, project_key)
 
-    slot_dir = archive.root / "build_slots" / safe_filesystem_component(slot)
+    slot_dir = project_root / "build_slots" / safe_filesystem_component(slot)
     if not slot_dir.exists():
         return {"renewed": False, "error": "Slot not found"}
 
@@ -247,10 +257,9 @@ async def release_build_slot(
     if not _worktrees_enabled(settings):
         return {"disabled": True}
 
-    slug = slugify(project_key)
-    archive = await ensure_archive(settings, slug, project_key=project_key)
+    project_root = await _resolve_project_root(settings, project_key)
 
-    slot_dir = archive.root / "build_slots" / safe_filesystem_component(slot)
+    slot_dir = project_root / "build_slots" / safe_filesystem_component(slot)
     if not slot_dir.exists():
         return {"released": False, "error": "Slot not found"}
 
@@ -287,6 +296,10 @@ async def release_build_slot(
 
 def _worktrees_enabled(settings: Settings | None = None) -> bool:
     """Return True when worktree-aware coordination is enabled."""
+    env_value = os.environ.get("WORKTREES_ENABLED")
+    if env_value is not None:
+        normalized = env_value.strip().lower()
+        return normalized in {"1", "true", "yes", "on"}
     try:
         config = settings or get_settings()
     except Exception:
