@@ -196,8 +196,6 @@ tmp
 .artifacts*
 run_server_clean.sh.txt
 vendor/*
-# Internal automation prompt artifacts (auto-generated; do not commit—existing tracked file retained per repo policy)
-.agent_prompt*
 
 # Benchmark results - exclude transient JSON output files
 benchmarks/tmp_*
@@ -221,12 +219,10 @@ temp.lock.owner.json
 out/
 test_slack_webhook.py
 
-# MCP Mail - keep placeholder files but ignore generated archive contents
-.mcp_mail/*
+# MCP Mail - track messages.jsonl but ignore SQLite cache and test projects
 !.mcp_mail/
-!.mcp_mail/.gitignore
 !.mcp_mail/messages.jsonl
-!.mcp_mail/projects/
 .mcp_mail/*.db
 .mcp_mail/*.db-shm
 .mcp_mail/*.db-wal
+.mcp_mail/projects/
