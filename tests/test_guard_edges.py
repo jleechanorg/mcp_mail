@@ -15,7 +15,7 @@ from mcp_agent_mail.storage import ensure_archive
 async def test_guard_render_and_conflict_message(isolated_env, tmp_path: Path):
     settings = get_settings()
     archive = await ensure_archive(settings, "backend")
-    script = render_precommit_script(archive)
+    script = render_precommit_script(archive.root / "file_reservations")
     assert "archive storage removed" in script.lower()
 
     # Initialize dummy repo

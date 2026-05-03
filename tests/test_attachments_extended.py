@@ -71,7 +71,7 @@ async def test_attachment_inline_vs_file_threshold(isolated_env, monkeypatch):
             "register_agent",
             {"project_key": "Backend", "program": "codex", "model": "gpt-5", "name": "BlueLake"},
         )
-        # Inline expected
+        # With archive disabled, all attachments are file type regardless of threshold.
         r_inline = await client.call_tool(
             "send_message",
             {

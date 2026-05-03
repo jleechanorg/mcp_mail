@@ -29,9 +29,14 @@ class Agent(SQLModel, table=True):
     # Enforcement: Global case-insensitive uniqueness via functional index uq_agents_name_ci in db.py (_setup_fts)
     # Migration: Existing duplicate names are auto-renamed with numeric suffixes (Alice → Alice2, Alice3, etc.)
     # Race handling: IntegrityError is caught and converted to ValueError with clear user-facing message
+    #
+    # SCHEMA CHANGE (v0.2.0): project_id is now OPTIONAL (nullable)
+    # - Agent names are the primary identifier for routing (globally unique)
+    # - project_id is preserved for backwards compatibility and informational purposes
+    # - Existing agents keep their project_id; new agents can be created without one
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    project_id: int = Field(foreign_key="projects.id", index=True)
+    project_id: Optional[int] = Field(default=None, foreign_key="projects.id", index=True)
     name: str = Field(index=True, max_length=128)
     program: str = Field(max_length=128)
     model: str = Field(max_length=128)
@@ -60,9 +65,14 @@ class MessageRecipient(SQLModel, table=True):
 
 class Message(SQLModel, table=True):
     __tablename__ = "messages"
+    #
+    # SCHEMA CHANGE (v0.2.0): project_id is now OPTIONAL (nullable)
+    # - Messages are routed by sender/recipient agent IDs (globally unique agents)
+    # - project_id is preserved for backwards compatibility and informational purposes
+    # - Existing messages keep their project_id; new messages can be created without one
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    project_id: int = Field(foreign_key="projects.id", index=True)
+    project_id: Optional[int] = Field(default=None, foreign_key="projects.id", index=True)
     sender_id: int = Field(foreign_key="agents.id", index=True)
     thread_id: Optional[str] = Field(default=None, index=True, max_length=128)
     subject: str = Field(max_length=512)
@@ -78,6 +88,7 @@ class Message(SQLModel, table=True):
 
 class FileReservation(SQLModel, table=True):
     __tablename__ = "file_reservations"
+    # NOTE: FileReservation still requires project_id as file reservations are project-scoped
 
     id: Optional[int] = Field(default=None, primary_key=True)
     project_id: int = Field(foreign_key="projects.id", index=True)

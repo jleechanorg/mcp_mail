@@ -1937,7 +1937,7 @@ def guard_install(
 
     try:
         hook_path = asyncio.run(_run())
-    except ValueError as exc:  # convert to CLI-friendly error
+    except (ValueError, NotImplementedError) as exc:  # convert to CLI-friendly error
         raise typer.BadParameter(str(exc)) from exc
     console.print(f"[green]Installed guard for [bold]{project}[/] at {hook_path}.")
 
