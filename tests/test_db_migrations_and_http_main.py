@@ -37,10 +37,11 @@ async def _readiness_ok() -> int:
     settings = _config.get_settings()
     server = build_mcp_server()
     app = build_http_app(settings, server)
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.get("/health/readiness")
-        return r.status_code
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get("/health/readiness")
+            return r.status_code
 
 
 def test_readiness_ok_status(isolated_env):

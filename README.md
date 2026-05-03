@@ -3,7 +3,7 @@
 # MCP Mail (Forked from mcp_agent_mail)
 
 [![PyPI version](https://badge.fury.io/py/mcp-mail.svg)](https://pypi.org/project/mcp-mail/)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11-3.13](https://img.shields.io/badge/python-3.11--3.13-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **A mail-like coordination layer for coding agents**
@@ -72,6 +72,22 @@ scripts/run_server_with_token.sh
 **This Fork**: [jleechanorg/mcp_mail](https://github.com/jleechanorg/mcp_mail) •
 **Original**: [Dicklesworthstone/mcp_agent_mail](https://github.com/Dicklesworthstone/mcp_agent_mail)
 
+### ⚠️ Python Compatibility
+
+**Supported Python Versions:** 3.11, 3.12, 3.13
+
+**Not Supported:** Python 3.14+
+
+MCP Mail requires Python 3.11-3.13 due to an upstream dependency incompatibility with Python 3.14. The `beartype` library (a transitive dependency) uses `collections.abc.ByteString`, which was removed in Python 3.14.
+
+**What happens if I try to use Python 3.14?**
+- The launcher scripts will automatically skip Python 3.14 and select 3.13, 3.12, or 3.11
+- If only Python 3.14 is available, you'll see a clear error message with instructions
+- The server includes a startup guard that detects Python 3.14 and exits gracefully
+
+**When will Python 3.14 be supported?**
+We're monitoring upstream dependencies (beartype and related packages) for Python 3.14 compatibility. Once the dependency chain is updated, we'll re-enable Python 3.14 support.
+
 </div>
 
 ---
@@ -99,13 +115,43 @@ This fork extends the original MCP Agent Mail with **11 core enhancements** focu
 
 ### 🌐 Global Architecture (No Boundaries)
 
+> **Projects are informational labels** (e.g., repo paths, team names). They do **NOT** isolate agents — any agent can message any other agent regardless of project. `project_key` is retained for compatibility and labeling, but agent lookup and backend message queries do **not** use it to restrict reachability.
+
 - **🌍 Projects as Informational Metadata** - Projects don't create barriers:
   - Projects are **metadata only** (badges, tags, context) - NOT organizational boundaries
   - Unified inbox shows ALL messages regardless of project
   - Backend queries ignore project filters (messages fetched by agent, not project)
+  - Agent lookup is **global by name**; `project_key` is never used to restrict which agents are reachable
   - Consistent treatment across all layers (UI, database, tools)
+  - Note: `project_key` is still used for labeling and compatibility (e.g., where artifacts are written, how projects are labeled in logs/UI)
   - **Why**: Agents work seamlessly across multiple repos/projects
-  - **Implementation**: `src/mcp_agent_mail/app.py:2312-2327` (_get_message_by_id_global)
+  - **Implementation**: `src/mcp_agent_mail/app.py` (`_get_agent`, `_get_message_by_id_global`)
+
+**Cross-project messaging example:**
+```python
+# Alice is in project "repo-frontend", Bob is in project "repo-backend"
+# They can still message each other directly — project is just a label
+await client.call_tool("register_agent", {
+    "project_key": "repo-frontend", "program": "claude-code", "model": "opus-4", "name": "Alice"
+})
+await client.call_tool("register_agent", {
+    "project_key": "repo-backend", "program": "claude-code", "model": "opus-4", "name": "Bob"
+})
+
+# Alice (project: repo-frontend) sends to Bob (project: repo-backend) — works seamlessly
+await client.call_tool("send_message", {
+    "project_key": "repo-frontend",
+    "sender_name": "Alice",
+    "to": ["Bob"],
+    "subject": "Cross-project hello",
+    "body_md": "Hi from frontend!",
+})
+
+# Bob fetches inbox and sees the message — even with a different project_key
+inbox = await client.call_tool("fetch_inbox", {
+    "project_key": "repo-frontend", "agent_name": "Bob"
+})
+```
 
 - **🎯 Globally Unique Agent Names** - Database-enforced global uniqueness:
   - **Case-insensitive** uniqueness across ALL projects (prevents name collisions)
@@ -201,43 +247,15 @@ for result in results:
 
 ### 📝 How Messages Are Stored
 
-Every message sent through MCP Agent Mail is stored in **two places** for redundancy and auditability:
+Every message sent through MCP Agent Mail is stored in SQLite.
 
-**1. Git Repository Archive** (`.mcp_mail/` by default - committed to your project)
-```
-.mcp_mail/                                  # ← Inside your project directory
-└── projects/
-    └── <project-slug>/
-        ├── messages/
-        │   └── YYYY/
-        │       └── MM/
-        │           └── <message-id>.md     # Canonical message with frontmatter
-        ├── agents/
-        │   └── mailboxes/
-        │       ├── <agent-name>/
-        │       │   ├── inbox/<msg-id>.md   # Symlink to canonical message
-        │       │   └── outbox/<msg-id>.md  # Symlink to canonical message
-        ├── attachments/
-        │   └── <hash-prefix>/
-        │       └── <sha1>.webp             # Images converted to WebP
-        └── file_reservations/
-            └── <sha1>.json                 # File lock metadata
-```
-
-**✅ Benefits of project-local storage (default):**
-- **Transparent collaboration**: All agent conversations committed alongside code
-- **Code review**: Review agent decisions as part of PR reviews
-- **Audit trail**: Full Git history of agent coordination
-- **Portable context**: Clone repo and see all agent communications
-- **Team sharing**: Everyone sees the same agent conversation history
-
-**2. SQLite Database** (`.mcp_mail/storage.sqlite3` - local only, not committed)
+**SQLite Database** (`~/.mcp_agent_mail_git_mailbox_repo/storage.sqlite3` by default)
 - Full-text search indexes (FTS5)
 - Message metadata (sender, recipients, timestamps)
 - Agent directory and profiles
 - File reservation tracking
 - Fast queries without scanning Git history
-- **Note**: SQLite database is gitignored (`.mcp_mail/*.db*`) - only messages are committed
+- **Note**: By default, the database and local artifacts live under `~/.mcp_agent_mail_git_mailbox_repo`
 
 ### 🔄 Git Commit Flow
 
@@ -265,39 +283,38 @@ When an agent sends a message via `send_message`, here's what happens:
 - **Blameable**: `git blame` traces who sent what and when
 - **Reversible**: `git revert` to undo problematic messages
 - **Portable**: Clone the repo to backup or share message history
-  
+
 **Configuration:**
-- Storage location: `STORAGE_ROOT` env var (default: `.mcp_mail`)
-  - **Project-local**: set `STORAGE_LOCAL_ARCHIVE_ENABLED=true` to store in `.mcp_mail` - messages stored in project directory and committed to Git
-  - **Project-key anchored**: set `STORAGE_PROJECT_KEY_ENABLED=true` to store under `<project_key>/.mcp_mail` (project_key must be the git repo root)
-  - **Default behavior**: Both storage modes disabled by default; must explicitly enable one to use MCP Agent Mail
-  - **Global alternative**: `~/.mcp_agent_mail_git_mailbox_repo` - messages stored in user home directory
-- Git author: `GIT_AUTHOR_NAME` and `GIT_AUTHOR_EMAIL` env vars
+- Storage location: `STORAGE_ROOT` env var (default: `~/.mcp_agent_mail_git_mailbox_repo`) for the SQLite DB and local artifacts
+- Archive storage has been removed; messages are no longer written to per-project Git archives
 
-**Messages are automatically committed to Git:**
+> **Important: DATABASE_URL must point to the same database for all agents.**
+> The default is an absolute path under your home directory:
+> `DATABASE_URL=sqlite+aiosqlite:///$HOME/.mcp_agent_mail_git_mailbox_repo/storage.sqlite3`
+> If you override it with a **relative** SQLite URL and run the server from different directories (e.g., multiple workspace tabs), each will create its own separate database and agents cannot see each other's messages.
+> For multi-workspace or Conductor setups, set an **absolute path**:
+> ```bash
+> export DATABASE_URL="sqlite+aiosqlite:////home/user/.mcp_agent_mail_git_mailbox_repo/storage.sqlite3"
+> ```
+
+**Messages are stored in SQLite by default:**
 ```bash
-# Just run the server - messages go to .mcp_mail/ by default
+# Just run the server - messages go to SQLite under STORAGE_ROOT by default
 uv run python -m mcp_agent_mail.http
-
-# Messages stored in ./mcp_mail/projects/<slug>/messages/
-# Commit to share: git add .mcp_mail && git commit -m "Add agent coordination messages"
 
 # Ensure git hooks are installed (enforces Ruff/ty/Bandit on commit)
 ./scripts/ensure_git_hooks.sh
 ```
 
-**🔒 Want private messages?** Use global storage instead:
+**🔒 Want private messages?** Use a global storage root instead:
 ```bash
-# Set STORAGE_ROOT to use global directory (not committed to Git)
+# Set STORAGE_ROOT to use a global directory outside the repo
 STORAGE_ROOT=~/.mcp_agent_mail_git_mailbox_repo uv run python -m mcp_agent_mail.http
-
-# Use project-key anchored storage (project_key must be repo root)
-STORAGE_PROJECT_KEY_ENABLED=true uv run python -m mcp_agent_mail.http
 ```
 
 ---
 
-**Summary**: This fork removes coordination barriers by making everything **global by default** - agents, messages, and projects all work across boundaries. Combined with advanced search with BM25 relevance ranking, auto-fetch inbox on registration, automatic @mention scanning, and project-local storage (`.mcp_mail/` directory), it creates a **frictionless multi-agent collaboration platform** while maintaining full Git auditability for all communications.
+**Summary**: This fork removes coordination barriers by making everything **global by default** - agents, messages, and projects all work across boundaries. Combined with advanced search with BM25 relevance ranking, auto-fetch inbox on registration, and automatic @mention scanning, it creates a **frictionless multi-agent collaboration platform** with SQLite-backed storage.
 
 ---
 
@@ -357,7 +374,7 @@ curl -fsSL https://raw.githubusercontent.com/jleechanorg/mcp_mail/main/scripts/i
 What this does:
 
 - Installs uv if missing and updates your PATH for this session
-- Creates a Python 3.14 virtual environment and installs dependencies with uv
+- Creates a Python 3.11-3.13 virtual environment and installs dependencies with uv
 - Runs the auto-detect integration to wire up supported agent tools
 - Starts the MCP HTTP server on port 8765 and prints a masked bearer token
 - Creates helper scripts under `scripts/` (including `run_server_with_token.sh`)
@@ -380,7 +397,7 @@ uv run python -m mcp_agent_mail.cli config set-port 9000
 
 ### If you want to do it yourself
 
-Clone the repo, set up and install with uv in a python 3.14 venv (install uv if you don't have it already), and then run `scripts/automatically_detect_all_installed_coding_agents_and_install_mcp_agent_mail_in_all.sh`. This will automatically set things up for your various installed coding agent tools and start the MCP server on port 8765. If you want to run the MCP server again in the future, simply run `scripts/run_server_with_token.sh`:
+Clone the repo, set up and install with uv in a Python 3.11-3.13 venv (install uv if you don't have it already), and then run `scripts/automatically_detect_all_installed_coding_agents_and_install_mcp_agent_mail_in_all.sh`. This will automatically set things up for your various installed coding agent tools and start the MCP server on port 8765. If you want to run the MCP server again in the future, simply run `scripts/run_server_with_token.sh`:
 
 ```bash
 # Install uv (if you don't have it already)
@@ -391,9 +408,10 @@ export PATH="$HOME/.local/bin:$PATH"
 git clone https://github.com/jleechanorg/mcp_mail
 cd mcp_mail
 
-# Create a Python 3.14 virtual environment and install dependencies
-uv python install 3.14
-uv venv -p 3.14
+# Create a Python 3.11-3.13 virtual environment and install dependencies
+# Note: Python 3.14+ is NOT supported due to upstream dependency incompatibilities
+uv python install 3.13
+uv venv -p 3.13
 source .venv/bin/activate
 uv sync
 
@@ -504,30 +522,78 @@ Prefer automation? Run `uv run python -m mcp_agent_mail.cli docs insert-blurbs` 
 
 ## Slack Integration
 
-MCP Agent Mail includes full Slack integration, enabling agents to send notifications and post messages to Slack channels. See [SLACK_BIDIRECTIONAL_SYNC.md](SLACK_BIDIRECTIONAL_SYNC.md) for complete documentation.
+MCP Agent Mail includes full **bidirectional Slack integration**, enabling agents to communicate through Slack channels. See [SLACK_BIDIRECTIONAL_SYNC.md](SLACK_BIDIRECTIONAL_SYNC.md) for complete documentation.
 
-**Quick Setup:**
+### Automated Setup (Recommended)
 
-1. Create a Slack app at [https://api.slack.com/apps](https://api.slack.com/apps)
-2. Add bot token scopes: `chat:write`, `channels:read`, `groups:read`, `channels:history`, `groups:history`, `reactions:read`, `app_mentions:read`
-3. Install to workspace and copy the bot token
-4. Configure in `.env`:
+Run the interactive setup script which guides you through the entire process:
+
+```bash
+./scripts/setup_slack_bot.sh
+```
+
+This script will:
+- Validate prerequisites (curl, jq)
+- Generate a one-click Slack app creation URL with all scopes pre-configured
+- Prompt for and securely save credentials to `~/.mcp_agent_mail_git_mailbox_repo/credentials.json`
+- Test your Slack connection and channel access
+- Provide next steps for starting the server
+
+### Manual Setup
+
+If you prefer manual configuration:
+
+1. **Create a Slack app** at [https://api.slack.com/apps](https://api.slack.com/apps)
+   - Choose "From scratch" and name it (e.g., "MCP Agent Mail")
+
+2. **Configure OAuth & Permissions** (Bot Token Scopes):
+   - `chat:write` - Post messages
+   - `chat:write.public` - Post to public channels
+   - `channels:read` - List channels
+   - `channels:history` - Read message history
+   - `groups:history` - Read private channel history (optional)
+
+3. **Install to workspace** and copy:
+   - **Bot User OAuth Token** (starts with `xoxb-`)
+   - **Signing Secret** (from Basic Information page)
+
+4. **Enable Event Subscriptions** (for bidirectional sync):
+   - Set Request URL to: `https://your-server.com/slack/events`
+   - For local testing, use [Cloudflare Tunnel](SLACK_BIDIRECTIONAL_SYNC.md#31-exposing-local-server-with-cloudflare-tunnel-recommended): `cloudflared tunnel --url http://localhost:8765`
+   - Subscribe to bot events: `message.channels`, `message.groups`
+
+5. **Configure credentials** (choose one):
+
+   **Option A: `~/.mcp_agent_mail_git_mailbox_repo/credentials.json`** (recommended):
+   ```json
+   {
+     "SLACK_ENABLED": "true",
+     "SLACK_BOT_TOKEN": "xoxb-your-token-here",
+     "SLACK_SIGNING_SECRET": "your-signing-secret",
+     "SLACK_DEFAULT_CHANNEL": "C0YOUR_CHANNEL_ID",
+     "SLACK_SYNC_ENABLED": "true"
+   }
+   ```
+
+   **Option B: Environment variables** (`.env` file):
    ```bash
    SLACK_ENABLED=true
    SLACK_BOT_TOKEN=xoxb-your-token-here
-   SLACK_DEFAULT_CHANNEL=general
+   SLACK_SIGNING_SECRET=your-signing-secret
+   SLACK_DEFAULT_CHANNEL=C0YOUR_CHANNEL_ID
+   SLACK_SYNC_ENABLED=true
    ```
-5. Restart the server
+
+6. **Restart the server**
 
 **Features:**
 
+- **Bidirectional Sync**: MCP messages post to Slack, Slack replies create MCP messages
+- **Thread Mapping**: Slack threads map to MCP `thread_id` for conversation continuity
 - **Automatic Notifications**: MCP messages automatically posted to Slack
 - **Manual Posting**: `slack_post_message()` tool for direct Slack posts
 - **Channel Discovery**: `slack_list_channels()` to explore available channels
-- **Channel Insights**: `slack_get_channel_info()` to inspect metadata and member counts before posting
-- **Thread Support**: MCP threads map to Slack threads for conversation continuity
 - **Rich Formatting**: Uses Slack Block Kit for enhanced message presentation
-- **Webhook Support**: Receive Slack events for future bidirectional sync
 
 **Example:**
 ```python
@@ -549,56 +615,25 @@ slack_post_message(
 )
 ```
 
-See [SLACK_BIDIRECTIONAL_SYNC.md](SLACK_BIDIRECTIONAL_SYNC.md) for full configuration options, MCP tools reference, webhook setup, and troubleshooting.
+### Configuration Reference
 
-## Slack Integration
+All Slack settings are configurable via `~/.mcp_agent_mail_git_mailbox_repo/credentials.json` or environment variables:
 
-MCP Agent Mail includes full Slack integration, enabling agents to send notifications and post messages to Slack channels. See [SLACK_BIDIRECTIONAL_SYNC.md](SLACK_BIDIRECTIONAL_SYNC.md) for complete documentation.
+| Setting | Required | Default | Description |
+|---------|----------|---------|-------------|
+| `SLACK_ENABLED` | Yes | `false` | Enable Slack integration |
+| `SLACK_BOT_TOKEN` | Yes | - | Bot OAuth token (`xoxb-...`) |
+| `SLACK_SIGNING_SECRET` | Recommended | - | Webhook signature verification |
+| `SLACK_DEFAULT_CHANNEL` | Yes | `general` | Channel ID for outbound messages |
+| `SLACK_SYNC_ENABLED` | For bidirectional | `false` | Enable Slack → MCP sync |
+| `SLACK_SYNC_CHANNELS` | No | (all) | Comma-separated channel IDs to sync |
+| `SLACK_SYNC_PROJECT_NAME` | No | `slack-sync` | Default project for Slack messages |
+| `SLACK_NOTIFY_ON_MESSAGE` | No | `true` | Auto-post MCP messages to Slack |
+| `SLACK_USE_BLOCKS` | No | `true` | Use Block Kit formatting |
 
-**Quick Setup:**
+**Finding Channel IDs**: Right-click a channel in Slack → Copy Link → extract the `C...` ID from the URL.
 
-1. Create a Slack app at [https://api.slack.com/apps](https://api.slack.com/apps)
-2. Add bot token scopes: `chat:write`, `channels:read`, `groups:read`, `channels:history`, `groups:history`, `reactions:read`, `app_mentions:read`
-3. Install to workspace and copy the bot token
-4. Configure in `.env`:
-   ```bash
-   SLACK_ENABLED=true
-   SLACK_BOT_TOKEN=xoxb-your-token-here
-   SLACK_DEFAULT_CHANNEL=general
-   ```
-5. Restart the server
-
-**Features:**
-
-- **Automatic Notifications**: MCP messages automatically posted to Slack
-- **Manual Posting**: `slack_post_message()` tool for direct Slack posts
-- **Channel Discovery**: `slack_list_channels()` to explore available channels
-- **Channel Insights**: `slack_get_channel_info()` to inspect metadata and member counts before posting
-- **Thread Support**: MCP threads map to Slack threads for conversation continuity
-- **Rich Formatting**: Uses Slack Block Kit for enhanced message presentation
-- **Webhook Support**: Receive Slack events for future bidirectional sync
-
-**Example:**
-```python
-# Automatically notify Slack when sending an MCP message
-send_message(
-    project_key="myproject",
-    agent_name="BlueWhale",
-    to=["GreenCastle"],
-    subject="Deploy completed",
-    body_md="Production deployment successful ✅",
-    importance="normal"
-)
-# → Slack notification appears in configured channel
-
-# Or post directly to Slack
-slack_post_message(
-    channel="deployments",
-    text="🚀 Build #1234 deployed to production"
-)
-```
-
-See [SLACK_BIDIRECTIONAL_SYNC.md](SLACK_BIDIRECTIONAL_SYNC.md) for full configuration options, MCP tools reference, webhook setup, and troubleshooting.
+See [SLACK_BIDIRECTIONAL_SYNC.md](SLACK_BIDIRECTIONAL_SYNC.md) for full documentation, webhook setup, tunneling for local development, and troubleshooting.
 
 ## Core ideas (at a glance)
 
@@ -1907,10 +1942,11 @@ uv run python -m mcp_agent_mail.cli serve-http --port 9000
 
 ```python
 from decouple import Config as DecoupleConfig, RepositoryEnv
+from pathlib import Path
 
 decouple_config = DecoupleConfig(RepositoryEnv(".env"))
 
-STORAGE_ROOT = decouple_config("STORAGE_ROOT", default=".mcp_mail")
+STORAGE_ROOT = decouple_config("STORAGE_ROOT", default=str(Path.home() / ".mcp_agent_mail_git_mailbox_repo"))
 HTTP_HOST = decouple_config("HTTP_HOST", default="127.0.0.1")
 HTTP_PORT = int(decouple_config("HTTP_PORT", default=8765))
 HTTP_PATH = decouple_config("HTTP_PATH", default="/mcp/")
@@ -1970,9 +2006,7 @@ result = await client.call_tool("list_extended_tools", {})
 
 | Name | Default | Description |
 | :-- | :-- | :-- |
-| `STORAGE_ROOT` | `.mcp_mail` | Root for per-project repos and SQLite DB (project-local by default) |
-| `STORAGE_PROJECT_KEY_ENABLED` | `false` | When true, use `<project_key>/.mcp_mail` as archive root (project_key must be git repo root) |
-| `STORAGE_LOCAL_ARCHIVE_ENABLED` | `false` | When true, enable `.mcp_mail` archive; when false, requires project-key storage |
+| `STORAGE_ROOT` | `~/.mcp_agent_mail_git_mailbox_repo` | Root for the SQLite DB and local artifacts (user-level by default) |
 | `HTTP_HOST` | `127.0.0.1` | Bind host for HTTP transport |
 | `HTTP_PORT` | `8765` | Bind port for HTTP transport |
 | `HTTP_PATH` | `/mcp/` | HTTP path where MCP endpoint is mounted |
@@ -2013,10 +2047,8 @@ result = await client.call_tool("list_extended_tools", {})
 | `OTEL_SERVICE_NAME` | `mcp-agent-mail` | Service name for telemetry |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` |  | OTLP exporter endpoint URL |
 | `APP_ENVIRONMENT` | `development` | Environment name (development/production) |
-| `DATABASE_URL` | `sqlite+aiosqlite:///./.mcp_mail/storage.sqlite3` | SQLAlchemy async database URL (stored in .mcp_mail/) |
+| `DATABASE_URL` | `sqlite+aiosqlite:///${HOME}/.mcp_agent_mail_git_mailbox_repo/storage.sqlite3` | SQLAlchemy async database URL (stored in the user mailbox root by default) |
 | `DATABASE_ECHO` | `false` | Echo SQL statements for debugging |
-| `GIT_AUTHOR_NAME` | `mcp-agent` | Git commit author name |
-| `GIT_AUTHOR_EMAIL` | `mcp-agent@example.com` | Git commit author email |
 | `LLM_ENABLED` | `true` | Enable LiteLLM for thread summaries and discovery |
 | `LLM_DEFAULT_MODEL` | `gpt-5-mini` | Default LiteLLM model identifier |
 | `LLM_TEMPERATURE` | `0.2` | LLM temperature for text generation |
@@ -2424,6 +2456,35 @@ uv run python -m mcp_agent_mail.cli acks pending /abs/path/backend BlueLake --li
 # WARNING: Destructive reset (clean slate)
 uv run python -m mcp_agent_mail.cli clear-and-reset-everything --force
 ```
+
+## Development Scripts
+
+This repository includes scaffolded development scripts from [claude-commands](https://github.com/jleechanorg/claude-commands) for code quality, testing, and workflow automation. All scripts have been adapted for this project's Python/uv stack.
+
+**Quick Reference:**
+
+```bash
+# Code quality & linting
+./scripts/run_lint.sh                    # Check code quality (Ruff + Bandit)
+./scripts/run_lint.sh src/mcp_agent_mail fix  # Auto-fix issues
+
+# Testing & coverage
+./scripts/coverage.sh                    # Full coverage analysis with HTML report
+./scripts/run_tests_with_coverage.sh     # Run tests with coverage tracking
+./scripts/run_tests_with_coverage.sh --integration  # Include integration tests
+
+# Codebase analysis
+./scripts/loc.sh                         # Detailed lines of code analysis
+./scripts/loc_simple.sh                  # Quick LOC count
+
+# Git workflows
+./scripts/sync_branch.sh                 # Sync feature branch with main
+./scripts/push.sh                        # Safe push with validation
+./create_worktree.sh                     # Create Git worktree for parallel work
+./integrate.sh                           # Automated branch integration
+```
+
+**Full documentation:** See [SCAFFOLDING.md](SCAFFOLDING.md) for complete script documentation, adaptations, and integration guides.
 
 ## Client integrations
 

@@ -4,10 +4,10 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp_mail"
-version = "0.1.11"
+version = "0.1.19"
 description = "Coordinated multi-agent messaging and coordination MCP server."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 license = { text = "MIT" }
 authors = [
   { name = "mcp-agent-mail maintainers" },
@@ -25,9 +25,8 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = [
-  "fastmcp==2.12.5",
-  "pydantic==2.12.3",
-  "pydantic-core==2.41.4",
+  "fastmcp>=2.14.0,<3",
+  "pydantic>=2.10.0,<3",
   "uvicorn[standard]>=0.32.0",
   "fastapi>=0.110.0",
   "jinja2>=3.1.4",
@@ -49,15 +48,10 @@ dependencies = [
   "orjson>=3.10.7,<4",
   "tiktoken>=0.7.0",
   "pillow>=10.4.0",
-  "GitPython>=3.1.43",
-  "filelock>=3.16.0",
   "jsonschema>=4.23.0",
   "attrs>=24.2.0",
-  "authlib>=1.5.2,<1.6",
+  "authlib>=1.6.5,<2",
   "litellm>=1.40.0,<2",
-  "pytest>=8.4.2",
-  "pytest-asyncio>=0.23.8",
-  "ruff>=0.14.1",
 ]
 
 [project.optional-dependencies]
@@ -83,9 +77,17 @@ exclude = ["/.venv", "/.vscode", "/.idea", "/.git", "/__pycache__", "*.py[cod]",
 
 [tool.ty]
 overrides = [
-    { include = ["scripts/**/*.py"], rules = { "unresolved-reference" = "ignore" } },
-    { include = ["src/mcp_agent_mail/app.py"], rules = { "redundant-cast" = "warn" } },
-    { include = ["src/mcp_agent_mail/http.py"], rules = { "invalid-argument-type" = "warn" } }
+    # Scripts/tests are not held to the same typing strictness as the core library.
+    { include = ["scripts/**/*.py"], rules = { "unresolved-reference" = "ignore", "invalid-argument-type" = "warn", "invalid-return-type" = "warn" } },
+    { include = ["tests/**/*.py"], rules = { "invalid-argument-type" = "warn", "no-matching-overload" = "warn", "unsupported-operator" = "warn", "invalid-return-type" = "warn", "invalid-assignment" = "warn" } },
+
+    # SQLModel/SQLAlchemy-heavy modules: ty currently struggles to type many ORM expressions.
+    { include = ["src/mcp_agent_mail/app.py"], rules = { "redundant-cast" = "warn", "invalid-argument-type" = "warn", "no-matching-overload" = "warn", "unresolved-attribute" = "warn", "invalid-return-type" = "warn", "invalid-assignment" = "warn" } },
+    { include = ["src/mcp_agent_mail/cli.py"], rules = { "invalid-argument-type" = "warn", "no-matching-overload" = "warn", "unresolved-attribute" = "warn", "invalid-return-type" = "warn", "invalid-assignment" = "warn", "unsupported-operator" = "warn" } },
+    { include = ["src/mcp_agent_mail/storage.py"], rules = { "invalid-argument-type" = "warn", "no-matching-overload" = "warn", "unsupported-operator" = "warn", "invalid-return-type" = "warn", "invalid-assignment" = "warn" } },
+    { include = ["src/mcp_agent_mail/slack_integration.py"], rules = { "invalid-argument-type" = "warn", "no-matching-overload" = "warn", "unresolved-attribute" = "warn", "invalid-return-type" = "warn" } },
+
+    { include = ["src/mcp_agent_mail/http.py"], rules = { "invalid-argument-type" = "warn" } },
 ]
 
 [tool.ruff]
@@ -111,6 +113,7 @@ select = [
 ]
 ignore = [
   "E501",
+  "ASYNC240",  # Allow pathlib.Path in async functions (pre-existing usage, not blocking)
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -120,6 +123,12 @@ ignore = [
 [tool.ruff.lint.isort]
 known-first-party = ["mcp_agent_mail"]
 combine-as-imports = true
+
+[tool.isort]
+profile = "black"
+known_first_party = ["mcp_agent_mail"]
+combine_as_imports = true
+line_length = 120
 
 [tool.mypy]
 python_version = "3.11"
@@ -143,6 +152,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = [
   "--strict-markers",
+  "--timeout=600",
   "--cov=mcp_agent_mail",
   "--cov-report=term-missing",
 ]
@@ -157,7 +167,12 @@ markers = [
 
 [dependency-groups]
 dev = [
+    "ruff>=0.5.7",
+    "pytest>=8.3.3",
     "pytest-asyncio>=1.2.0",
     "pytest-cov>=7.0.0",
     "pytest-timeout>=2.4.0",
+    "bandit>=1.8.0",
+    "safety>=3.0.0",
+    "jleechanorg-orchestration>=0.1.18",
 ]

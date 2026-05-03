@@ -14,7 +14,7 @@ if [ "$#" -lt 1 ] || [ "$#" -gt 3 ]; then
 fi
 
 SCHEDULE_TIME="$1"
-USE_CONTINUE=true
+USE_CONTINUE=false
 
 # Check if --continue flag is present (can be 2nd or 3rd argument)
 for arg in "$@"; do

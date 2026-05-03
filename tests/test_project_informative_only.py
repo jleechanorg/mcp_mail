@@ -37,53 +37,54 @@ async def test_unified_inbox_does_not_filter_by_project(isolated_env):
     server = build_mcp_server()
     app = build_http_app(settings, server)
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # Fetch the unified inbox page
-        response = await client.get("/mail")
-        assert response.status_code == 200
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Fetch the unified inbox page
+            response = await client.get("/mail")
+            assert response.status_code == 200
 
-        html_content = response.text
+            html_content = response.text
 
-        # ASSERTIONS: These should all PASS after the fix
+            # ASSERTIONS: These should all PASS after the fix
 
-        # 1. Should NOT have a project filter dropdown
-        assert 'x-model="filters.project"' not in html_content, (
-            "Unified inbox should not have project filter dropdown - projects should be informational only"
-        )
+            # 1. Should NOT have a project filter dropdown
+            assert 'x-model="filters.project"' not in html_content, (
+                "Unified inbox should not have project filter dropdown - projects should be informational only"
+            )
 
-        # 2. Should NOT have "All Projects" option in a filter
-        assert '<option value="">All Projects</option>' not in html_content, (
-            "Unified inbox should not have 'All Projects' filter option - projects should be informational only"
-        )
+            # 2. Should NOT have "All Projects" option in a filter
+            assert '<option value="">All Projects</option>' not in html_content, (
+                "Unified inbox should not have 'All Projects' filter option - projects should be informational only"
+            )
 
-        # 3. Should NOT have project filtering logic in JavaScript
-        assert "this.filters.project" not in html_content, (
-            "Unified inbox should not filter by project in JavaScript - projects should be informational only"
-        )
+            # 3. Should NOT have project filtering logic in JavaScript
+            assert "this.filters.project" not in html_content, (
+                "Unified inbox should not filter by project in JavaScript - projects should be informational only"
+            )
 
-        # 4. Should NOT compute uniqueProjects for filtering
-        assert "get uniqueProjects()" not in html_content, (
-            "Unified inbox should not compute unique projects for filtering - projects should be informational only"
-        )
+            # 4. Should NOT compute uniqueProjects for filtering
+            assert "get uniqueProjects()" not in html_content, (
+                "Unified inbox should not compute unique projects for filtering - projects should be informational only"
+            )
 
-        # 5. Should NOT have label "Project" for a filter
-        # (This is tricky - we want to allow displaying project metadata,
-        #  but not as a filter label)
-        project_filter_label_pattern = (
-            '<label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Project</label>'
-        )
-        assert project_filter_label_pattern not in html_content, (
-            "Unified inbox should not have 'Project' as a filter label"
-        )
+            # 5. Should NOT have label "Project" for a filter
+            # (This is tricky - we want to allow displaying project metadata,
+            #  but not as a filter label)
+            project_filter_label_pattern = (
+                '<label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Project</label>'
+            )
+            assert project_filter_label_pattern not in html_content, (
+                "Unified inbox should not have 'Project' as a filter label"
+            )
 
-        # POSITIVE ASSERTIONS: These should show projects are still informational
+            # POSITIVE ASSERTIONS: These should show projects are still informational
 
-        # 6. SHOULD still display project metadata (like in message cards)
-        # Project metadata can appear in message display
-        assert "project_name" in html_content or "project_slug" in html_content, (
-            "Projects should still be visible as informational metadata on messages"
-        )
+            # 6. SHOULD still display project metadata (like in message cards)
+            # Project metadata can appear in message display
+            assert "project_name" in html_content or "project_slug" in html_content, (
+                "Projects should still be visible as informational metadata on messages"
+            )
 
 
 @pytest.mark.asyncio
@@ -100,26 +101,27 @@ async def test_unified_inbox_api_structure(isolated_env):
     server = build_mcp_server()
     app = build_http_app(settings, server)
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # Fetch unified inbox via API
-        response = await client.get("/mail/api/unified-inbox?include_projects=true")
-        assert response.status_code == 200
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Fetch unified inbox via API
+            response = await client.get("/mail/api/unified-inbox?include_projects=true")
+            assert response.status_code == 200
 
-        data = response.json()
+            data = response.json()
 
-        # Should have the expected structure
-        assert "messages" in data, "API should return messages array"
-        assert "projects" in data, "API should return projects array (when include_projects=true)"
+            # Should have the expected structure
+            assert "messages" in data, "API should return messages array"
+            assert "projects" in data, "API should return projects array (when include_projects=true)"
 
-        # Messages is a list (may be empty in test env)
-        messages = data.get("messages", [])
-        assert isinstance(messages, list), "Messages should be an array"
+            # Messages is a list (may be empty in test env)
+            messages = data.get("messages", [])
+            assert isinstance(messages, list), "Messages should be an array"
 
-        # If there are messages, they should have project metadata fields available
-        # (even if empty, the fields should exist)
-        # Note: In a fresh test environment, there may be no messages, so we just
-        # verify the structure is correct
+            # If there are messages, they should have project metadata fields available
+            # (even if empty, the fields should exist)
+            # Note: In a fresh test environment, there may be no messages, so we just
+            # verify the structure is correct
 
 
 @pytest.mark.asyncio
