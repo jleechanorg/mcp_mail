@@ -1223,7 +1223,9 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         source="slack_events",
                     )
 
-                return JSONResponse({"ok": True, "message": "Event ignored"})
+                else:
+                    # Message was filtered/ignored (e.g., bot message, wrong channel)
+                    return JSONResponse({"ok": True, "message": "Event ignored"})
 
             # Handle reaction_added events (future: map to acknowledgments)
             elif event_subtype == "reaction_added":
