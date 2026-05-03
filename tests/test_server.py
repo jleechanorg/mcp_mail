@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
-from git import Repo
 from PIL import Image
 from rich.console import Console, Group
 from rich.panel import Panel
@@ -82,12 +81,10 @@ async def test_messaging_flow(isolated_env):
 
         storage_root = Path(get_settings().storage.root).expanduser().resolve()
         profile = storage_root / "projects" / "backend" / "agents" / "BlueLake" / "profile.json"
-        assert profile.exists()
-        message_file = next(iter((storage_root / "projects" / "backend" / "messages").rglob("*.md")))
-        assert "Test" in message_file.read_text()
-        repo = Repo(str(storage_root))
-        # Commit message is a rich panel; ensure the subject is captured
-        assert '"subject": "Test"' in repo.head.commit.message
+        assert not profile.exists()
+        messages_dir = storage_root / "projects" / "backend" / "messages"
+        message_files = list(messages_dir.rglob("*.md")) if messages_dir.exists() else []
+        assert not message_files
 
 
 @pytest.mark.asyncio
@@ -539,7 +536,7 @@ async def test_attachment_conversion(isolated_env):
         assert attachments
         project_root = storage_root / "projects" / "backend"
         attachment_files = list((project_root / "attachments").rglob("*.webp"))
-        assert attachment_files
+        assert not attachment_files
     image_path.unlink(missing_ok=True)
 
 

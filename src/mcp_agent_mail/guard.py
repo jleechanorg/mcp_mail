@@ -10,7 +10,6 @@ import asyncio
 from pathlib import Path
 
 from .config import Settings
-from .storage import ProjectArchive
 
 __all__ = [
     "install_guard",
@@ -21,60 +20,53 @@ __all__ = [
 ]
 
 
-def render_precommit_script(archive: ProjectArchive) -> str:
+def _guard_stub_script() -> str:
+    return "#!/usr/bin/env python3\n# Archive storage removed - guard disabled\nimport sys\nsys.exit(0)\n"
+
+
+async def _write_guard_stub(hook_path: Path) -> None:
+    def _write() -> None:
+        hook_path.parent.mkdir(parents=True, exist_ok=True)
+        hook_path.write_text(_guard_stub_script(), encoding="utf-8")
+        hook_path.chmod(0o755)
+
+    await asyncio.to_thread(_write)
+
+
+def render_precommit_script(file_reservations_dir: Path) -> str:
     """Return stub pre-commit script.
 
-    NOTE: Archive storage has been removed.
+    NOTE: Archive storage has been removed. The file_reservations_dir is ignored.
     """
-    return "#!/usr/bin/env python3\n# Archive storage removed - guard disabled\nimport sys\nsys.exit(0)\n"
+    return _guard_stub_script()
 
 
-def render_prepush_script(archive: ProjectArchive) -> str:
+def render_prepush_script(file_reservations_dir: Path) -> str:
     """Return stub pre-push script.
 
-    NOTE: Archive storage has been removed.
+    NOTE: Archive storage has been removed. The file_reservations_dir is ignored.
     """
-    return "#!/usr/bin/env python3\n# Archive storage removed - guard disabled\nimport sys\nsys.exit(0)\n"
+    return _guard_stub_script()
 
 
 async def install_guard(settings: Settings, project_slug: str, repo_path: Path) -> Path:
     """Install the pre-commit guard for the given project into the repo.
 
-    NOTE: Archive storage has been removed. This is a no-op that returns a placeholder path.
-    Parameters are retained for backwards compatibility but are unused.
-
-    Args:
-        settings: Unused, kept for backwards compatibility
-        project_slug: Unused, kept for backwards compatibility
-        repo_path: Repository path for constructing the hook path
-
-    Returns:
-        Path to where the pre-commit hook would be installed
-
-    .. deprecated::
-        Guard functionality has been removed along with archive storage.
+    NOTE: Archive storage has been removed. Installs a no-op stub script.
     """
-    return repo_path / ".git" / "hooks" / "pre-commit"
+    hook_path = repo_path / ".git" / "hooks" / "pre-commit"
+    await _write_guard_stub(hook_path)
+    return hook_path
 
 
 async def install_prepush_guard(settings: Settings, project_slug: str, repo_path: Path) -> Path:
     """Install the pre-push guard for the given project into the repo.
 
-    NOTE: Archive storage has been removed. This is a no-op that returns a placeholder path.
-    Parameters are retained for backwards compatibility but are unused.
-
-    Args:
-        settings: Unused, kept for backwards compatibility
-        project_slug: Unused, kept for backwards compatibility
-        repo_path: Repository path for constructing the hook path
-
-    Returns:
-        Path to where the pre-push hook would be installed
-
-    .. deprecated::
-        Guard functionality has been removed along with archive storage.
+    NOTE: Archive storage has been removed. Installs a no-op stub script.
     """
-    return repo_path / ".git" / "hooks" / "pre-push"
+    hook_path = repo_path / ".git" / "hooks" / "pre-push"
+    await _write_guard_stub(hook_path)
+    return hook_path
 
 
 async def uninstall_guard(repo_path: Path) -> bool:

@@ -1937,7 +1937,7 @@ def guard_install(
 
     try:
         hook_path = asyncio.run(_run())
-    except ValueError as exc:  # convert to CLI-friendly error
+    except (ValueError, NotImplementedError) as exc:  # convert to CLI-friendly error
         raise typer.BadParameter(str(exc)) from exc
     console.print(f"[green]Installed guard for [bold]{project}[/] at {hook_path}.")
 
@@ -2092,7 +2092,7 @@ def am_run(
             branch = "unknown"
     settings = get_settings()
     guard_mode = (os.environ.get("AGENT_MAIL_GUARD_MODE", "block") or "block").strip().lower()
-    worktrees_enabled = bool(settings.worktrees_enabled)
+    worktrees_enabled = bool(settings.worktrees_enabled) and is_archive_enabled(settings)
 
     async def _ensure_slot_paths() -> Path:
         if is_archive_enabled(settings):

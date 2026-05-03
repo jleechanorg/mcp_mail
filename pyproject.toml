@@ -129,6 +129,12 @@ ignore = [
 known-first-party = ["mcp_agent_mail"]
 combine-as-imports = true
 
+[tool.isort]
+profile = "black"
+known_first_party = ["mcp_agent_mail"]
+combine_as_imports = true
+line_length = 120
+
 [tool.mypy]
 python_version = "3.11"
 warn_return_any = true
