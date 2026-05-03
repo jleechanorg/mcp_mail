@@ -52,8 +52,11 @@ def isolated_env(tmp_path, monkeypatch):
                         pass
 
                 # Multiple GC passes to ensure full cleanup
-                # Avoid scanning `gc.get_objects()` for open Repo instances here:
-                # it is O(N) in heap size and has caused multi-minute hangs during test teardown.
+                # NOTE: Removed O(N) gc.get_objects() scan that caused 12+ minute hangs
+                # as heap size grew during test execution. Instead, we rely on:
+                # 1. Explicit repo.close() above (lines 48-50) for the storage_root repo
+                # 2. Standard gc.collect() to trigger cleanup of remaining references
+                # This approach avoids the exponential slowdown while still ensuring proper cleanup.
                 for _ in range(3):
                     gc.collect()
 

@@ -5,8 +5,6 @@ are configured via environment variables; configuration toggles come from
 python-decouple in `config.py`.
 """
 
-from __future__ import annotations
-
 import asyncio
 import contextlib
 import os
