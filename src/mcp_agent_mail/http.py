@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import base64
 import contextlib
+import hmac
 import importlib
 import json
 import logging
@@ -53,14 +54,19 @@ from .storage import (
     get_message_commit_sha,
     get_recent_commits,
     get_timeline_commits,
+    is_archive_enabled,
     write_agent_profile,
-    write_file_reservation_record,
+    write_file_reservation_artifacts,
     write_message_bundle,
 )
 
 # Slack webhook dedupe cache (in-memory best-effort)
+# NOTE: We use a plain deque (no maxlen) and manage eviction manually to keep
+# the set and deque in sync. Using deque(maxlen=N) causes auto-eviction that
+# would desynchronize the set, leading to unbounded memory growth.
 _slack_event_cache: set[tuple[str, str]] = set()
-_slack_event_cache_order: deque[tuple[str, str]] = deque(maxlen=5000)
+_slack_event_cache_order: deque[tuple[str, str]] = deque()
+_SLACK_EVENT_CACHE_MAX_SIZE = 5000
 _slack_event_cache_lock = asyncio.Lock()
 
 
@@ -83,6 +89,33 @@ async def _project_identifiers_from_id(pid: int | None) -> tuple[str | None, str
         if not res:
             return None, None
         return (res[0], res[1])
+
+
+async def _project_from_thread_id(thread_id: str | None) -> tuple[int, str, str] | None:
+    """Look up the project of the first message in a thread.
+
+    Returns (project_id, slug, human_key) if a message with thread_id exists,
+    otherwise None. Used to route Slack replies to the original message's project.
+    """
+    if not thread_id:
+        return None
+    await ensure_schema()
+    async with get_session() as session:
+        row = await session.execute(
+            text("""
+                SELECT p.id, p.slug, p.human_key
+                FROM messages m
+                JOIN projects p ON m.project_id = p.id
+                WHERE m.thread_id = :thread_id
+                ORDER BY m.id ASC
+                LIMIT 1
+            """),
+            {"thread_id": thread_id},
+        )
+        res = row.fetchone()
+        if res:
+            return (res[0], res[1], res[2])
+        return None
 
 
 __all__ = ["build_http_app", "main"]
@@ -649,25 +682,30 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                                             project_human_key,
                                                         ) = await _project_identifiers_from_id(project_id)
                                                         # Write profile.json to archive
-                                                        archive = await ensure_archive(
-                                                            settings,
-                                                            project_slug or "",
-                                                            project_key=project_human_key,
-                                                        )
-                                                        async with archive_write_lock(archive):
-                                                            await write_agent_profile(
-                                                                archive,
-                                                                {
-                                                                    "id": holder_agent_id,
-                                                                    "name": settings.ack_escalation_claim_holder_name,
-                                                                    "program": "ops",
-                                                                    "model": "system",
-                                                                    "project_slug": project_slug or "",
-                                                                    "inception_ts": now.astimezone().isoformat(),
-                                                                    "inception_iso": now.astimezone().isoformat(),
-                                                                    "task": "ops-escalation",
-                                                                },
+                                                        if (
+                                                            is_archive_enabled(settings)
+                                                            and project_slug
+                                                            and project_human_key is not None
+                                                        ):
+                                                            archive = await ensure_archive(
+                                                                settings,
+                                                                project_slug,
+                                                                project_key=project_human_key,
                                                             )
+                                                            async with archive_write_lock(archive):
+                                                                await write_agent_profile(
+                                                                    archive,
+                                                                    {
+                                                                        "id": holder_agent_id,
+                                                                        "name": settings.ack_escalation_claim_holder_name,
+                                                                        "program": "ops",
+                                                                        "model": "system",
+                                                                        "project_slug": project_slug,
+                                                                        "inception_ts": now.astimezone().isoformat(),
+                                                                        "inception_iso": now.astimezone().isoformat(),
+                                                                        "task": "ops-escalation",
+                                                                    },
+                                                                )
                                         async with get_session() as s2:
                                             await s2.execute(
                                                 text(
@@ -690,24 +728,26 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                             await s2.commit()
                                         # Also write JSON artifact to archive
                                         project_slug, project_human_key = await _project_identifiers_from_id(project_id)
-                                        archive = await ensure_archive(
-                                            settings, project_slug or "", project_key=project_human_key
-                                        )
                                         expires_at = now + _dt.timedelta(
                                             seconds=settings.ack_escalation_claim_ttl_seconds
                                         )
-                                        async with archive_write_lock(archive):
-                                            await write_file_reservation_record(
-                                                archive,
-                                                {
-                                                    "project": project_slug,
-                                                    "agent": settings.ack_escalation_claim_holder_name or "ops",
-                                                    "path_pattern": pattern,
-                                                    "exclusive": settings.ack_escalation_claim_exclusive,
-                                                    "reason": "ack-overdue",
-                                                    "created_ts": now.astimezone().isoformat(),
-                                                    "expires_ts": expires_at.astimezone().isoformat(),
-                                                },
+                                        payload = {
+                                            "project": project_slug,
+                                            "agent": settings.ack_escalation_claim_holder_name or "ops",
+                                            "path_pattern": pattern,
+                                            "exclusive": settings.ack_escalation_claim_exclusive,
+                                            "reason": "ack-overdue",
+                                            "created_ts": now.astimezone().isoformat(),
+                                            "expires_ts": expires_at.astimezone().isoformat(),
+                                            "released_ts": None,
+                                        }
+                                        if project_slug:
+                                            payload["project"] = project_human_key or project_slug
+                                            await write_file_reservation_artifacts(
+                                                settings,
+                                                project_slug,
+                                                [cast(dict[str, object], payload)],
+                                                project_key=project_human_key,
                                             )
                                     except Exception:
                                         pass
@@ -956,8 +996,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         """Shared ingestion path for Slack-derived payloads."""
         from .models import Agent
 
-        global _slack_event_cache
-
         slack_ts = message_info.get("slack_ts")
         slack_channel = message_info.get("slack_channel")
         cache_key = dedupe_key or ((slack_channel, slack_ts) if slack_ts and slack_channel else None)
@@ -974,20 +1012,73 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     )
                     return JSONResponse({"ok": True, "message": "Duplicate Slack event skipped"})
 
-                # Handle eviction before append if deque is at capacity
-                if len(_slack_event_cache_order) >= _slack_event_cache_order.maxlen:
-                    evicted = _slack_event_cache_order[0]
-                    _slack_event_cache.discard(evicted)
+                # Evict oldest entries if at capacity (before adding new one)
+                while len(_slack_event_cache_order) >= _SLACK_EVENT_CACHE_MAX_SIZE:
+                    old = _slack_event_cache_order.popleft()
+                    _slack_event_cache.discard(old)
 
-                _slack_event_cache_order.append(cache_key)
                 _slack_event_cache.add(cache_key)
+                _slack_event_cache_order.append(cache_key)
                 cache_key_added = True
 
         try:
-            project = await _ensure_project(settings.slack.sync_project_name)
+            # Determine project: Look up the original project for this thread so Slack replies
+            # go to the same project as the original message. Supports both numeric message IDs
+            # and string thread_ids (e.g., "bd-123", "slack_<channel>_<ts>").
+            thread_id = message_info.get("thread_id")
+            project = None
+
+            if thread_id:
+                async with get_session() as session:
+                    if thread_id.isdigit():
+                        # thread_id is a numeric MCP message ID - look up by message.id
+                        result = await session.execute(
+                            text(
+                                "SELECT p.id, p.slug, p.human_key FROM messages m JOIN projects p ON p.id = m.project_id WHERE m.id = :mid"
+                            ),
+                            {"mid": int(thread_id)},
+                        )
+                    else:
+                        # thread_id is a string - look up by messages.thread_id
+                        # This handles non-numeric thread_ids like "bd-123", "slack_C123_456.789"
+                        result = await session.execute(
+                            text("""
+                                SELECT p.id, p.slug, p.human_key
+                                FROM messages m
+                                JOIN projects p ON p.id = m.project_id
+                                WHERE m.thread_id = :tid
+                                ORDER BY m.id ASC
+                                LIMIT 1
+                            """),
+                            {"tid": thread_id},
+                        )
+                    row = result.fetchone()
+                    if row:
+                        from .models import Project
+
+                        project = Project(id=row[0], slug=row[1], human_key=row[2])
+                        logger.info(
+                            "slack_reply_routed_to_original_project",
+                            thread_id=thread_id,
+                            project_slug=project.slug,
+                            source=source,
+                        )
+
+            if not project:
+                # Fall back to sync_project_name for new Slack-originated threads
+                project = await _ensure_project(settings.slack.sync_project_name)
 
             sender_name = message_info["sender_name"]
+            # Agent names are globally unique. Treat Slack-derived senders as a shared/global
+            # identity: reuse the same agent across projects to avoid cross-project mutation.
             sender_agent = await _get_agent_by_name_optional(sender_name)
+            if sender_agent:
+                logger.debug(
+                    "slack_bridge_agent_reused",
+                    agent_name=sender_name,
+                    agent_project_id=sender_agent.project_id,
+                    target_project_id=project.id,
+                )
 
             if not sender_agent:
                 if source in {"slack", "slack_events"}:
@@ -1012,16 +1103,10 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         logger.info("slack_bridge_agent_created", agent_name=sender_name)
                     except IntegrityError:
                         await session.rollback()
-                        result = await session.execute(
-                            select(Agent).where(
-                                cast(Any, Agent.project_id) == project.id,
-                                cast(Any, Agent.name) == sender_name,
-                            )
-                        )
-                        existing_agent = result.scalars().first()
-                        if not existing_agent:
+                        # Race: another request created this globally-unique agent first.
+                        sender_agent = await _get_agent_by_name_optional(sender_name)
+                        if not sender_agent:
                             raise
-                        sender_agent = existing_agent
 
             async with get_session() as session:
                 result = await session.execute(
@@ -1064,6 +1149,13 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             )
 
             async def _persist_archive() -> None:
+                if not is_archive_enabled(settings):
+                    logger.debug(
+                        "slack_archive_write_skipped",
+                        reason="archive_disabled",
+                        source=source,
+                    )
+                    return
                 try:
                     archive = await ensure_archive(settings, project.slug)
                     await write_message_bundle(
@@ -1229,7 +1321,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
         token_raw = form.get("token")
         token = token_raw.strip() if isinstance(token_raw, str) else ""
-        if token != settings.slack.slackbox_token:
+        if not hmac.compare_digest(token, settings.slack.slackbox_token):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Slackbox token")
 
         text_raw = form.get("text")
@@ -1416,7 +1508,11 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             from bleach.css_sanitizer import CSSSanitizer  # type: ignore
         except Exception:  # tinycss2 may be missing; degrade gracefully
             CSSSanitizer = None  # type: ignore
-        from jinja2 import Environment, FileSystemLoader, select_autoescape  # type: ignore
+        from jinja2 import (
+            Environment,
+            FileSystemLoader,  # type: ignore
+            select_autoescape,
+        )
 
         templates_root = Path(__file__).resolve().parent / "templates"
         env = Environment(
@@ -2105,8 +2201,9 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             commit_sha = None
             try:
                 settings = get_settings()
-                archive = await ensure_archive(settings, prow[1], project_key=prow[2])
-                commit_sha = await get_message_commit_sha(archive, mid)
+                if is_archive_enabled(settings):
+                    archive = await ensure_archive(settings, prow[1], project_key=prow[2])
+                    commit_sha = await get_message_commit_sha(archive, mid)
             except Exception:
                 pass  # Commit SHA is optional
 
@@ -2758,13 +2855,11 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                             detail=f"None of the specified recipients exist in this project. Available agents can be seen at /mail/{project_slug}",
                         )
 
-                    # Write to Git archive BEFORE committing to database (for transaction consistency)
-                    from .storage import ensure_archive, write_message_bundle
-
                     settings = get_settings()
-                    archive = await ensure_archive(settings, project_slug, project_key=project_human_key)
+                    if is_archive_enabled(settings):
+                        archive = await ensure_archive(settings, project_slug, project_key=project_human_key)
 
-                    # Build message dict for Git
+                    # Build message dict for Git (when enabled)
                     message_dict = {
                         "id": message_id,
                         "thread_id": thread_id,
@@ -2781,23 +2876,24 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         "attachments": [],
                     }
 
-                    try:
-                        # Write message bundle (canonical + outbox + inboxes) to Git
-                        await write_message_bundle(
-                            archive,
-                            message_dict,
-                            full_body,
-                            overseer_name,
-                            valid_recipients,
-                            extra_paths=None,
-                            commit_text=f"Human Overseer message: {subject}",
-                        )
-                    except Exception as git_error:
-                        # Rollback database transaction if Git write fails
-                        await session.rollback()
-                        raise HTTPException(
-                            status_code=500, detail=f"Failed to write message to Git archive: {git_error!s}"
-                        ) from git_error
+                    if is_archive_enabled(settings):
+                        try:
+                            # Write message bundle (canonical + outbox + inboxes) to Git
+                            await write_message_bundle(
+                                archive,
+                                message_dict,
+                                full_body,
+                                overseer_name,
+                                valid_recipients,
+                                extra_paths=None,
+                                commit_text=f"Human Overseer message: {subject}",
+                            )
+                        except Exception as git_error:
+                            # Rollback database transaction if Git write fails
+                            await session.rollback()
+                            raise HTTPException(
+                                status_code=500, detail=f"Failed to write message to Git archive: {git_error!s}"
+                            ) from git_error
 
                     # Update HumanOverseer activity timestamp (after successful Git write, before commit)
                     await session.execute(
@@ -3021,6 +3117,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 project_human_key = human_row[0] if human_row else None
 
             settings = get_settings()
+            if not is_archive_enabled(settings):
+                return await _render("error.html", message="Archive storage is disabled")
             archive = await ensure_archive(settings, project, project_key=project_human_key)
             tree = await get_archive_tree(archive, path)
 
@@ -3042,6 +3140,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     ).fetchone()
                     project_human_key = human_row[0] if human_row else None
                 settings = get_settings()
+                if not is_archive_enabled(settings):
+                    raise HTTPException(status_code=404, detail="Archive storage is disabled")
                 archive = await ensure_archive(settings, project, project_key=project_human_key)
                 content = await get_file_content(archive, path)
 
@@ -3149,6 +3249,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             try:
                 # Get project archive
                 settings = get_settings()
+                if not is_archive_enabled(settings):
+                    raise HTTPException(status_code=404, detail="Archive storage is disabled")
                 async with get_session() as session:
                     human_row = (
                         await session.execute(

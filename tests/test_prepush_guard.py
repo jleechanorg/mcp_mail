@@ -114,7 +114,7 @@ async def test_prepush_no_conflicts(isolated_env, tmp_path: Path):
     archive = await ensure_archive(settings, "myproject")
 
     # Render pre-push script
-    script_text = _skip_presubmit_in_script(render_prepush_script(archive))
+    script_text = _skip_presubmit_in_script(render_prepush_script(archive.root / "file_reservations"))
     script_path = tmp_path / "prepush.py"
     script_path.write_text(script_text)
 
@@ -146,7 +146,7 @@ async def test_prepush_conflict_detected(isolated_env, tmp_path: Path):
     )
 
     # Render pre-push script
-    script_text = _skip_presubmit_in_script(render_prepush_script(archive))
+    script_text = _skip_presubmit_in_script(render_prepush_script(archive.root / "file_reservations"))
     script_path = tmp_path / "prepush.py"
     script_path.write_text(script_text)
 
@@ -179,7 +179,7 @@ async def test_prepush_warn_mode(isolated_env, tmp_path: Path):
     )
 
     # Render pre-push script
-    script_text = _skip_presubmit_in_script(render_prepush_script(archive))
+    script_text = _skip_presubmit_in_script(render_prepush_script(archive.root / "file_reservations"))
     script_path = tmp_path / "prepush.py"
     script_path.write_text(script_text)
 
@@ -231,7 +231,7 @@ async def test_prepush_multiple_commits(isolated_env, tmp_path: Path):
     )
 
     # Render pre-push script
-    script_text = _skip_presubmit_in_script(render_prepush_script(archive))
+    script_text = _skip_presubmit_in_script(render_prepush_script(archive.root / "file_reservations"))
     script_path = tmp_path / "prepush.py"
     script_path.write_text(script_text)
 
@@ -272,7 +272,7 @@ async def test_prepush_glob_pattern_matching(isolated_env, tmp_path: Path):
     )
 
     # Render pre-push script
-    script_text = _skip_presubmit_in_script(render_prepush_script(archive))
+    script_text = _skip_presubmit_in_script(render_prepush_script(archive.root / "file_reservations"))
     script_path = tmp_path / "prepush.py"
     script_path.write_text(script_text)
 
@@ -306,7 +306,7 @@ async def test_prepush_gate_disabled(isolated_env, tmp_path: Path):
     )
 
     # Render pre-push script
-    script_text = _skip_presubmit_in_script(render_prepush_script(archive))
+    script_text = _skip_presubmit_in_script(render_prepush_script(archive.root / "file_reservations"))
     script_path = tmp_path / "prepush.py"
     script_path.write_text(script_text)
 
@@ -356,7 +356,7 @@ async def test_prepush_self_reservation_allowed(isolated_env, tmp_path: Path):
     )
 
     # Render pre-push script
-    script_text = _skip_presubmit_in_script(render_prepush_script(archive))
+    script_text = _skip_presubmit_in_script(render_prepush_script(archive.root / "file_reservations"))
     script_path = tmp_path / "prepush.py"
     script_path.write_text(script_text)
 
