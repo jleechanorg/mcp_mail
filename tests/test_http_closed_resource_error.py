@@ -42,22 +42,23 @@ async def test_closed_resource_error_handled_gracefully(isolated_env, monkeypatc
     server = build_mcp_server()
     app = build_http_app(settings, server)
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # Make a normal request first to ensure server is working
-        r1 = await client.post(
-            settings.http.path,
-            json=_rpc("tools/call", {"name": "health_check", "arguments": {}}),
-        )
-        # Should succeed (200) or be unauthorized (401) but NOT crash (500)
-        assert r1.status_code in (200, 401, 403)
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Make a normal request first to ensure server is working
+            r1 = await client.post(
+                settings.http.path,
+                json=_rpc("tools/call", {"name": "health_check", "arguments": {}}),
+            )
+            # Should succeed (200) or be unauthorized (401) but NOT crash (500)
+            assert r1.status_code in (200, 401, 403)
 
-        # Server should still be working after any connection issues
-        r2 = await client.post(
-            settings.http.path,
-            json=_rpc("tools/call", {"name": "health_check", "arguments": {}}),
-        )
-        assert r2.status_code in (200, 401, 403)
+            # Server should still be working after any connection issues
+            r2 = await client.post(
+                settings.http.path,
+                json=_rpc("tools/call", {"name": "health_check", "arguments": {}}),
+            )
+            assert r2.status_code in (200, 401, 403)
 
 
 @pytest.mark.asyncio
@@ -89,30 +90,32 @@ async def test_closed_resource_error_in_connect_suppressed(isolated_env, monkeyp
             yield streams
 
     app = build_http_app(settings, server)
-    transport = ASGITransport(app=app)
 
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # First request should work
-        r1 = await client.post(
-            settings.http.path,
-            json=_rpc("tools/call", {"name": "health_check", "arguments": {}}),
-        )
-        assert r1.status_code in (200, 401, 403)
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
 
-        # Patch for second request
-        with patch.object(StreamableHTTPServerTransport, "connect", patched_connect):
-            # Second request triggers ClosedResourceError - should be handled gracefully
-            try:
-                r2 = await client.post(
-                    settings.http.path,
-                    json=_rpc("tools/call", {"name": "health_check", "arguments": {}}),
-                )
-                # The request might timeout or return an error code, but shouldn't crash
-                # After fix: gracefully handled, no exception propagation
-                assert r2.status_code in (200, 401, 403, 500, 503)
-            except anyio.ClosedResourceError:
-                # Before fix: this would propagate
-                pytest.fail("ClosedResourceError should be handled gracefully")
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # First request should work
+            r1 = await client.post(
+                settings.http.path,
+                json=_rpc("tools/call", {"name": "health_check", "arguments": {}}),
+            )
+            assert r1.status_code in (200, 401, 403)
+
+            # Patch for second request
+            with patch.object(StreamableHTTPServerTransport, "connect", patched_connect):
+                # Second request triggers ClosedResourceError - should be handled gracefully
+                try:
+                    r2 = await client.post(
+                        settings.http.path,
+                        json=_rpc("tools/call", {"name": "health_check", "arguments": {}}),
+                    )
+                    # The request might timeout or return an error code, but shouldn't crash
+                    # After fix: gracefully handled, no exception propagation
+                    assert r2.status_code in (200, 401, 403, 500, 503)
+                except anyio.ClosedResourceError:
+                    # Before fix: this would propagate
+                    pytest.fail("ClosedResourceError should be handled gracefully")
 
 
 @pytest.mark.asyncio
@@ -142,27 +145,29 @@ async def test_handle_request_closed_resource_error_suppressed(isolated_env, mon
         return await original_handle_request(self, scope, receive, send)
 
     app = build_http_app(settings, server)
-    transport = ASGITransport(app=app)
 
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # First request should work
-        r1 = await client.post(
-            settings.http.path,
-            json=_rpc("tools/call", {"name": "health_check", "arguments": {}}),
-        )
-        assert r1.status_code in (200, 401, 403)
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
 
-        # Patch for second request
-        with patch.object(StreamableHTTPServerTransport, "handle_request", patched_handle_request):
-            try:
-                r2 = await client.post(
-                    settings.http.path,
-                    json=_rpc("tools/call", {"name": "health_check", "arguments": {}}),
-                )
-                # After fix: Should handle gracefully
-                assert r2.status_code in (200, 401, 403, 500, 503)
-            except anyio.ClosedResourceError:
-                pytest.fail("ClosedResourceError should be handled gracefully, not propagate")
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # First request should work
+            r1 = await client.post(
+                settings.http.path,
+                json=_rpc("tools/call", {"name": "health_check", "arguments": {}}),
+            )
+            assert r1.status_code in (200, 401, 403)
+
+            # Patch for second request
+            with patch.object(StreamableHTTPServerTransport, "handle_request", patched_handle_request):
+                try:
+                    r2 = await client.post(
+                        settings.http.path,
+                        json=_rpc("tools/call", {"name": "health_check", "arguments": {}}),
+                    )
+                    # After fix: Should handle gracefully
+                    assert r2.status_code in (200, 401, 403, 500, 503)
+                except anyio.ClosedResourceError:
+                    pytest.fail("ClosedResourceError should be handled gracefully, not propagate")
 
 
 @pytest.mark.asyncio
@@ -192,33 +197,35 @@ async def test_exception_group_with_closed_resource_error(isolated_env, monkeypa
         return await original_handle_request(self, scope, receive, send)
 
     app = build_http_app(settings, server)
-    transport = ASGITransport(app=app)
 
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # First request should work
-        r1 = await client.post(
-            settings.http.path,
-            json=_rpc("tools/call", {"name": "health_check", "arguments": {}}),
-        )
-        assert r1.status_code in (200, 401, 403)
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
 
-        # Patch for second request
-        with patch.object(StreamableHTTPServerTransport, "handle_request", patched_handle_request):
-            try:
-                r2 = await client.post(
-                    settings.http.path,
-                    json=_rpc("tools/call", {"name": "health_check", "arguments": {}}),
-                )
-                # After fix: Should handle gracefully
-                assert r2.status_code in (200, 401, 403, 500, 503)
-            except (ExceptionGroup, BaseExceptionGroup) as eg:
-                # Check if the only exception in the group is ClosedResourceError
-                all_closed = all(isinstance(e, anyio.ClosedResourceError) for e in eg.exceptions)
-                if all_closed:
-                    pytest.fail("ExceptionGroup with only ClosedResourceError should be suppressed")
-                # If there are other exceptions, that's a test issue, not the fix
-            except anyio.ClosedResourceError:
-                pytest.fail("ClosedResourceError should be handled gracefully")
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # First request should work
+            r1 = await client.post(
+                settings.http.path,
+                json=_rpc("tools/call", {"name": "health_check", "arguments": {}}),
+            )
+            assert r1.status_code in (200, 401, 403)
+
+            # Patch for second request
+            with patch.object(StreamableHTTPServerTransport, "handle_request", patched_handle_request):
+                try:
+                    r2 = await client.post(
+                        settings.http.path,
+                        json=_rpc("tools/call", {"name": "health_check", "arguments": {}}),
+                    )
+                    # After fix: Should handle gracefully
+                    assert r2.status_code in (200, 401, 403, 500, 503)
+                except (ExceptionGroup, BaseExceptionGroup) as eg:
+                    # Check if the only exception in the group is ClosedResourceError
+                    all_closed = all(isinstance(e, anyio.ClosedResourceError) for e in eg.exceptions)
+                    if all_closed:
+                        pytest.fail("ExceptionGroup with only ClosedResourceError should be suppressed")
+                    # If there are other exceptions, that's a test issue, not the fix
+                except anyio.ClosedResourceError:
+                    pytest.fail("ClosedResourceError should be handled gracefully")
 
 
 @pytest.mark.asyncio
@@ -243,22 +250,24 @@ async def test_server_recovers_after_closed_resource_error(isolated_env, monkeyp
         return await original_handle_request(self, scope, receive, send)
 
     app = build_http_app(settings, server)
-    transport = ASGITransport(app=app)
 
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # First request triggers ClosedResourceError
-        with (
-            patch.object(StreamableHTTPServerTransport, "handle_request", patched_handle_request),
-            contextlib.suppress(Exception),
-        ):
-            await client.post(
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # First request triggers ClosedResourceError
+            with (
+                patch.object(StreamableHTTPServerTransport, "handle_request", patched_handle_request),
+                contextlib.suppress(Exception),
+            ):
+                await client.post(
+                    settings.http.path,
+                    json=_rpc("tools/call", {"name": "health_check", "arguments": {}}),
+                )
+
+            # Second request (without patch) should work - server has recovered
+            r2 = await client.post(
                 settings.http.path,
                 json=_rpc("tools/call", {"name": "health_check", "arguments": {}}),
             )
-
-        # Second request (without patch) should work - server has recovered
-        r2 = await client.post(
-            settings.http.path,
-            json=_rpc("tools/call", {"name": "health_check", "arguments": {}}),
-        )
-        assert r2.status_code in (200, 401, 403), "Server should recover after handling ClosedResourceError"
+            assert r2.status_code in (200, 401, 403), "Server should recover after handling ClosedResourceError"
