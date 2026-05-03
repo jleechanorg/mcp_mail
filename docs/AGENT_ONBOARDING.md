@@ -671,15 +671,9 @@ If you encounter issues:
 - `resource://project/{project_key}` - Project details including agents
 - `resource://projects` - List all projects
 - `resource://file_reservations/{project_key}?active_only=true` - Active file reservations
-<<<<<<< HEAD:AGENT_ONBOARDING.md
-- `resource://inbox/{agent_name}?project={project_key}` - Agent's inbox (project auto-detected if agent name is unique; otherwise specify project)
-- `resource://outbox/{agent_name}?project={project_key}` - Agent's sent messages (project parameter required)
-- `resource://message/{message_id}` - Single message details (project auto-detected if message ID is unique)
-=======
 - `resource://inbox/{agent_name}?project={project_key}` - Agent's inbox (requires project; global lookup works when the name is unique)
 - `resource://outbox/{agent_name}?project={project_key}` - Agent's sent messages (requires project; global lookup works when the name is unique)
 - `resource://message/{message_id}?project={project_key}` - Single message details (project optional when the id is unique globally)
->>>>>>> origin/main:docs/AGENT_ONBOARDING.md
 
 ## Next Steps
 
