@@ -16,14 +16,12 @@ Usage:
     python testing_llm/run_real_cli_test.py --dry-run
 
 Requirements:
-    uv tool install jleechanorg-orchestration
+    pip install jleechanorg-orchestration
 """
 
 from __future__ import annotations
 
 import argparse
-import contextlib
-import importlib
 import os
 import shlex
 import shutil
@@ -33,12 +31,12 @@ import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 # Orchestration framework for CLI profiles
 try:
-    orchestration_module = importlib.import_module("orchestration.task_dispatcher")
-    CLI_PROFILES = getattr(orchestration_module, "CLI_PROFILES", {})
+    from orchestration.task_dispatcher import CLI_PROFILES
+
     ORCHESTRATION_AVAILABLE = True
 except ImportError:
     CLI_PROFILES = {}
@@ -166,13 +164,9 @@ def run_cli_agent(
     agent_name: str,
     prompt: str,
     test_dir: Path,
+    timeout: int = 120,
     dry_run: bool = False,
-) -> tuple[
-    bool,
-    str,
-    Optional[subprocess.Popen[str]],
-    Optional[contextlib.ExitStack],
-]:
+) -> tuple[bool, str, Optional[subprocess.Popen]]:
     """Run a CLI agent with the given prompt.
 
     Uses the orchestration framework pattern instead of direct subprocess calls.
@@ -182,10 +176,11 @@ def run_cli_agent(
         agent_name: Name for this agent instance
         prompt: The prompt to send
         test_dir: Test directory for outputs
+        timeout: Timeout in seconds
         dry_run: If True, don't actually execute
 
     Returns:
-        Tuple of (success, message, process, output_stack)
+        Tuple of (success, message, process)
     """
     prompt_file = test_dir / "prompts" / f"{agent_name}_task.txt"
     output_file = test_dir / "outputs" / f"{agent_name}_output.txt"
@@ -193,14 +188,14 @@ def run_cli_agent(
     try:
         command = build_cli_command(cli_name, prompt, prompt_file)
     except (ValueError, FileNotFoundError) as e:
-        return False, str(e), None, None
+        return False, str(e), None
 
     # Set up environment with MCP config
     env = os.environ.copy()
-    mcp_config: dict[str, Any] = MCP_CLI_CONFIG.get(cli_name, {})
+    mcp_config = MCP_CLI_CONFIG.get(cli_name, {})
     config_env = mcp_config.get("mcp_config_env")
     config_file = mcp_config.get("mcp_config_file")
-    if isinstance(config_env, str) and config_env and isinstance(config_file, str) and config_file:
+    if config_env and config_file:
         env[config_env] = config_file
     env["NO_COLOR"] = "1"  # Disable color output for cleaner logs
 
@@ -208,32 +203,36 @@ def run_cli_agent(
     print(f"  Output: {output_file}")
 
     if dry_run:
-        return True, "Dry run - command not executed", None, None
+        return True, "Dry run - command not executed", None
 
-    # Note: We keep the output file open and return the stack to the caller
-    # The caller MUST close the output_stack after the process completes
-    output_stack: Optional[contextlib.ExitStack] = None
+    out_f = None
     try:
-        # Open output file for writing and keep handle alive until caller closes
-        output_stack = contextlib.ExitStack()
-        output_handle = output_stack.enter_context(output_file.open("w"))
-        # Start process (non-blocking) - stdout writes to output_handle
-        # The file handle MUST stay open until process completes
+        # Open output file for writing - keep it open so subprocess can write to it
+        # Note: File handle intentionally not closed here - it must remain open for
+        # the subprocess to write output. The caller is responsible for closing it
+        # after the process completes (typically via process.wait() or process.kill()).
+        out_f = open(output_file, "w")
+        
+        # Start process (non-blocking)
         process = subprocess.Popen(
             command,
-            stdout=output_handle,
+            stdout=out_f,
             stderr=subprocess.STDOUT,
             env=env,
             shell=False,  # Security: avoid shell injection
-            text=True,
         )
 
-        return True, f"Started with PID {process.pid}", process, output_stack
+        return True, f"Started with PID {process.pid}", process
 
     except Exception as e:
-        if output_stack:
-            output_stack.close()
-        return False, f"Failed to start: {e}", None, None
+        # Close file if we opened it but failed to start process
+        if out_f is not None:
+            try:
+                out_f.close()
+            except Exception:
+                # Ignore errors when closing file - primary exception is more important
+                pass
+        return False, f"Failed to start: {e}", None
 
 
 def create_agent_prompts(run_id: str, project_key: str) -> dict[str, str]:
@@ -340,15 +339,14 @@ def run_multi_agent_test(
         Test results dictionary
     """
     print("=" * 70)
-    print("Real CLI Multi-Agent Coordination Test")
+    print(f"Real CLI Multi-Agent Coordination Test")
     print(f"CLI: {cli_name}")
     print("=" * 70)
 
-    agents: list[dict[str, Any]] = []
-    results: dict[str, Any] = {
+    results = {
         "cli": cli_name,
         "timestamp": datetime.now().isoformat(),
-        "agents": agents,
+        "agents": [],
         "status": "pending",
     }
 
@@ -357,7 +355,7 @@ def run_multi_agent_test(
 
     if not ORCHESTRATION_AVAILABLE:
         print("  FAIL: Orchestration framework not installed")
-        print("  Run: uv tool install jleechanorg-orchestration")
+        print("  Run: pip install jleechanorg-orchestration")
         results["status"] = "failed"
         results["error"] = "Orchestration framework not installed"
         return results
@@ -399,29 +397,24 @@ def run_multi_agent_test(
             if not dry_run:
                 time.sleep(delay)
 
-        success, msg, process, output_stack = run_cli_agent(
+        success, msg, process = run_cli_agent(
             cli_name=cli_name,
             agent_name=agent_name,
             prompt=prompt,
             test_dir=test_dir,
+            timeout=timeout,
             dry_run=dry_run,
         )
 
-        # Safely get PID only if process is not None
-        agent_pid = process.pid if process is not None else None
-        agents.append(
-            {
-                "name": agent_name,
-                "started": success,
-                "message": msg,
-                "pid": agent_pid,
-            }
-        )
+        results["agents"].append({
+            "name": agent_name,
+            "started": success,
+            "message": msg,
+            "pid": process.pid if process is not None else None,
+        })
 
         if process:
-            processes.append((agent_name, process, output_stack))
-        elif output_stack:
-            output_stack.close()
+            processes.append((agent_name, process))
 
         if success:
             print(f"  PASS: {msg}")
@@ -431,16 +424,13 @@ def run_multi_agent_test(
     # Wait for completion
     if not dry_run and processes:
         print("\n[WAIT] Waiting for agents to complete...")
-        for agent_name, process, output_stack in processes:
+        for agent_name, process in processes:
             try:
                 process.wait(timeout=timeout)
                 print(f"  DONE: {agent_name} (exit code: {process.returncode})")
             except subprocess.TimeoutExpired:
                 print(f"  TIMEOUT: {agent_name} - killing process")
                 process.kill()
-            finally:
-                if output_stack:
-                    output_stack.close()
 
     # Collect evidence
     print("\n[EVIDENCE] Collecting results...")
@@ -451,13 +441,13 @@ def run_multi_agent_test(
 ======================================
 
 Test Directory: {test_dir}
-Timestamp: {results["timestamp"]}
+Timestamp: {results['timestamp']}
 CLI: {cli_name}
 Run ID: {run_id}
 
 Agents:
 """
-    for agent in agents:
+    for agent in results["agents"]:
         status = "PASS" if agent["started"] else "FAIL"
         summary_text += f"  - {agent['name']}: {status} ({agent['message']})\n"
 
@@ -477,7 +467,7 @@ Evidence Files:
     print(f"  Summary: {summary_file}")
 
     # Determine overall status
-    all_started = all(a["started"] for a in agents)
+    all_started = all(a["started"] for a in results["agents"])
     results["status"] = "success" if all_started else "failed"
 
     print("\n" + "=" * 70)

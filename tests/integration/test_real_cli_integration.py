@@ -1,21 +1,25 @@
 #!/usr/bin/env python3
-"""Real CLI Integration Tests for MCP Agent Mail.
+"""Real CLI Availability Tests for MCP Agent Mail.
 
-These tests invoke actual CLI tools (Claude, Cursor, Codex, Gemini) using the
-orchestration framework and verify MCP Agent Mail functionality.
+These tests verify that CLI tools (Claude, Cursor, Codex, Gemini) are installed
+and can be invoked using the orchestration framework. They are prerequisite checks
+before running full MCP Agent Mail integration tests.
+
+For full MCP Agent Mail functionality tests that verify register_agent, send_message,
+and fetch_inbox operations, see testing_llm/run_real_cli_test.py.
 
 Usage:
-    # Run Claude integration test
+    # Run Claude availability test
     python -m pytest tests/integration/test_real_cli_integration.py -k claude -v
 
-    # Run all real CLI tests (requires CLIs installed)
+    # Run all CLI availability tests (requires CLIs installed)
     python -m pytest tests/integration/test_real_cli_integration.py -v
 
     # Run as standalone script
     python tests/integration/test_real_cli_integration.py
 
 Requirements:
-    - uv tool install jleechanorg-orchestration
+    - pip install jleechanorg-orchestration
     - Claude/Cursor/Codex/Gemini CLIs installed (tests skip if not available)
 
 Note:
@@ -34,7 +38,7 @@ import pytest
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from tests.integration.test_harness_utils import (  # noqa: E402
+from tests.integration.test_harness_utils import (
     ORCHESTRATION_AVAILABLE,
     ClaudeCLITest,
     CodexCLITest,
@@ -43,18 +47,21 @@ from tests.integration.test_harness_utils import (  # noqa: E402
     is_cli_available,
 )
 
+
 # Skip all tests if orchestration framework is not installed
 pytestmark = pytest.mark.skipif(
     not ORCHESTRATION_AVAILABLE,
-    reason="jleechanorg-orchestration not installed - run: uv tool install jleechanorg-orchestration",
+    reason="jleechanorg-orchestration not installed - run: pip install jleechanorg-orchestration",
 )
 
 
 class MCPMailClaudeCLITest(ClaudeCLITest):
-    """Claude CLI integration test for MCP Agent Mail.
+    """Claude CLI availability test for MCP Agent Mail integration.
 
-    This test verifies that Claude Code CLI can interact with
-    MCP Agent Mail tools when properly configured.
+    This test verifies that Claude Code CLI is installed and responding.
+    For full MCP Agent Mail functionality tests (register_agent, send_message,
+    fetch_inbox), see testing_llm/run_real_cli_test.py which runs multi-agent
+    workflows.
     """
 
     def run_all_tests(self) -> int:
@@ -70,7 +77,7 @@ class MCPMailClaudeCLITest(ClaudeCLITest):
             self.record(
                 "orchestration",
                 False,
-                "Not installed - run: uv tool install jleechanorg-orchestration",
+                "Not installed - run: pip install jleechanorg-orchestration",
                 skip=True,
             )
             return self._finish()
@@ -87,19 +94,17 @@ class MCPMailClaudeCLITest(ClaudeCLITest):
             return self._finish()
         self.record("cli", True, "Installed and responding")
 
-        print("\n[TEST] MCP Agent Mail tools via CLI...")
-        if not self.validate_mcp_mail_access(timeout=120):
-            return self._finish()
-
         # Basic CLI invocation test
-        # The validate_mcp_mail_access() call above already tests MCP tool availability
-        # by prompting the CLI to list tools. This is the actual MCP functionality test.
         print("\n[TEST] Basic CLI invocation...")
-        success, output = self.run_cli("Respond with exactly: 'MCP Mail integration test successful'")
+        success, output = self.run_cli(
+            "Respond with exactly: 'MCP Mail integration test successful'"
+        )
         if success and "successful" in output.lower():
             self.record("basic_invocation", True, "CLI responded correctly")
         elif success:
-            self.record("basic_invocation", True, f"CLI responded: {output[:100]}...")
+            self.record(
+                "basic_invocation", True, f"CLI responded: {output[:100]}..."
+            )
         else:
             self.record("basic_invocation", False, f"CLI failed: {output[:200]}")
 
@@ -107,10 +112,11 @@ class MCPMailClaudeCLITest(ClaudeCLITest):
 
 
 class MCPMailCursorCLITest(CursorCLITest):
-    """Cursor CLI integration test for MCP Agent Mail.
+    """Cursor CLI availability test for MCP Agent Mail integration.
 
+    This test verifies that cursor-agent CLI is installed and responding.
     Note: cursor-agent CLI may use different storage than Cursor IDE.
-    This test is expected to work with Cursor agent configurations.
+    For full MCP Agent Mail functionality tests, see testing_llm/run_real_cli_test.py.
     """
 
     def run_all_tests(self) -> int:
@@ -131,10 +137,6 @@ class MCPMailCursorCLITest(CursorCLITest):
             return self._finish()
         self.record("cli", True, "Installed and responding")
 
-        print("\n[TEST] MCP Agent Mail tools via CLI...")
-        if not self.validate_mcp_mail_access(timeout=120):
-            return self._finish()
-
         # Basic CLI invocation test
         print("\n[TEST] Basic CLI invocation...")
         success, output = self.run_cli("echo 'Cursor MCP Mail test'")
@@ -147,7 +149,11 @@ class MCPMailCursorCLITest(CursorCLITest):
 
 
 class MCPMailCodexCLITest(CodexCLITest):
-    """Codex CLI integration test for MCP Agent Mail."""
+    """Codex CLI availability test for MCP Agent Mail integration.
+
+    This test verifies that Codex CLI is installed and responding.
+    For full MCP Agent Mail functionality tests, see testing_llm/run_real_cli_test.py.
+    """
 
     def run_all_tests(self) -> int:
         """Run Codex-specific MCP Mail integration tests."""
@@ -167,10 +173,6 @@ class MCPMailCodexCLITest(CodexCLITest):
             return self._finish()
         self.record("cli", True, "Installed and responding")
 
-        print("\n[TEST] MCP Agent Mail tools via CLI...")
-        if not self.validate_mcp_mail_access(timeout=120):
-            return self._finish()
-
         # Basic CLI invocation test
         print("\n[TEST] Basic CLI invocation...")
         success, output = self.run_cli("echo 'Codex MCP Mail test'")
@@ -183,7 +185,11 @@ class MCPMailCodexCLITest(CodexCLITest):
 
 
 class MCPMailGeminiCLITest(GeminiCLITest):
-    """Gemini CLI integration test for MCP Agent Mail."""
+    """Gemini CLI availability test for MCP Agent Mail integration.
+
+    This test verifies that Gemini CLI is installed and responding.
+    For full MCP Agent Mail functionality tests, see testing_llm/run_real_cli_test.py.
+    """
 
     def run_all_tests(self) -> int:
         """Run Gemini-specific MCP Mail integration tests."""
@@ -202,10 +208,6 @@ class MCPMailGeminiCLITest(GeminiCLITest):
             )
             return self._finish()
         self.record("cli", True, "Installed and responding")
-
-        print("\n[TEST] MCP Agent Mail tools via CLI...")
-        if not self.validate_mcp_mail_access(timeout=120):
-            return self._finish()
 
         # Basic CLI invocation test
         print("\n[TEST] Basic CLI invocation...")
@@ -278,9 +280,9 @@ if __name__ == "__main__":
         results = []
         for name, cls in test_classes.items():
             if is_cli_available(name):
-                print(f"\n{'=' * 70}")
+                print(f"\n{'='*70}")
                 print(f"Running {name.upper()} tests...")
-                print(f"{'=' * 70}\n")
+                print(f"{'='*70}\n")
                 test = cls()
                 results.append((name, test.run_all_tests()))
             else:

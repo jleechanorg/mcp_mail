@@ -4,51 +4,51 @@
 This module provides the orchestration framework pattern for running real
 CLI tools (Claude, Codex, Cursor, Gemini) in integration tests.
 
-Requires the jleechanorg-orchestration framework for CLI profile management.
-Install with: ``uv tool install jleechanorg-orchestration``. The framework
-exposes ``CLI_PROFILES`` entries such as:
+Orchestration Framework
+-----------------------
+The jleechanorg-orchestration framework provides standardized CLI profiles
+(CLI_PROFILES) that define how to invoke different AI CLI tools. Each profile
+contains:
+    - binary: The CLI executable name (e.g., "claude", "codex")
+    - display_name: Human-readable name for output
+    - command_template: Template string for building commands
+      Format: "{binary} -p {prompt_file} {continue_flag}"
+    - stdin_template: Optional stdin redirection pattern
 
-```
-CLI_PROFILES = {
-    "claude": {
-        "binary": "claude",
-        "display_name": "Claude Code",
-        "command_template": "{binary} -p {prompt_file}",
-        "stdin_template": "/dev/null",
-    },
-}
-```
+This eliminates the need for subprocess calls directly in test code and provides
+a consistent interface across different CLI tools.
 
-Each profile defines the CLI binary, a command template that accepts a prompt
-file, and optional stdin handling. The harness uses these profiles to
-construct safe subprocess commands without shell interpolation.
+Installation:
+    pip install jleechanorg-orchestration
+
+If not installed, tests will gracefully skip with appropriate messages.
+
+Example Usage:
+    from tests.integration.test_harness_utils import ClaudeCLITest
+    
+    test = ClaudeCLITest()
+    exit_code = test.run_all_tests()
 """
 
 from __future__ import annotations
 
-import contextlib
-import importlib
-import json
 import os
-import re
 import shlex
 import shutil
-import socket
 import tempfile
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import urlparse
 
 # Orchestration framework (optional dependency for real CLI tests)
-# Install with: uv tool install jleechanorg-orchestration
+# Install with: pip install jleechanorg-orchestration
 try:
-    orchestration_module = importlib.import_module("orchestration.task_dispatcher")
-    CLI_PROFILES = getattr(orchestration_module, "CLI_PROFILES", {})
+    from orchestration.task_dispatcher import CLI_PROFILES
+
     ORCHESTRATION_AVAILABLE = True
-except ImportError:  # Orchestration framework not installed - tests will skip gracefully
+except ImportError:
     CLI_PROFILES = {}
     ORCHESTRATION_AVAILABLE = False
 
@@ -66,16 +66,14 @@ def _get_branch_name() -> str:
         )
         if result.returncode == 0:
             return result.stdout.strip().replace("/", "-")
-    except Exception as exc:  # pragma: no cover - best-effort branch detection
-        print(f"  WARN: Failed to read git branch name: {exc}")
+    except Exception:
+        # Fallback to "unknown-branch" if git command fails
+        pass
     return "unknown-branch"
 
 
 RESULTS_DIR = Path(tempfile.gettempdir()) / "mcp-mail-tests" / _get_branch_name()
 PROJECT_ROOT = Path(__file__).parent.parent.parent
-MCP_CONFIG_PATH = PROJECT_ROOT / ".mcp.json"
-MCP_AGENT_MAIL_SERVER = "mcp-agent-mail"
-MCP_EXPECTED_TOOLS = {"register_agent", "send_message", "fetch_inbox"}
 
 
 @dataclass
@@ -117,111 +115,6 @@ class BaseCLITest:
             self.cli_profile = CLI_PROFILES[self.CLI_NAME]
         else:
             self.cli_profile = None
-
-    def _load_mcp_config(self) -> tuple[Optional[dict[str, Any]], Optional[str]]:
-        """Load MCP configuration from the repo-level .mcp.json file."""
-        if not MCP_CONFIG_PATH.exists():
-            return None, f"MCP config not found at {MCP_CONFIG_PATH}"
-
-        try:
-            return json.loads(MCP_CONFIG_PATH.read_text()), None
-        except (OSError, json.JSONDecodeError) as exc:
-            return None, f"Unable to read MCP config: {exc}"
-
-    def _get_mcp_server_url(self, config: dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
-        """Extract MCP Agent Mail server URL from config."""
-        mcp_servers = config.get("mcpServers", {})
-        server = mcp_servers.get(MCP_AGENT_MAIL_SERVER)
-        if not server:
-            return None, f"{MCP_AGENT_MAIL_SERVER} not found in MCP config"
-
-        url = server.get("url")
-        if not url:
-            return None, f"{MCP_AGENT_MAIL_SERVER} missing url in MCP config"
-        return url, None
-
-    def _is_server_reachable(self, url: str, timeout: float = 3.0) -> tuple[bool, str]:
-        """Check whether the MCP Agent Mail server port is reachable."""
-        parsed = urlparse(url)
-        host = parsed.hostname
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
-
-        if not host:
-            return False, f"Invalid MCP server URL: {url}"
-
-        try:
-            with socket.create_connection((host, port), timeout=timeout):
-                return True, f"{MCP_AGENT_MAIL_SERVER} reachable at {host}:{port}"
-        except OSError as exc:
-            return False, f"{MCP_AGENT_MAIL_SERVER} unreachable at {host}:{port} ({exc})"
-
-    def _parse_tool_names_from_output(self, output: str) -> set[str]:
-        """Parse tool names from CLI output.
-
-        Note: This is a best-effort heuristic that may produce false positives.
-        """
-        tokens = set(re.findall(r"[A-Za-z_]+", output.lower()))
-        return tokens
-
-    def _exercise_mcp_mail_tools(
-        self,
-        server_url: str,
-        expected_tools: set[str],
-        timeout: int = 90,
-    ) -> tuple[bool, str, dict[str, Any]]:
-        """Prompt the CLI to list available MCP Agent Mail tools."""
-        prompt = (
-            "Connect to the configured mcp-agent-mail MCP server and list the tool "
-            "names available to you. Respond exactly as 'TOOLS: <comma-separated tool names>'. "
-            f"The server URL should be {server_url}."
-        )
-
-        success, output = self.run_cli(prompt, timeout=timeout)
-        if not success:
-            return False, f"MCP tool prompt failed: {output[:200]}", {"output": output[:500]}
-
-        tool_names = self._parse_tool_names_from_output(output)
-        missing_tools = expected_tools - tool_names
-
-        if missing_tools:
-            return (
-                False,
-                f"Missing expected tools: {', '.join(sorted(missing_tools))}",
-                {"tools": sorted(tool_names)},
-            )
-
-        return True, "MCP Agent Mail tools available", {"tools": sorted(tool_names)}
-
-    def validate_mcp_mail_access(self, timeout: int = 90) -> bool:
-        """Validate MCP Agent Mail configuration and tool availability via CLI."""
-        config, error = self._load_mcp_config()
-        if error:
-            self.record("mcp_config", False, error, skip=True)
-            return False
-
-        if config is None:
-            self.record("mcp_config", False, "MCP config unavailable", skip=True)
-            return False
-
-        server_url, url_error = self._get_mcp_server_url(config)
-        if url_error or not server_url:
-            self.record("mcp_config", False, url_error or "Unknown MCP config error", skip=True)
-            return False
-
-        reachable, reach_msg = self._is_server_reachable(server_url)
-        if not reachable:
-            self.record("mcp_server", False, reach_msg, skip=True)
-            return False
-        self.record("mcp_server", True, reach_msg)
-
-        tool_success, tool_msg, details = self._exercise_mcp_mail_tools(
-            server_url=server_url,
-            expected_tools=MCP_EXPECTED_TOOLS,
-            timeout=timeout,
-        )
-        self.record("mcp_tools", tool_success, tool_msg, details=details)
-
-        return tool_success
 
     def record(
         self,
@@ -287,8 +180,9 @@ class BaseCLITest:
                 display_name = self.cli_profile.get("display_name", cli_binary)
                 print(f"  {display_name} version: {result.stdout.strip()}")
                 return True
-        except Exception as exc:  # pragma: no cover - CLI availability best-effort
-            print(f"  WARN: Failed to check CLI availability: {exc}")
+        except Exception:
+            # CLI not responding to --version, treat as unavailable
+            pass
         return False
 
     def run_cli(
@@ -327,7 +221,9 @@ class BaseCLITest:
 
         try:
             # Build command using CLI profile template
-            command_template = self.cli_profile.get("command_template", "{binary} -p {prompt_file}")
+            command_template = self.cli_profile.get(
+                "command_template", "{binary} -p {prompt_file}"
+            )
             cli_command_str = command_template.format(
                 binary=cli_path,
                 prompt_file=prompt_file,
@@ -345,9 +241,9 @@ class BaseCLITest:
 
             # Handle stdin redirection from profile
             stdin_template = self.cli_profile.get("stdin_template", "/dev/null")
-            stdin_file = None
             if stdin_template != "/dev/null":
-                with Path(prompt_file).open() as stdin_file:
+                # Use context manager to ensure file is properly closed
+                with open(prompt_file) as stdin_file:
                     result = subprocess.run(
                         cli_command,
                         shell=False,  # Security: avoid shell injection
@@ -378,8 +274,11 @@ class BaseCLITest:
             return False, str(e)
         finally:
             # Clean up temp file
-            with contextlib.suppress(OSError):
-                Path(prompt_file).unlink()
+            try:
+                os.unlink(prompt_file)
+            except OSError:
+                # Ignore errors when cleaning up temp file (may already be deleted)
+                pass
 
     def print_summary(self) -> None:
         """Print test results summary."""
@@ -434,7 +333,9 @@ class BaseCLITest:
             ],
             "summary": {
                 "passed": sum(1 for r in self.results if r.passed and not r.skipped),
-                "failed": sum(1 for r in self.results if not r.passed and not r.skipped),
+                "failed": sum(
+                    1 for r in self.results if not r.passed and not r.skipped
+                ),
                 "skipped": sum(1 for r in self.results if r.skipped),
             },
         }
@@ -451,7 +352,11 @@ class BaseCLITest:
         Returns:
             Exit code (0 = success, 1 = failure)
         """
-        display_name = self.cli_profile.get("display_name", self.CLI_NAME) if self.cli_profile else "Unknown"
+        display_name = (
+            self.cli_profile.get("display_name", self.CLI_NAME)
+            if self.cli_profile
+            else "Unknown"
+        )
         print("=" * 70)
         print(f"{display_name} - MCP Mail Integration Tests (REAL CLI)")
         print("=" * 70)
@@ -463,7 +368,7 @@ class BaseCLITest:
             self.record(
                 "orchestration",
                 False,
-                "orchestration framework not installed - run: uv tool install jleechanorg-orchestration",
+                "orchestration framework not installed - run: pip install jleechanorg-orchestration",
                 skip=True,
             )
             return self._finish()
@@ -471,7 +376,11 @@ class BaseCLITest:
         if self.check_cli_available():
             self.record("cli", True, "Installed and responding")
         else:
-            cli_binary = self.cli_profile.get("binary", self.CLI_NAME) if self.cli_profile else self.CLI_NAME
+            cli_binary = (
+                self.cli_profile.get("binary", self.CLI_NAME)
+                if self.cli_profile
+                else self.CLI_NAME
+            )
             self.record(
                 "cli",
                 False,
