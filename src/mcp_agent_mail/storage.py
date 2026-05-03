@@ -32,15 +32,12 @@ _IMAGE_PATTERN = re.compile(r"!\[(?P<alt>[^\]]*)\]\((?P<path>[^)]+)\)")
 def is_archive_enabled(settings: Settings) -> bool:
     """Check if archive storage is enabled (either local or project-key based).
 
-    Archive storage is optional for core features (project and agent registration,
-    which use SQLite database operations). However, message archiving and related
-    Git-backed operations require archive storage to be enabled.
-    
-    When archive is disabled, operations that write to the Git archive (message
-    storage, agent profiles, deletion markers) will be skipped, but SQLite
-    database operations will continue to work normally.
-    
-    Archive is used for Git-based file storage of messages and metadata as .md files.
+    Archive storage is optional for some core features (for example, basic
+    project and agent registration), which can operate using the SQLite
+    database alone. However, many higher-level application operations
+    (such as message archiving and related Git-backed workflows) still
+    require archive storage to be enabled and will call :func:`ensure_archive`.
+    Archive is used for git-based file storage of messages as .md files.
     """
     return settings.storage.local_archive_enabled or settings.storage.project_key_storage_enabled
 

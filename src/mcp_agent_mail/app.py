@@ -90,6 +90,13 @@ CLUSTER_PRODUCT = "product"
 # Global inbox configuration
 
 
+async def _ensure_archive_if_enabled(settings: Settings, project: Project) -> ProjectArchive | None:
+    """Initialize and return the project archive when archive storage is enabled."""
+    if not is_archive_enabled(settings):
+        return None
+    return await ensure_archive(settings, project.slug, project_key=project.human_key)
+
+
 def _resolve_project_identity(target_path: str) -> dict[str, Any]:
     """
     Resolve project identity using markers and git metadata.
@@ -934,7 +941,12 @@ def _canonical_project_pair(a_id: int, b_id: int) -> tuple[int, int]:
 
 
 @asynccontextmanager
-async def _archive_write_lock(archive: ProjectArchive, *, timeout_seconds: float = 120.0):
+async def _archive_write_lock(archive: ProjectArchive | None, *, timeout_seconds: float = 120.0):
+    """Acquire archive write lock, or no-op if archive is None (disabled mode)."""
+    if archive is None:
+        # Archive disabled - no lock needed, just yield
+        yield
+        return
     try:
         async with archive_write_lock(archive, timeout_seconds=timeout_seconds):
             yield
@@ -953,20 +965,6 @@ async def _archive_write_lock(archive: ProjectArchive, *, timeout_seconds: float
                 "timeout_seconds": timeout_seconds,
             },
         ) from exc
-
-
-async def _ensure_archive_if_enabled(
-    settings: Settings, slug: str, project_key: str
-) -> Optional[ProjectArchive]:
-    """
-    Initialize archive only if archive storage is enabled.
-    
-    Returns the ProjectArchive if enabled, None otherwise.
-    This helper reduces duplication of the conditional archive initialization pattern.
-    """
-    if is_archive_enabled(settings):
-        return await ensure_archive(settings, slug, project_key=project_key)
-    return None
 
 
 async def _read_file_preview(path: Path, *, max_chars: int) -> str:
@@ -3152,8 +3150,11 @@ def build_mcp_server() -> FastMCP:
         recipient_records.extend((agent, "bcc") for agent in bcc_agents)
         recipient_lookup_elapsed = time.perf_counter() - recipient_lookup_start
 
+        # Archive is optional - only initialize if enabled
         archive_start = time.perf_counter()
-        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+        archive: ProjectArchive | None = None
+        if is_archive_enabled(settings):
+            archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
         archive_elapsed = time.perf_counter() - archive_start
         convert_markdown = (
             convert_images_override if convert_images_override is not None else settings.storage.convert_images
@@ -3216,13 +3217,20 @@ def build_mcp_server() -> FastMCP:
                     }
 
             attachments_start = time.perf_counter()
-            processed_body, attachments_meta, attachment_files = await process_attachments(
-                archive,
-                body_md,
-                attachment_paths or [],
-                convert_markdown,
-                embed_policy=embed_policy,
-            )
+            # Process attachments only if archive is enabled
+            if archive:
+                processed_body, attachments_meta, attachment_files = await process_attachments(
+                    archive,
+                    body_md,
+                    attachment_paths or [],
+                    convert_markdown,
+                    embed_policy=embed_policy,
+                )
+            else:
+                # Archive disabled - skip attachment processing, use raw body
+                processed_body = body_md
+                attachments_meta = []
+                attachment_files = []
             attachments_elapsed = time.perf_counter() - attachments_start
             # Fallback: if body contains inline data URI, reflect that in attachments meta for API parity
             if not attachments_meta and ("data:image" in body_md):
@@ -3280,15 +3288,17 @@ def build_mcp_server() -> FastMCP:
                 frontmatter.get("created"),
             )
             git_write_start = time.perf_counter()
-            await write_message_bundle(
-                archive,
-                frontmatter,
-                processed_body,
-                sender.name,
-                recipients_for_archive,
-                attachment_files,
-                commit_panel_text,
-            )
+            # Write to Git archive only if enabled
+            if archive:
+                await write_message_bundle(
+                    archive,
+                    frontmatter,
+                    processed_body,
+                    sender.name,
+                    recipients_for_archive,
+                    attachment_files,
+                    commit_panel_text,
+                )
             git_write_elapsed = time.perf_counter() - git_write_start
 
             # Optional Slack mirror via incoming webhook (env-driven)
@@ -3531,8 +3541,9 @@ def build_mcp_server() -> FastMCP:
         - Accepts any string as the project identifier (human_key).
         - Computes a stable slug from `human_key` (lowercased, safe characters) so
           multiple agents can refer to the same project consistently.
-        - Ensures DB row exists and that the on-disk archive is initialized
-          (e.g., `messages/`, `agents/`, `file_reservations/` directories).
+        - Ensures the DB row exists and, when archive storage is enabled, initializes
+          the on-disk archive (e.g., `messages/`, `agents/`, `file_reservations/`
+          directories).
 
         CRITICAL: Project Identity Rules
         ---------------------------------
@@ -3588,12 +3599,12 @@ def build_mcp_server() -> FastMCP:
         Idempotency
         -----------
         - Safe to call multiple times. If the project already exists, the existing
-          record is returned and the archive is ensured on disk (no destructive changes).
+          record is returned and the archive is ensured on disk when archive storage
+          is enabled (no destructive changes).
         """
         await ctx.info(f"Ensuring project for key '{human_key}'.")
         project = await _ensure_project(human_key)
-        # Archive is optional - only initialize if enabled
-        await _ensure_archive_if_enabled(settings, project.slug, project.human_key)
+        await _ensure_archive_if_enabled(settings, project)
         return _project_to_dict(project)
 
     @mcp.tool(name="register_agent")
@@ -3620,7 +3631,7 @@ def build_mcp_server() -> FastMCP:
         inbox_include_bodies: bool = False,
     ) -> dict[str, Any]:
         """
-        Create or update an agent identity within a project and persist its profile to Git.
+        Create or update an agent identity within a project and persist its profile to Git when enabled.
 
         IMPORTANT: Global Namespace
         ---------------------------
@@ -3640,7 +3651,10 @@ def build_mcp_server() -> FastMCP:
         - If `name` is omitted, a random adjective+noun name is auto-generated (e.g., "BlueLake").
         - Reusing the same `name` updates the profile (program/model/task) and
           refreshes `last_active_ts`.
-        - A `profile.json` file is written under `agents/<Name>/` in the project archive.
+        - Registration succeeds even when archive storage is disabled; in that case
+          Git profile writes are skipped.
+        - When archive storage is enabled, a `profile.json` file is written under
+          `agents/<Name>/` in the project archive.
         - Providing a name that is active in another project automatically retires that identity so you can claim the handle.
 
         CRITICAL: Agent Naming Rules
@@ -3702,8 +3716,7 @@ def build_mcp_server() -> FastMCP:
         """
         # Auto-create project if it doesn't exist (allows any string as project_key)
         project = await _ensure_project(project_key)
-        # Archive is optional - only initialize if enabled
-        await _ensure_archive_if_enabled(settings, project.slug, project.human_key)
+        await _ensure_archive_if_enabled(settings, project)
 
         if settings.tools_log_enabled:
             try:
