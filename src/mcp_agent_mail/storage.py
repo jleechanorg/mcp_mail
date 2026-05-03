@@ -11,7 +11,7 @@ import asyncio
 import logging
 import tempfile
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Iterable, Sequence
 
@@ -36,8 +36,8 @@ class ProjectArchive:
     slug: str
     root: Path
     repo: Any = None  # Was: Repo
-    lock_path: Path = Path("/dev/null")
-    repo_root: Path = Path("/dev/null")
+    lock_path: Path = field(default_factory=lambda: Path("/dev/null"))
+    repo_root: Path = field(default_factory=lambda: Path("/dev/null"))
 
     @property
     def attachments_dir(self) -> Path:
