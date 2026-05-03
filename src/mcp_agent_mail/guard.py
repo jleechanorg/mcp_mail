@@ -4,8 +4,6 @@ NOTE: Archive storage has been removed. Guard functionality is now disabled
 since it previously depended on the archive's file_reservations directory.
 """
 
-from __future__ import annotations
-
 import asyncio
 from pathlib import Path
 
