@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 import random
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -190,7 +191,7 @@ def _ensure_sqlite_parent_dir(db_url: str) -> None:
     if not db_name or db_name == ":memory:":
         return
 
-    db_path = Path(db_name).expanduser()
+    db_path = Path(os.path.expandvars(db_name)).expanduser()
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
 
