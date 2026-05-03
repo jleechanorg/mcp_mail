@@ -1,0 +1,5 @@
+{
+  "database": "beads.db",
+  "backend": "sqlite",
+  "jsonl_export": "issues.jsonl"
+}

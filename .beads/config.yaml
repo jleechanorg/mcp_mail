@@ -1,0 +1,6 @@
+issue-prefix: "MCP"
+no-db: false
+no-daemon: true
+db: .beads/beads.db
+sync-branch: "beads-sync"
+no-sparse-checkout: true  # disable sparse-checkout in the beads-sync worktree

@@ -1,0 +1,105 @@
+"""Utility helpers for the MCP Agent Mail service."""
+
+import random
+import re
+from typing import Iterable, Optional
+
+ADJECTIVES: Iterable[str] = (
+    "red",
+    "orange",
+    "pink",
+    "black",
+    "purple",
+    "blue",
+    "brown",
+    "white",
+    "green",
+    "chartreuse",
+    "lilac",
+    "fuchsia",
+)
+NOUNS: Iterable[str] = (
+    "stone",
+    "lake",
+    "dog",
+    "creek",
+    "pond",
+    "cat",
+    "bear",
+    "mountain",
+    "hill",
+    "snow",
+    "castle",
+)
+
+_SLUG_RE = re.compile(r"[^a-z0-9]+")
+_AGENT_NAME_RE = re.compile(r"[^A-Za-z0-9]+")
+_INVALID_FS_CHARS = ("/", "\\", ":", "*", "?", '"', "<", ">", "|", " ")
+
+
+def slugify(value: str) -> str:
+    """Normalize a human-readable value into a slug."""
+    normalized = value.strip().lower()
+    slug = _SLUG_RE.sub("-", normalized).strip("-")
+    return slug or "project"
+
+
+def generate_agent_name() -> str:
+    """Return a random codename composed from the adjective/noun pools."""
+    adjective = random.choice(tuple(ADJECTIVES)).capitalize()
+    noun = random.choice(tuple(NOUNS))
+    suffix = random.randint(100, 9999)
+    return f"{adjective}{noun}{suffix}"
+
+
+def sanitize_agent_name(value: str) -> Optional[str]:
+    """Normalize user-provided agent name; return None if nothing remains."""
+    cleaned = _AGENT_NAME_RE.sub("", value.strip())
+    if not cleaned:
+        return None
+    return cleaned[:128]
+
+
+def safe_filesystem_component(value: str) -> str:
+    """Sanitize a string for use as a filesystem component."""
+
+    component = value.strip()
+    for ch in _INVALID_FS_CHARS:
+        component = component.replace(ch, "_")
+    return component or "unknown"
+
+
+def validate_agent_name_format(name: str) -> bool:
+    """
+    Validate that an agent name matches the required adjective+noun format.
+
+    CRITICAL: Agent names MUST be randomly generated two-word combinations
+    like "GreenLake" or "BlueDog", NOT descriptive names like "BackendHarmonizer".
+
+    Names should be:
+    - Unique and easy to remember
+    - NOT descriptive of the agent's role or task
+    - One of the predefined adjective+noun combinations
+
+    Note: This validation is case-insensitive to match the database behavior
+    where "GreenLake", "greenlake", and "GREENLAKE" are treated as the same.
+
+    Returns True if valid, False otherwise.
+    """
+    if not name:
+        return False
+
+    if len(name) > 128:
+        return False
+
+    # Check if name matches any valid adjective+noun combination with optional numeric suffix
+    name_lower = name.lower()
+    for adjective in ADJECTIVES:
+        for noun in NOUNS:
+            base = f"{adjective}{noun}".lower()
+            if name_lower == base:
+                return True
+            if name_lower.startswith(base) and name_lower[len(base) :].isdigit():
+                return True
+
+    return False
