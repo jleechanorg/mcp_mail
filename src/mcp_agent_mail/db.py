@@ -2,12 +2,15 @@
 
 import asyncio
 import logging
+import os
 import random
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from functools import wraps
+from pathlib import Path
 from typing import Any, TypeVar
 
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
@@ -92,20 +95,6 @@ def _build_engine(settings: DatabaseSettings) -> AsyncEngine:
     is_sqlite = "sqlite" in settings.url.lower()
 
     if is_sqlite:
-        # Ensure the parent directory for the SQLite database file exists.
-        # This prevents "unable to open database file" errors on fresh installs
-        # or in CI where ~/.mcp_agent_mail_git_mailbox_repo hasn't been created yet.
-        from pathlib import Path
-
-        from sqlalchemy.engine import make_url
-
-        db_path_str = make_url(settings.url).database or ""
-        if db_path_str:
-            db_file = Path(db_path_str).expanduser()
-            if not db_file.parent.exists():
-                db_file.parent.mkdir(parents=True, exist_ok=True)
-                logger.info("Created database directory: %s", db_file.parent)
-
         # Register datetime adapters ONCE globally for Python 3.12+ compatibility
         # These are module-level registrations, not per-connection
         import datetime as dt_module
@@ -144,13 +133,10 @@ def _build_engine(settings: DatabaseSettings) -> AsyncEngine:
             "check_same_thread": False,  # Required for async SQLite
         }
 
-    # SQLite needs pool_size > 1 because the codebase uses nested get_session() calls
-    # (e.g. send_message holds a session while _create_placeholder_agent opens another).
-    # pool_size=1 causes deadlocks; 5 is sufficient for nesting without unbounded growth.
+    is_sqlite = settings.url.startswith("sqlite")
     pool_kwargs: dict[str, int] = (
         {"pool_size": 5, "max_overflow": 0} if is_sqlite else {"pool_size": 10, "max_overflow": 10}
     )
-
     engine = create_async_engine(
         settings.url,
         echo=settings.echo,
@@ -180,12 +166,28 @@ def _build_engine(settings: DatabaseSettings) -> AsyncEngine:
     return engine
 
 
+def _ensure_sqlite_parent_dir(db_url: str) -> None:
+    """Ensure parent directory exists for SQLite file-based database URLs."""
+    normalized_url = db_url.lower()
+    if not normalized_url.startswith(("sqlite://", "sqlite+")):
+        return
+
+    url = make_url(db_url)
+    db_name = url.database
+    if not db_name or db_name == ":memory:":
+        return
+
+    db_path = Path(os.path.expandvars(db_name)).expanduser()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+
 def init_engine(settings: Settings | None = None) -> None:
     """Initialise global engine and session factory once."""
     global _engine, _session_factory
     if _engine is not None and _session_factory is not None:
         return
     resolved_settings = settings or get_settings()
+    _ensure_sqlite_parent_dir(resolved_settings.database.url)
     engine = _build_engine(resolved_settings.database)
     _engine = engine
     _session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
@@ -375,14 +377,11 @@ def _setup_fts(connection) -> None:
     )
 
     # MIGRATION: Check for duplicate agent names before enforcing global uniqueness
-    # This handles upgrading from per-project uniqueness to global uniqueness.
-    index_exists = connection.exec_driver_sql(
-        "SELECT 1 FROM sqlite_master WHERE type='index' AND name='uq_agents_name_ci'"
-    ).fetchone()
-    if not index_exists:
-        _check_and_fix_duplicate_agent_names(connection)
+    # This handles upgrading from per-project uniqueness to global uniqueness
+    _check_and_fix_duplicate_agent_names(connection)
 
     # Case-insensitive unique index on ACTIVE agent names for global uniqueness
+    connection.exec_driver_sql("DROP INDEX IF EXISTS uq_agents_name_ci")
     connection.exec_driver_sql(
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_agents_name_ci ON agents(lower(name)) WHERE is_active = 1"
     )

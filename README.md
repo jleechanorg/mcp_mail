@@ -115,13 +115,43 @@ This fork extends the original MCP Agent Mail with **11 core enhancements** focu
 
 ### 🌐 Global Architecture (No Boundaries)
 
+> **Projects are informational labels** (e.g., repo paths, team names). They do **NOT** isolate agents — any agent can message any other agent regardless of project. `project_key` is retained for compatibility and labeling, but agent lookup and backend message queries do **not** use it to restrict reachability.
+
 - **🌍 Projects as Informational Metadata** - Projects don't create barriers:
   - Projects are **metadata only** (badges, tags, context) - NOT organizational boundaries
   - Unified inbox shows ALL messages regardless of project
   - Backend queries ignore project filters (messages fetched by agent, not project)
+  - Agent lookup is **global by name**; `project_key` is never used to restrict which agents are reachable
   - Consistent treatment across all layers (UI, database, tools)
+  - Note: `project_key` is still used for labeling and compatibility (e.g., where artifacts are written, how projects are labeled in logs/UI)
   - **Why**: Agents work seamlessly across multiple repos/projects
-  - **Implementation**: `src/mcp_agent_mail/app.py:2312-2327` (_get_message_by_id_global)
+  - **Implementation**: `src/mcp_agent_mail/app.py` (`_get_agent`, `_get_message_by_id_global`)
+
+**Cross-project messaging example:**
+```python
+# Alice is in project "repo-frontend", Bob is in project "repo-backend"
+# They can still message each other directly — project is just a label
+await client.call_tool("register_agent", {
+    "project_key": "repo-frontend", "program": "claude-code", "model": "opus-4", "name": "Alice"
+})
+await client.call_tool("register_agent", {
+    "project_key": "repo-backend", "program": "claude-code", "model": "opus-4", "name": "Bob"
+})
+
+# Alice (project: repo-frontend) sends to Bob (project: repo-backend) — works seamlessly
+await client.call_tool("send_message", {
+    "project_key": "repo-frontend",
+    "sender_name": "Alice",
+    "to": ["Bob"],
+    "subject": "Cross-project hello",
+    "body_md": "Hi from frontend!",
+})
+
+# Bob fetches inbox and sees the message — even with a different project_key
+inbox = await client.call_tool("fetch_inbox", {
+    "project_key": "repo-frontend", "agent_name": "Bob"
+})
+```
 
 - **🎯 Globally Unique Agent Names** - Database-enforced global uniqueness:
   - **Case-insensitive** uniqueness across ALL projects (prevents name collisions)
@@ -217,43 +247,15 @@ for result in results:
 
 ### 📝 How Messages Are Stored
 
-Every message sent through MCP Agent Mail is stored in **two places** for redundancy and auditability:
+Every message sent through MCP Agent Mail is stored in SQLite.
 
-**1. Git Repository Archive** (`.mcp_mail/` by default - committed to your project)
-```
-.mcp_mail/                                  # ← Inside your project directory
-└── projects/
-    └── <project-slug>/
-        ├── messages/
-        │   └── YYYY/
-        │       └── MM/
-        │           └── <message-id>.md     # Canonical message with frontmatter
-        ├── agents/
-        │   └── mailboxes/
-        │       ├── <agent-name>/
-        │       │   ├── inbox/<msg-id>.md   # Symlink to canonical message
-        │       │   └── outbox/<msg-id>.md  # Symlink to canonical message
-        ├── attachments/
-        │   └── <hash-prefix>/
-        │       └── <sha1>.webp             # Images converted to WebP
-        └── file_reservations/
-            └── <sha1>.json                 # File lock metadata
-```
-
-**✅ Benefits of project-local storage (default):**
-- **Transparent collaboration**: All agent conversations committed alongside code
-- **Code review**: Review agent decisions as part of PR reviews
-- **Audit trail**: Full Git history of agent coordination
-- **Portable context**: Clone repo and see all agent communications
-- **Team sharing**: Everyone sees the same agent conversation history
-
-**2. SQLite Database** (`.mcp_mail/storage.sqlite3` - local only, not committed)
+**SQLite Database** (`~/.mcp_agent_mail_git_mailbox_repo/storage.sqlite3` by default)
 - Full-text search indexes (FTS5)
 - Message metadata (sender, recipients, timestamps)
 - Agent directory and profiles
 - File reservation tracking
 - Fast queries without scanning Git history
-- **Note**: SQLite database is gitignored (`.mcp_mail/*.db*`) - only messages are committed
+- **Note**: By default, the database and local artifacts live under `~/.mcp_agent_mail_git_mailbox_repo`
 
 ### 🔄 Git Commit Flow
 
@@ -283,9 +285,17 @@ When an agent sends a message via `send_message`, here's what happens:
 - **Portable**: Clone the repo to backup or share message history
 
 **Configuration:**
-- Storage location: `STORAGE_ROOT` env var (default: `.mcp_mail`) for the SQLite DB and local artifacts
+- Storage location: `STORAGE_ROOT` env var (default: `~/.mcp_agent_mail_git_mailbox_repo`) for the SQLite DB and local artifacts
 - Archive storage has been removed; messages are no longer written to per-project Git archives
-- Git author: `GIT_AUTHOR_NAME` and `GIT_AUTHOR_EMAIL` env vars
+
+> **Important: DATABASE_URL must point to the same database for all agents.**
+> The default is an absolute path under your home directory:
+> `DATABASE_URL=sqlite+aiosqlite:///$HOME/.mcp_agent_mail_git_mailbox_repo/storage.sqlite3`
+> If you override it with a **relative** SQLite URL and run the server from different directories (e.g., multiple workspace tabs), each will create its own separate database and agents cannot see each other's messages.
+> For multi-workspace or Conductor setups, set an **absolute path**:
+> ```bash
+> export DATABASE_URL="sqlite+aiosqlite:////home/user/.mcp_agent_mail_git_mailbox_repo/storage.sqlite3"
+> ```
 
 **Messages are stored in SQLite by default:**
 ```bash
@@ -525,7 +535,7 @@ Run the interactive setup script which guides you through the entire process:
 This script will:
 - Validate prerequisites (curl, jq)
 - Generate a one-click Slack app creation URL with all scopes pre-configured
-- Prompt for and securely save credentials to `~/.mcp_mail/credentials.json`
+- Prompt for and securely save credentials to `~/.mcp_agent_mail_git_mailbox_repo/credentials.json`
 - Test your Slack connection and channel access
 - Provide next steps for starting the server
 
@@ -554,7 +564,7 @@ If you prefer manual configuration:
 
 5. **Configure credentials** (choose one):
 
-   **Option A: `~/.mcp_mail/credentials.json`** (recommended):
+   **Option A: `~/.mcp_agent_mail_git_mailbox_repo/credentials.json`** (recommended):
    ```json
    {
      "SLACK_ENABLED": "true",
@@ -607,7 +617,7 @@ slack_post_message(
 
 ### Configuration Reference
 
-All Slack settings are configurable via `~/.mcp_mail/credentials.json` or environment variables:
+All Slack settings are configurable via `~/.mcp_agent_mail_git_mailbox_repo/credentials.json` or environment variables:
 
 | Setting | Required | Default | Description |
 |---------|----------|---------|-------------|
@@ -1932,10 +1942,11 @@ uv run python -m mcp_agent_mail.cli serve-http --port 9000
 
 ```python
 from decouple import Config as DecoupleConfig, RepositoryEnv
+from pathlib import Path
 
 decouple_config = DecoupleConfig(RepositoryEnv(".env"))
 
-STORAGE_ROOT = decouple_config("STORAGE_ROOT", default=".mcp_mail")
+STORAGE_ROOT = decouple_config("STORAGE_ROOT", default=str(Path.home() / ".mcp_agent_mail_git_mailbox_repo"))
 HTTP_HOST = decouple_config("HTTP_HOST", default="127.0.0.1")
 HTTP_PORT = int(decouple_config("HTTP_PORT", default=8765))
 HTTP_PATH = decouple_config("HTTP_PATH", default="/mcp/")
@@ -1995,7 +2006,7 @@ result = await client.call_tool("list_extended_tools", {})
 
 | Name | Default | Description |
 | :-- | :-- | :-- |
-| `STORAGE_ROOT` | `.mcp_mail` | Root for the SQLite DB and local artifacts (project-local by default) |
+| `STORAGE_ROOT` | `~/.mcp_agent_mail_git_mailbox_repo` | Root for the SQLite DB and local artifacts (user-level by default) |
 | `HTTP_HOST` | `127.0.0.1` | Bind host for HTTP transport |
 | `HTTP_PORT` | `8765` | Bind port for HTTP transport |
 | `HTTP_PATH` | `/mcp/` | HTTP path where MCP endpoint is mounted |
@@ -2036,10 +2047,8 @@ result = await client.call_tool("list_extended_tools", {})
 | `OTEL_SERVICE_NAME` | `mcp-agent-mail` | Service name for telemetry |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` |  | OTLP exporter endpoint URL |
 | `APP_ENVIRONMENT` | `development` | Environment name (development/production) |
-| `DATABASE_URL` | `sqlite+aiosqlite:///./.mcp_mail/storage.sqlite3` | SQLAlchemy async database URL (stored in .mcp_mail/) |
+| `DATABASE_URL` | `sqlite+aiosqlite:///${HOME}/.mcp_agent_mail_git_mailbox_repo/storage.sqlite3` | SQLAlchemy async database URL (stored in the user mailbox root by default) |
 | `DATABASE_ECHO` | `false` | Echo SQL statements for debugging |
-| `GIT_AUTHOR_NAME` | `mcp-agent` | Git commit author name |
-| `GIT_AUTHOR_EMAIL` | `mcp-agent@example.com` | Git commit author email |
 | `LLM_ENABLED` | `true` | Enable LiteLLM for thread summaries and discovery |
 | `LLM_DEFAULT_MODEL` | `gpt-5-mini` | Default LiteLLM model identifier |
 | `LLM_TEMPERATURE` | `0.2` | LLM temperature for text generation |

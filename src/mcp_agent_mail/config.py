@@ -2,10 +2,11 @@
 
 Configuration sources (in order of precedence):
 1. Environment variables
-2. ~/.mcp_agent_mail_git_mailbox_repo/credentials.json (preferred)
-   Falls back to ~/.mcp_mail/credentials.json (legacy, for backward compatibility)
+2. ~/.mcp_mail/credentials.json (for secrets, recommended for PyPI installs)
 3. .env file in current directory (for development)
 """
+
+from __future__ import annotations
 
 import json
 import os
@@ -16,17 +17,16 @@ from typing import Final, Literal, cast
 
 from decouple import Config as DecoupleConfig, RepositoryEnv
 
-# User-level credentials file (preferred for PyPI installs)
-_USER_CREDENTIALS_PATH: Final[Path] = Path.home() / ".mcp_agent_mail_git_mailbox_repo" / "credentials.json"
-_LEGACY_CREDENTIALS_PATH: Final[Path] = Path.home() / ".mcp_mail" / "credentials.json"
 _DOTENV_PATH: Final[Path] = Path(".env")
 
-# Load user credentials: prefer new path, fall back to legacy ~/.mcp_mail/
+# User-level credentials file (preferred for PyPI installs)
+_USER_CREDENTIALS_PATH: Final[Path] = Path.home() / ".mcp_mail" / "credentials.json"
+
+# Load user credentials from ~/.mcp_mail/credentials.json
 _user_credentials: dict[str, str] = {}
-_credentials_path = _USER_CREDENTIALS_PATH if _USER_CREDENTIALS_PATH.exists() else _LEGACY_CREDENTIALS_PATH
-if _credentials_path.exists():
+if _USER_CREDENTIALS_PATH.exists():
     try:
-        with _credentials_path.open() as f:
+        with _USER_CREDENTIALS_PATH.open() as f:
             _user_credentials = json.load(f)
     except (json.JSONDecodeError, OSError):
         pass  # Silently ignore malformed credentials file
@@ -67,13 +67,11 @@ class HttpSettings:
     rate_limit_enabled: bool
     rate_limit_per_minute: int
     rate_limit_slack_per_minute: int
-    rate_limit_slackbox_per_minute: int
     # Robust token-bucket limiter
     rate_limit_backend: str  # "memory" | "redis"
     rate_limit_tools_per_minute: int
     rate_limit_resources_per_minute: int
     rate_limit_slack_burst: int
-    rate_limit_slackbox_burst: int
     rate_limit_redis_url: str
     # Optional bursts to control spikiness
     rate_limit_tools_burst: int
@@ -109,12 +107,17 @@ class DatabaseSettings:
 
 @dataclass(slots=True, frozen=True)
 class StorageSettings:
-    """Filesystem storage configuration."""
+    """Filesystem/Git storage configuration."""
 
     root: str
+    git_author_name: str
+    git_author_email: str
     inline_image_max_bytes: int
     convert_images: bool
     keep_original_images: bool
+    project_key_storage_enabled: bool
+    local_archive_enabled: bool
+    project_key_prompt_enabled: bool
 
 
 @dataclass(slots=True, frozen=True)
@@ -259,7 +262,6 @@ def get_settings() -> Settings:
     environment = _decouple_config("APP_ENVIRONMENT", default="development")
 
     def _csv(name: str, default: str) -> list[str]:
-        # Use credentials-aware precedence (env > credentials.json > .env > default)
         raw = _get_config_value(name, default=default)
         items = [part.strip() for part in raw.split(",") if part.strip()]
         return items
@@ -274,9 +276,6 @@ def get_settings() -> Settings:
         rate_limit_slack_per_minute=_int(
             _decouple_config("HTTP_RATE_LIMIT_SLACK_PER_MINUTE", default="120"), default=120
         ),
-        rate_limit_slackbox_per_minute=_int(
-            _decouple_config("HTTP_RATE_LIMIT_SLACKBOX_PER_MINUTE", default="120"), default=120
-        ),
         rate_limit_backend=_decouple_config("HTTP_RATE_LIMIT_BACKEND", default="memory").lower(),
         rate_limit_tools_per_minute=_int(
             _decouple_config("HTTP_RATE_LIMIT_TOOLS_PER_MINUTE", default="60"), default=60
@@ -288,7 +287,6 @@ def get_settings() -> Settings:
         rate_limit_tools_burst=_int(_decouple_config("HTTP_RATE_LIMIT_TOOLS_BURST", default="0"), default=0),
         rate_limit_resources_burst=_int(_decouple_config("HTTP_RATE_LIMIT_RESOURCES_BURST", default="0"), default=0),
         rate_limit_slack_burst=_int(_decouple_config("HTTP_RATE_LIMIT_SLACK_BURST", default="0"), default=0),
-        rate_limit_slackbox_burst=_int(_decouple_config("HTTP_RATE_LIMIT_SLACKBOX_BURST", default="0"), default=0),
         request_log_enabled=_bool(_decouple_config("HTTP_REQUEST_LOG_ENABLED", default="false"), default=False),
         otel_enabled=_bool(_decouple_config("HTTP_OTEL_ENABLED", default="false"), default=False),
         otel_service_name=_decouple_config("OTEL_SERVICE_NAME", default="mcp-agent-mail"),
@@ -314,7 +312,7 @@ def get_settings() -> Settings:
     )
 
     database_settings = DatabaseSettings(
-        # Store SQLite database under the upstream mailbox root by default
+        # Store SQLite database inside .mcp_mail/ alongside Git archive
         url=_decouple_config(
             "DATABASE_URL",
             default=f"sqlite+aiosqlite:///{Path.home() / '.mcp_agent_mail_git_mailbox_repo' / 'storage.sqlite3'}",
@@ -323,13 +321,22 @@ def get_settings() -> Settings:
     )
 
     storage_settings = StorageSettings(
-        # Default to upstream mailbox root in the user's home directory
+        # Default to project-local storage (committed to git) for transparency
         root=_decouple_config("STORAGE_ROOT", default=str(Path.home() / ".mcp_agent_mail_git_mailbox_repo")),
+        git_author_name=_decouple_config("GIT_AUTHOR_NAME", default="mcp-agent"),
+        git_author_email=_decouple_config("GIT_AUTHOR_EMAIL", default="mcp-agent@example.com"),
         inline_image_max_bytes=_int(
             _decouple_config("INLINE_IMAGE_MAX_BYTES", default=str(64 * 1024)), default=64 * 1024
         ),
         convert_images=_bool(_decouple_config("CONVERT_IMAGES", default="true"), default=True),
         keep_original_images=_bool(_decouple_config("KEEP_ORIGINAL_IMAGES", default="false"), default=False),
+        project_key_storage_enabled=_bool(
+            _decouple_config("STORAGE_PROJECT_KEY_ENABLED", default="false"), default=False
+        ),
+        local_archive_enabled=_bool(_decouple_config("STORAGE_LOCAL_ARCHIVE_ENABLED", default="true"), default=True),
+        project_key_prompt_enabled=_bool(
+            _decouple_config("STORAGE_PROJECT_KEY_PROMPT_ENABLED", default="true"), default=True
+        ),
     )
 
     cors_settings = CorsSettings(
@@ -357,7 +364,7 @@ def get_settings() -> Settings:
         cost_logging_enabled=_bool(_decouple_config("LLM_COST_LOGGING_ENABLED", default="true"), default=True),
     )
 
-    raw_mention_format = _get_config_value("SLACK_NOTIFY_MENTION_FORMAT", default="agent_name").strip().lower()
+    raw_mention_format = _decouple_config("SLACK_NOTIFY_MENTION_FORMAT", default="agent_name").strip().lower()
     allowed_mention_formats: tuple[Literal["real_name", "display_name", "agent_name"], ...] = (
         "real_name",
         "display_name",

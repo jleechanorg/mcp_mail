@@ -50,7 +50,7 @@ from .share import (
     sign_manifest,
     summarize_snapshot,
 )
-from .storage import ensure_runtime_project_root, is_archive_enabled
+from .storage import ensure_runtime_project_root
 from .utils import safe_filesystem_component, slugify
 
 # Suppress annoying bleach CSS sanitizer warning from dependencies
@@ -2122,7 +2122,7 @@ def am_run(
     branch = _get_git_branch(p)
     settings = get_settings()
     guard_mode = (os.environ.get("AGENT_MAIL_GUARD_MODE", "block") or "block").strip().lower()
-    worktrees_enabled = bool(settings.worktrees_enabled) and is_archive_enabled(settings)
+    worktrees_enabled = bool(settings.worktrees_enabled)
 
     async def _ensure_slot_paths() -> Path:
         runtime_project_root = await ensure_runtime_project_root(settings, slug)
