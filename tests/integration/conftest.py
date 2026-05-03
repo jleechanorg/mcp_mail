@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
+import anyio
 import pytest
 from fastmcp import Client
 
 from mcp_agent_mail.app import build_mcp_server
 from mcp_agent_mail.config import get_settings
+
+# Import git utilities - consolidates scattered subprocess calls
+from tests.integration.git_utils import GitRunner, init_git_repo as _init_git_repo
 
 
 @pytest.fixture
@@ -18,8 +21,8 @@ async def mcp_server_with_storage(isolated_env, tmp_path):
     settings = get_settings()
 
     # Create storage directory structure
-    storage_root = Path(settings.storage.root)
-    storage_root.mkdir(parents=True, exist_ok=True)
+    storage_root = anyio.Path(settings.storage.root)
+    await storage_root.mkdir(parents=True, exist_ok=True)
 
     # Build server
     server = build_mcp_server()
@@ -37,25 +40,23 @@ async def mcp_client(mcp_server_with_storage):
 def init_git_repo(path: Path) -> None:
     """Initialize a git repository with basic configuration.
 
+    This function wraps the git_utils.init_git_repo for backward compatibility
+    with existing tests. Unlike the underlying utility, this wrapper returns
+    None. Use the git_repo fixture if you need a GitRunner instance.
+
     Args:
         path: Path to initialize as a git repository
     """
-    subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
-    subprocess.run(
-        ["git", "config", "user.email", "test@example.com"],
-        cwd=path,
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(
-        ["git", "config", "user.name", "Test Agent"],
-        cwd=path,
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(
-        ["git", "config", "commit.gpgsign", "false"],
-        cwd=path,
-        check=True,
-        capture_output=True,
-    )
+    _init_git_repo(path)
+
+
+@pytest.fixture
+def git_repo(tmp_path) -> GitRunner:
+    """Provide a pre-initialized git repository for testing.
+
+    Returns:
+        GitRunner instance for the initialized repository
+    """
+    repo_path = tmp_path / "test_repo"
+    repo_path.mkdir()
+    return _init_git_repo(repo_path)

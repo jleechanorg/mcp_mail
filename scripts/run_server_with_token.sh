@@ -1,21 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then
+if [[ -z "${SLACK_WEBHOOK_URL:-}" ]]; then
   if [[ -f .env ]]; then
-    HTTP_BEARER_TOKEN=$(grep -E '^HTTP_BEARER_TOKEN=' .env | sed -E 's/^HTTP_BEARER_TOKEN=//') || true
+    SLACK_WEBHOOK_URL=$(grep -E '^SLACK_WEBHOOK_URL=' .env | sed -E 's/^SLACK_WEBHOOK_URL=//') || true
   fi
 fi
-if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then
-  if command -v uv >/dev/null 2>&1; then
-    HTTP_BEARER_TOKEN=$(uv run python - <<'PY'
-import secrets; print(secrets.token_hex(32))
-PY
-)
-  else
-    HTTP_BEARER_TOKEN="$(date +%s)_$(hostname)"
-  fi
-fi
-export HTTP_BEARER_TOKEN
+export SLACK_WEBHOOK_URL
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1090
+. "${SCRIPT_DIR}/lib.sh"
+load_or_generate_token python3
 
 uv run python -m mcp_agent_mail.cli serve-http "$@"

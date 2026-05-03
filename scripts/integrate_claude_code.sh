@@ -49,26 +49,9 @@ fi
 _URL="http://${_HTTP_HOST}:${_HTTP_PORT}${_HTTP_PATH}"
 log_ok "Detected MCP HTTP endpoint: ${_URL}"
 
-# Determine or generate bearer token (prefer session token provided by orchestrator)
-# Reuse existing token if possible (INTEGRATION_BEARER_TOKEN > .env > run helper)
-_TOKEN="${INTEGRATION_BEARER_TOKEN:-}"
-if [[ -z "${_TOKEN}" && -f .env ]]; then
-  _TOKEN=$(grep -E '^HTTP_BEARER_TOKEN=' .env | sed -E 's/^HTTP_BEARER_TOKEN=//') || true
-fi
-if [[ -z "${_TOKEN}" && -f scripts/run_server_with_token.sh ]]; then
-  _TOKEN=$(grep -E 'export HTTP_BEARER_TOKEN="' scripts/run_server_with_token.sh | sed -E 's/.*HTTP_BEARER_TOKEN="([^"]+)".*/\1/') || true
-fi
-if [[ -z "${_TOKEN}" ]]; then
-  if command -v openssl >/dev/null 2>&1; then
-    _TOKEN=$(openssl rand -hex 32)
-  else
-    _TOKEN=$(uv run python - <<'PY'
-import secrets; print(secrets.token_hex(32))
-PY
-)
-  fi
-  log_ok "Generated bearer token."
-fi
+# Load or generate bearer token
+load_or_generate_token python3
+_TOKEN="${HTTP_BEARER_TOKEN}"
 
 log_step "Preparing project-local .claude/settings.json"
 CLAUDE_DIR="${TARGET_DIR}/.claude"
@@ -85,22 +68,25 @@ if [[ -f "$SETTINGS_PATH" ]]; then
   backup_file "$SETTINGS_PATH"
 fi
 
-log_step "Writing MCP server config and hooks"
-AUTH_HEADER_LINE="        \"Authorization\": \"Bearer ${_TOKEN}\""
-write_atomic "$SETTINGS_PATH" <<JSON
-{
-  "mcpServers": {
-    "mcp-agent-mail": {
-      "type": "http",
-      "url": "${_URL}",
-      "core": true,
-      "headers": {${AUTH_HEADER_LINE}},
-      "options": {
-        "timeoutSeconds": 180,
-        "initTimeoutSeconds": 30
-      }
-    }
-  },
+	log_step "Writing MCP server config and hooks"
+	# Safety: keep the repo-tracked settings.json token-free to avoid accidental commits.
+	# Store the token only in .claude/settings.local.json (gitignored).
+	AUTH_HEADER_LINE="        \"Authorization\": \"Bearer ${_TOKEN}\""
+	SAFE_HEADER_LINE="        \"_note\": \"Auth token is stored in .claude/settings.local.json (gitignored). Run ./scripts/integrate_claude_code.sh to (re)generate.\""
+	write_atomic "$SETTINGS_PATH" <<JSON
+	{
+	  "mcpServers": {
+	    "mcp-agent-mail": {
+	      "type": "http",
+	      "url": "${_URL}",
+	      "core": true,
+	      "headers": {${SAFE_HEADER_LINE}},
+	      "options": {
+	        "timeoutSeconds": 180,
+	        "initTimeoutSeconds": 30
+	      }
+	    }
+	  },
   "hooks": {
     "SessionStart": [
       {
@@ -141,25 +127,25 @@ json_validate "$SETTINGS_PATH" || log_warn "Invalid JSON in ${SETTINGS_PATH}"
 set_secure_file "$SETTINGS_PATH" || true
 
 # Also write to settings.local.json to ensure Claude Code picks it up when local overrides are used
-LOCAL_SETTINGS_PATH="${CLAUDE_DIR}/settings.local.json"
-if [[ -f "$LOCAL_SETTINGS_PATH" ]]; then
-  backup_file "$LOCAL_SETTINGS_PATH"
-fi
+	LOCAL_SETTINGS_PATH="${CLAUDE_DIR}/settings.local.json"
+	if [[ -f "$LOCAL_SETTINGS_PATH" ]]; then
+	  backup_file "$LOCAL_SETTINGS_PATH"
+	fi
 
-write_atomic "$LOCAL_SETTINGS_PATH" <<JSON
-{
-  "mcpServers": {
-    "mcp-agent-mail": {
-      "type": "http",
-      "url": "${_URL}",
-      "core": true,
-      "headers": {${AUTH_HEADER_LINE}},
-      "options": {
-        "timeoutSeconds": 180,
-        "initTimeoutSeconds": 30
-      }
-    }
-  },
+	write_atomic "$LOCAL_SETTINGS_PATH" <<JSON
+	{
+	  "mcpServers": {
+	    "mcp-agent-mail": {
+	      "type": "http",
+	      "url": "${_URL}",
+	      "core": true,
+	      "headers": {${AUTH_HEADER_LINE}},
+	      "options": {
+	        "timeoutSeconds": 180,
+	        "initTimeoutSeconds": 30
+	      }
+	    }
+	  },
   "hooks": {
     "SessionStart": [
       {
@@ -295,29 +281,19 @@ set_secure_file "$HOME_SETTINGS_PATH" || true
 log_step "Creating run helper script"
 mkdir -p scripts
 RUN_HELPER="scripts/run_server_with_token.sh"
-write_atomic "$RUN_HELPER" <<'SH'
+run_helper_here() { cat; }  # placeholder replaced below
+write_atomic "$RUN_HELPER" <<'HEREDOC_RUNNER'
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then
-  if [[ -f .env ]]; then
-    HTTP_BEARER_TOKEN=$(grep -E '^HTTP_BEARER_TOKEN=' .env | sed -E 's/^HTTP_BEARER_TOKEN=//') || true
-  fi
-fi
-if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then
-  if command -v uv >/dev/null 2>&1; then
-    HTTP_BEARER_TOKEN=$(uv run python - <<'PY'
-import secrets; print(secrets.token_hex(32))
-PY
-)
-  else
-    HTTP_BEARER_TOKEN="$(date +%s)_$(hostname)"
-  fi
-fi
-export HTTP_BEARER_TOKEN
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1090
+. "${SCRIPT_DIR}/lib.sh"
+
+load_or_generate_token python3
 
 uv run python -m mcp_agent_mail.cli serve-http "$@"
-SH
+HEREDOC_RUNNER
 set_secure_exec "$RUN_HELPER"
 echo "Created $RUN_HELPER"
 

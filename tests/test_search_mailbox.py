@@ -14,13 +14,7 @@ import pytest
 from fastmcp import Client
 
 from mcp_agent_mail.app import build_mcp_server
-
-
-def _extract_result(call_result):
-    """Extract the actual data from a CallToolResult."""
-    if hasattr(call_result, "structured_content") and call_result.structured_content:
-        return call_result.structured_content.get("result", call_result.data)
-    return call_result.data
+from tests.conftest import extract_result
 
 
 @pytest.mark.asyncio
@@ -83,7 +77,7 @@ async def test_search_mailbox_basic(isolated_env):
             },
         )
 
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
         assert len(results) == 2, "Should find 2 messages about authentication"
 
         # Verify results contain expected fields
@@ -107,7 +101,7 @@ async def test_search_mailbox_basic(isolated_env):
             },
         )
 
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
         assert len(results) == 1, "Should find 1 message about database"
         assert "Database optimization" in results[0]["subject"]
 
@@ -177,7 +171,7 @@ async def test_search_mailbox_with_agent_filter(isolated_env):
                 "limit": 10,
             },
         )
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
         assert len(results) == 3, "Should find all 3 messages about feature"
         assert (
             sorted(
@@ -200,7 +194,7 @@ async def test_search_mailbox_with_agent_filter(isolated_env):
                 "limit": 10,
             },
         )
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
         assert len(results) == 2, "Should find 2 messages involving Alice"
 
         # Verify Alice is sender or recipient in all results
@@ -268,7 +262,7 @@ async def test_search_mailbox_boolean_operators(isolated_env):
                 "limit": 10,
             },
         )
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
         assert len(results) == 1, "Should find 1 message with both authentication AND bug"
         assert "Bug fix" in results[0]["subject"]
 
@@ -281,7 +275,7 @@ async def test_search_mailbox_boolean_operators(isolated_env):
                 "limit": 10,
             },
         )
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
         assert len(results) == 2, "Should find 2 messages with bug OR error"
 
         # Search with NOT operator
@@ -293,7 +287,7 @@ async def test_search_mailbox_boolean_operators(isolated_env):
                 "limit": 10,
             },
         )
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
         assert len(results) == 1, "Should exclude messages mentioning bug"
         assert "New feature" in results[0]["subject"]
 
@@ -306,7 +300,7 @@ async def test_search_mailbox_boolean_operators(isolated_env):
                 "limit": 10,
             },
         )
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
         assert len(results) == 1, "Phrase query should return exact match"
         assert "Bug fix" in results[0]["subject"]
 
@@ -319,7 +313,7 @@ async def test_search_mailbox_boolean_operators(isolated_env):
                 "limit": 10,
             },
         )
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
         assert len(results) == 2, "Prefix query should match authentication variants"
 
 
@@ -372,7 +366,7 @@ async def test_search_mailbox_global_inbox_priority(isolated_env):
             },
         )
 
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
         assert len(results) == 2, "Should find 2 messages"
 
         # All messages should be in global inbox
@@ -418,7 +412,7 @@ async def test_search_mailbox_no_results(isolated_env):
             },
         )
 
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
         assert len(results) == 0, "Should find no messages"
 
 
@@ -462,6 +456,6 @@ async def test_search_mailbox_limit(isolated_env):
             },
         )
 
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
         assert len(results) == 5, "Should return only 5 results due to limit"
         assert all("body_md" not in msg for msg in results), "Bodies should be omitted when include_bodies=False"
