@@ -39,7 +39,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, ClassVar, Optional, Union
 from urllib.parse import urlparse
 
 from decouple import Config as DecoupleConfig, RepositoryEnv  # type: ignore
@@ -77,7 +77,10 @@ RESULTS_DIR = Path(tempfile.gettempdir()) / "mcp-mail-tests" / _get_branch_name(
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 MCP_CONFIG_PATH = PROJECT_ROOT / ".mcp.json"
 MCP_AGENT_MAIL_SERVER = "mcp-agent-mail"
-MCP_EXPECTED_TOOLS = {"register_agent", "send_message", "fetch_inbox"}
+# Core MCP tools OR extended tools both indicate successful connection
+MCP_EXPECTED_TOOLS_CORE = {"register_agent", "send_message", "fetch_inbox"}
+MCP_EXPECTED_TOOLS_EXTENDED = {"create_file_reservation", "acquire_build_slot", "search_messages"}
+MCP_EXPECTED_TOOLS = MCP_EXPECTED_TOOLS_CORE | MCP_EXPECTED_TOOLS_EXTENDED
 ENV_PATH = PROJECT_ROOT / ".env"
 
 
@@ -98,7 +101,7 @@ def _load_env_value(key: str) -> Optional[str]:
     return val_str  # type: ignore
 
 
-def _load_bearer_token() -> Optional[str]:
+def load_bearer_token() -> Optional[str]:
     """Best-effort bearer token lookup for MCP HTTP auth."""
     token = _load_env_value("HTTP_BEARER_TOKEN")
     if token:
@@ -144,6 +147,48 @@ class BaseCLITest:
     SUITE_NAME: str = ""
     FILE_PREFIX: str = ""
 
+    _REDACT_RULES: ClassVar[tuple[tuple[re.Pattern[str], str], ...]] = (
+        (re.compile(r"(?i)(authorization\\s*:\\s*bearer\\s+)[^\\s\"']+"), r"\\1[REDACTED]"),
+        (re.compile(r"(?i)(http_bearer_token=)\\S+"), r"\\1[REDACTED]"),
+        (re.compile(r"(?i)(anthropic_api_key=)\\S+"), r"\\1[REDACTED]"),
+        (re.compile(r"(?i)(cursor_api_key=)\\S+"), r"\\1[REDACTED]"),
+        (re.compile(r"(?i)(github_token=)\\S+"), r"\\1[REDACTED]"),
+        (re.compile(r"\\bghp_[A-Za-z0-9]{30,}\\b"), "[REDACTED_GITHUB_TOKEN]"),
+        (re.compile(r"\\bxox[baprs]-[A-Za-z0-9-]{10,}\\b"), "[REDACTED_SLACK_TOKEN]"),
+        (re.compile(r"\\bsk-[A-Za-z0-9]{20,}\\b"), "[REDACTED_API_KEY]"),
+    )
+
+    _CLI_SKIP_RULES: ClassVar[dict[str, list[tuple[tuple[str, ...], tuple[str, ...], str]]]] = {
+        "cursor": [
+            (
+                ("authentication required",),
+                ("cursor_api_key", "agent login"),
+                "Cursor CLI not authenticated (set CURSOR_API_KEY or run `agent login`)",
+            ),
+        ],
+        "gemini": [
+            (
+                (),
+                ("error when talking to gemini api", "gemini-client-error"),
+                "Gemini CLI not configured/authorized (Gemini API error)",
+            ),
+            (
+                (),
+                ("modelnotfound", "model not found"),
+                "Gemini CLI model unavailable (configure model/credentials)",
+            ),
+        ],
+        "claude": [
+            ((), ("credit balance too low",), "Claude CLI account/quota not available"),
+            (("invalid api key", "/login"), (), "Claude CLI not authenticated (run `claude /login`)"),
+            (
+                ("anthropic_api_key",),
+                ("not set", "missing", "invalid"),
+                "Claude CLI not authenticated (ANTHROPIC_API_KEY missing/invalid)",
+            ),
+        ],
+    }
+
     def __init__(self):
         self.start_time = datetime.now(timezone.utc)
         self.results: list[TestResult] = []
@@ -154,6 +199,41 @@ class BaseCLITest:
             self.cli_profile = CLI_PROFILES[self.CLI_NAME]
         else:
             self.cli_profile = None
+
+    def _redact_output(self, output: str, limit: int = 2000) -> str:
+        """Redact likely secrets/credentials from raw CLI output before persisting."""
+        redacted = output
+        for pattern, replacement in self._REDACT_RULES:
+            redacted = pattern.sub(replacement, redacted)
+        if len(redacted) > limit:
+            return redacted[:limit]
+        return redacted
+
+    def _set_flag_value(self, args: list[str], flag: str, value: str) -> list[str]:
+        """Return a new argv list with `flag` set to `value` (replacing any existing value)."""
+        out: list[str] = []
+        replaced = False
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            if arg == flag:
+                out.append(flag)
+                out.append(value)
+                replaced = True
+                i += 1
+                if i < len(args):
+                    i += 1
+                continue
+            if arg.startswith(f"{flag}="):
+                out.append(f"{flag}={value}")
+                replaced = True
+                i += 1
+                continue
+            out.append(arg)
+            i += 1
+        if not replaced:
+            out.extend([flag, value])
+        return out
 
     def _load_mcp_config(self) -> tuple[Optional[dict[str, Any]], Optional[str]]:
         """Load MCP configuration from the repo-level .mcp.json file."""
@@ -208,9 +288,13 @@ class BaseCLITest:
                 if cleaned:
                     tokens.add(cleaned.lower())
 
+        # Handle both underscore and hyphen variants:
+        # - mcp__mcp_agent_mail__send_message (underscore format)
+        # - mcp__mcp-agent-mail__send_message (hyphen format)
+        # - mcp__mcpagentmail__send_message (no separator format)
         derived = set(
             re.findall(
-                r"mcp__mcp(?:_)?agent(?:_)?mail__([a-zA-Z_][a-zA-Z0-9_]*)",
+                r"mcp__mcp[-_]?agent[-_]?mail__([a-zA-Z_][a-zA-Z0-9_]*)",
                 output.lower(),
             )
         )
@@ -223,11 +307,23 @@ class BaseCLITest:
         timeout: int = 90,
     ) -> tuple[bool, str, dict[str, Any]]:
         """Prompt the CLI to list available MCP Agent Mail tools."""
+        import time
+
         if self.CLI_NAME == "codex":
             prompts = [
                 (
                     "List the MCP tools you can call. Respond exactly as 'TOOLS: <comma-separated tool names>'.",
                     timeout,
+                ),
+            ]
+        elif self.CLI_NAME == "cursor":
+            # Cursor: single attempt with shorter timeout to avoid resource exhaustion
+            prompts = [
+                (
+                    "Connect to the configured mcp-agent-mail MCP server and list the tool "
+                    "names available to you. Respond exactly as 'TOOLS: <comma-separated tool names>'. "
+                    f"The server URL should be {server_url}.",
+                    min(timeout, 90),  # Cap at 90s for Cursor
                 ),
             ]
         else:
@@ -250,27 +346,63 @@ class BaseCLITest:
         for attempt, (prompt, attempt_timeout) in enumerate(prompts, start=1):
             success, output = self.run_cli(prompt, timeout=attempt_timeout)
             if not success:
-                last_details = {"output": output[:500], "attempt": attempt}
-                message = f"MCP tool prompt failed: {output[:200]}"
+                redacted_output = self._redact_output(output)
+                last_details = {"output": redacted_output, "attempt": attempt}
+                message = f"MCP tool prompt failed: {redacted_output[:200]}"
+
+                # Check for resource exhaustion errors
+                if "resource" in output.lower() and "exhaust" in output.lower():
+                    print(f"  WARN: Resource exhaustion detected (attempt {attempt})")
+                    if attempt < len(prompts):
+                        backoff_seconds = 2**attempt  # Exponential backoff: 2, 4, 8...
+                        print(f"  WARN: Backing off {backoff_seconds}s before retry...")
+                        time.sleep(backoff_seconds)
+                        continue
+                    return False, "Resource exhausted - API quota may be exceeded", last_details
+
                 if attempt < len(prompts):
                     print(f"  WARN: {message} (attempt {attempt}); retrying...")
+                    time.sleep(1)  # Brief pause between retries
                     continue
                 return False, message, last_details
 
             tool_names = self._parse_tool_names_from_output(output)
-            missing_tools = expected_tools - tool_names
-            last_details = {"tools": sorted(tool_names), "attempt": attempt, "output": output[:500]}
+            last_details = {"tools": sorted(tool_names), "attempt": attempt, "output": self._redact_output(output)}
 
-            if not missing_tools:
-                return True, "MCP Agent Mail tools available", last_details
+            # Check if ALL core tools OR ALL extended tools are present (both indicate successful MCP connection)
+            has_all_core = tool_names >= MCP_EXPECTED_TOOLS_CORE
+            has_all_extended = tool_names >= MCP_EXPECTED_TOOLS_EXTENDED
 
-            message = f"Missing expected tools: {', '.join(sorted(missing_tools))}"
+            if has_all_core or has_all_extended:
+                if has_all_core and has_all_extended:
+                    found_type = "core and extended"
+                elif has_all_core:
+                    found_type = "core"
+                else:
+                    found_type = "extended"
+                return True, f"MCP Agent Mail tools available ({found_type})", last_details
+
+            message = f"No complete MCP Agent Mail toolset found. Expected all of core {sorted(MCP_EXPECTED_TOOLS_CORE)} or extended {sorted(MCP_EXPECTED_TOOLS_EXTENDED)}"
             if attempt < len(prompts):
                 print(f"  WARN: {message} (attempt {attempt}); retrying...")
+                time.sleep(1)  # Brief pause between retries
                 continue
             return False, message, last_details
 
         return False, "Unable to validate MCP Agent Mail tools", last_details
+
+    def _classify_mcp_tools_failure_as_skip(self, output: str) -> Optional[str]:
+        """Return a skip reason for known external/credential CLI failures."""
+        lower = output.lower()
+
+        for must_all, must_any, message in self._CLI_SKIP_RULES.get(self.CLI_NAME, []):
+            if not all(token in lower for token in must_all):
+                continue
+            if must_any and not any(token in lower for token in must_any):
+                continue
+            return message
+
+        return None
 
     def validate_mcp_mail_access(self, timeout: int = 90) -> bool:
         """Validate MCP Agent Mail configuration and tool availability via CLI."""
@@ -299,6 +431,13 @@ class BaseCLITest:
             expected_tools=MCP_EXPECTED_TOOLS,
             timeout=timeout,
         )
+        if not tool_success:
+            output = str(details.get("output") or "")
+            skip_reason = self._classify_mcp_tools_failure_as_skip(output)
+            if skip_reason:
+                self.record("mcp_tools", False, skip_reason, skip=True, details=details)
+                return False
+
         self.record("mcp_tools", tool_success, tool_msg, details=details)
 
         return tool_success
@@ -393,7 +532,6 @@ class BaseCLITest:
             Tuple of (success: bool, output: str)
         """
         import subprocess  # nosec
-        from contextlib import suppress
 
         if not self.cli_profile:
             raise ValueError(f"CLI_NAME '{self.CLI_NAME}' not found in CLI_PROFILES")
@@ -417,18 +555,38 @@ class BaseCLITest:
         try:
             # Build command using CLI profile template
             command_template = self.cli_profile.get("command_template", "{binary} -p {prompt_file}")
+            # Get model from profile or use CLI-specific default (templates may include {model})
+            model = self.cli_profile.get("model")
+            if not model:
+                # Use CLI-specific defaults when model not specified in profile
+                cli_model_defaults = {"claude": "sonnet", "gemini": "gemini-2.0-flash", "codex": "o3-mini"}
+                model = cli_model_defaults.get(self.CLI_NAME, "default")
             cli_command_str = command_template.format(
                 binary=shlex.quote(cli_path),
                 prompt_file=shlex.quote(str(prompt_file)),
                 continue_flag="",
+                model=shlex.quote(model),  # Quote model to prevent command injection
             )
 
             # Split into list for safe subprocess execution (shell=False)
             cli_command = shlex.split(cli_command_str)
 
             # Add any extra arguments
-            if extra_args:
-                cli_command.extend(extra_args)
+            cli_extra_args: list[str] = list(extra_args or [])
+
+            # Claude output is often configured as stream-json+verbose via CLI_PROFILES.
+            # Default to text for parsing stability, but allow override via CLI_PROFILES["claude"]["output_format_override"].
+            if self.CLI_NAME == "claude":
+                output_format_override = None
+                if self.cli_profile:
+                    output_format_override = self.cli_profile.get("output_format_override")
+                if output_format_override is None:
+                    output_format_override = "text"
+                if output_format_override:
+                    cli_command = self._set_flag_value(cli_command, "--output-format", output_format_override)
+
+            if cli_extra_args:
+                cli_command.extend(cli_extra_args)
 
             print(f"  Command: {' '.join(cli_command)}")
 
@@ -443,7 +601,7 @@ class BaseCLITest:
 
                 env = {**os.environ, "NO_COLOR": "1"}
                 # Set bearer token for all CLIs that need HTTP MCP auth
-                bearer_token = _load_bearer_token()
+                bearer_token = load_bearer_token()
                 if bearer_token:
                     env["HTTP_BEARER_TOKEN"] = bearer_token
 
@@ -468,7 +626,7 @@ class BaseCLITest:
             return False, str(e)
         finally:
             # Clean up temp file
-            with suppress(OSError):
+            with contextlib.suppress(OSError):
                 if prompt_file:
                     prompt_file.unlink()
 

@@ -4,8 +4,6 @@ NOTE: Archive storage has been removed. Build slots functionality is now disable
 since it previously depended on the archive's filesystem structure.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 

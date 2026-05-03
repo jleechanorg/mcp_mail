@@ -490,28 +490,85 @@ start_server_background() {
   _print "Server starting (logs: ${log_file})"
 }
 
-# Load or generate HTTP_BEARER_TOKEN
+# Load HTTP_BEARER_TOKEN from environment, disk, or generate a new one.
+#
+# Precedence (first non-empty wins):
+#   1. HTTP_BEARER_TOKEN env var (already set in session)
+#   2. INTEGRATION_BEARER_TOKEN env var (shared across integration run)
+#   3. MCP_AGENT_MAIL_TOKEN env var (alternative env override)
+#   4. .env in project root (local or upstream mailbox path)
+#   5. ~/.mcp_agent_mail_git_mailbox_repo/.env
+#   6. ~/.mcp_agent_mail/.env (legacy)
+#   7. ~/.config/mcp-agent-mail/.env (legacy)
+#   8. Generate a new cryptographically random token
+#
+# .env parsing: strips surrounding quotes (single or double) and leading/trailing
+# whitespace from the value. Supports: TOKEN=value, TOKEN="value", TOKEN='value'.
+# Exits with error if none of the above produce a token.
+#
 # Usage: load_or_generate_token [python_binary]
-# Sets and exports HTTP_BEARER_TOKEN if not already set
+# Sets and exports HTTP_BEARER_TOKEN if not already set.
 load_or_generate_token() {
   local python_bin="${1:-python3}"
 
-  # Return if token already set
+  # 1. Already set in environment
   if [[ -n "${HTTP_BEARER_TOKEN:-}" ]]; then
+    export HTTP_BEARER_TOKEN
     return 0
   fi
 
-  # Try to load from config directories
-  if [[ -f ~/.config/mcp-agent-mail/.env ]]; then
-    HTTP_BEARER_TOKEN=$(grep -E '^HTTP_BEARER_TOKEN=' ~/.config/mcp-agent-mail/.env | sed -E 's/^HTTP_BEARER_TOKEN=//') || true
-  elif [[ -f ~/mcp_agent_mail/.env ]]; then
-    HTTP_BEARER_TOKEN=$(grep -E '^HTTP_BEARER_TOKEN=' ~/mcp_agent_mail/.env | sed -E 's/^HTTP_BEARER_TOKEN=//') || true
+  # 2. INTEGRATION_BEARER_TOKEN (shared across integration run)
+  if [[ -n "${INTEGRATION_BEARER_TOKEN:-}" ]]; then
+    HTTP_BEARER_TOKEN="${INTEGRATION_BEARER_TOKEN}"
+    export HTTP_BEARER_TOKEN
+    return 0
   fi
 
-  # Generate new token if not found
-  if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then
-    HTTP_BEARER_TOKEN=$("$python_bin" -c 'import secrets; print(secrets.token_hex(32))')
+  # 3. Alternative env override
+  if [[ -n "${MCP_AGENT_MAIL_TOKEN:-}" ]]; then
+    HTTP_BEARER_TOKEN="${MCP_AGENT_MAIL_TOKEN}"
+    export HTTP_BEARER_TOKEN
+    return 0
   fi
 
+  # Helper: read HTTP_BEARER_TOKEN from a .env file, stripping surrounding quotes
+  # and leading/trailing whitespace. Returns non-zero if key not found or empty.
+  _read_token_from_env() {
+    local env_file="$1"
+    local raw
+    raw=$(grep -E '^HTTP_BEARER_TOKEN=' "$env_file" 2>/dev/null | sed -E 's/^HTTP_BEARER_TOKEN=//') || return 1
+    # Strip surrounding quotes (single or double)
+    raw=$(echo "$raw" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+    [[ -z "$raw" ]] && return 1
+    # Remove surrounding quotes if present
+    HTTP_BEARER_TOKEN=$(echo "$raw" | sed -E 's/^"(.*)"$/\1/; s/^'"'"'(.*)'"'"'$/\1/')
+    [[ -z "${HTTP_BEARER_TOKEN}" ]] && return 1
+    return 0
+  }
+
+  # 4. Project .env (several possible locations)
+  local project_root
+  project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+  for _env in \
+    "${project_root}/.env" \
+    "${project_root}/../.env" \
+    "${HOME}/.mcp_agent_mail_git_mailbox_repo/.env" \
+    "${HOME}/.mcp_agent_mail/.env" \
+    "${HOME}/.config/mcp-agent-mail/.env"; do
+    if [[ -f "$_env" ]] && _read_token_from_env "$_env"; then
+      export HTTP_BEARER_TOKEN
+      return 0
+    fi
+  done
+
+  # 5. Generate new token
+  local _generated
+  if command -v openssl >/dev/null 2>&1; then
+    _generated=$(openssl rand -hex 32)
+  else
+    _generated=$("$python_bin" -c 'import secrets; print(secrets.token_hex(32))')
+  fi
+
+  HTTP_BEARER_TOKEN="${_generated}"
   export HTTP_BEARER_TOKEN
 }

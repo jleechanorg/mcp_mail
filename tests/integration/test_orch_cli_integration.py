@@ -25,6 +25,8 @@ Note:
 
 from __future__ import annotations
 
+import contextlib
+import json
 import sys
 from pathlib import Path
 
@@ -36,11 +38,13 @@ sys.path.insert(0, str(project_root))
 
 from tests.integration.test_harness_utils import (  # noqa: E402
     ORCHESTRATION_AVAILABLE,
+    PROJECT_ROOT,
     ClaudeCLITest,
     CodexCLITest,
     CursorCLITest,
     GeminiCLITest,
     is_cli_available,
+    load_bearer_token,
 )
 
 # Skip all tests if orchestration framework is not installed
@@ -64,44 +68,82 @@ class MCPMailClaudeCLITest(ClaudeCLITest):
         print("=" * 70)
         print(f"Started: {self.start_time.isoformat()}\n")
 
-        # Check prerequisites
-        print("[TEST] Orchestration framework...")
-        if not ORCHESTRATION_AVAILABLE:
-            self.record(
-                "orchestration",
-                False,
-                "Not installed - run: uv tool install jleechanorg-orchestration",
-                skip=True,
-            )
+        # Context manager to patch .claude/settings.json with auth token.
+        # This is best-effort and always restores in finally, but note that a hard kill
+        # (e.g., SIGKILL) can still leave the patched settings on disk.
+        @contextlib.contextmanager
+        def patched_settings():
+            settings_path = PROJECT_ROOT / ".claude" / "settings.json"
+            if not settings_path.exists():
+                yield
+                return
+
+            original_content = settings_path.read_text(encoding="utf-8")
+            try:
+                # Load token and inject into settings
+                token = load_bearer_token()
+                if token:
+                    config = json.loads(original_content)
+                    server = config.get("mcpServers", {}).get("mcp-agent-mail")
+                    if isinstance(server, dict):
+                        headers = server.get("headers")
+                        if not isinstance(headers, dict):
+                            headers = {}
+                        headers["Authorization"] = f"Bearer {token}"
+                        server["headers"] = headers
+                        settings_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+                        print(f"[SETUP] Patched {settings_path} with auth token for test")
+            except Exception as e:
+                print(f"[SETUP] Warning: Failed to patch settings: {e}")
+
+            try:
+                yield
+            finally:
+                try:
+                    settings_path.write_text(original_content, encoding="utf-8")
+                    print(f"[TEARDOWN] Restored {settings_path}")
+                except Exception as e:
+                    print(f"[TEARDOWN] Warning: Failed to restore settings: {e}")
+
+        with patched_settings():
+            # Check prerequisites
+            print("[TEST] Orchestration framework...")
+            if not ORCHESTRATION_AVAILABLE:
+                self.record(
+                    "orchestration",
+                    False,
+                    "Not installed - run: uv tool install jleechanorg-orchestration",
+                    skip=True,
+                )
+                return self._finish()
+            self.record("orchestration", True, "Available")
+
+            print("\n[TEST] Claude CLI availability...")
+            if not self.check_cli_available():
+                self.record(
+                    "cli",
+                    False,
+                    "Claude not installed - run: npm install -g @anthropic/claude-code",
+                    skip=True,
+                )
+                return self._finish()
+            self.record("cli", True, "Installed and responding")
+
+            print("\n[TEST] MCP Agent Mail tools via CLI...")
+            if not self.validate_mcp_mail_access(timeout=120):
+                return self._finish()
+
+            # Basic CLI invocation test
+            print("\n[TEST] Basic CLI invocation...")
+            success, output = self.run_cli("Respond with exactly: 'MCP Mail integration test successful'")
+            if success and "successful" in output.lower():
+                self.record("basic_invocation", True, "CLI responded correctly")
+            elif success:
+                self.record("basic_invocation", True, f"CLI responded: {output[:100]}...")
+            else:
+                self.record("basic_invocation", False, f"CLI failed: {output[:200]}")
+
             return self._finish()
-        self.record("orchestration", True, "Available")
-
-        print("\n[TEST] Claude CLI availability...")
-        if not self.check_cli_available():
-            self.record(
-                "cli",
-                False,
-                "Claude not installed - run: npm install -g @anthropic/claude-code",
-                skip=True,
-            )
-            return self._finish()
-        self.record("cli", True, "Installed and responding")
-
-        print("\n[TEST] MCP Agent Mail tools via CLI...")
-        if not self.validate_mcp_mail_access(timeout=120):
-            return self._finish()
-
-        # Basic CLI invocation test
-        print("\n[TEST] Basic CLI invocation...")
-        success, output = self.run_cli("Respond with exactly: 'MCP Mail integration test successful'")
-        if success and "successful" in output.lower():
-            self.record("basic_invocation", True, "CLI responded correctly")
-        elif success:
-            self.record("basic_invocation", True, f"CLI responded: {output[:100]}...")
-        else:
-            self.record("basic_invocation", False, f"CLI failed: {output[:200]}")
-
-        return self._finish()
 
 
 class MCPMailCursorCLITest(CursorCLITest):
