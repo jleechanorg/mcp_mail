@@ -42,5 +42,5 @@ async def test_guard_render_and_conflict_message(isolated_env, tmp_path: Path):
     assert "archive storage removed" in stderr_text.lower() or stderr_text == ""
 
     # Uninstall guard path returns True and removes file
-    removed = await uninstall_guard(repo_dir)
+    removed = uninstall_guard(repo_dir)
     assert removed is True
