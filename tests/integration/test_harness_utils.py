@@ -162,6 +162,11 @@ class BaseCLITest:
                 ("cursor_api_key", "agent login"),
                 "Cursor CLI not authenticated (set CURSOR_API_KEY or run `agent login`)",
             ),
+            (
+                (),
+                ("usage limit", "spend limit", "usage limits will reset"),
+                "Cursor CLI quota exhausted (usage limit reached)",
+            ),
         ],
         "gemini": [
             (
