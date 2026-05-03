@@ -55,6 +55,83 @@ INLINE_ATTACHMENT_THRESHOLD = 64 * 1024  # 64 KiB
 DETACH_ATTACHMENT_THRESHOLD = 25 * 1024 * 1024  # 25 MiB
 DEFAULT_CHUNK_THRESHOLD = 20 * 1024 * 1024  # 20 MiB
 DEFAULT_CHUNK_SIZE = 4 * 1024 * 1024  # 4 MiB
+INDEX_REDIRECT_HTML = """<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="refresh" content="0; url=./viewer/" />
+  <title>MCP Agent Mail Viewer</title>
+  <link rel="canonical" href="./viewer/" />
+  <style>
+    :root {
+      color-scheme: light dark;
+    }
+
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0f172a;
+      color: #f8fafc;
+      display: grid;
+      place-items: center;
+      min-height: 100vh;
+    }
+
+    main {
+      text-align: center;
+      padding: 2.5rem;
+      border-radius: 1.25rem;
+      background: rgba(15, 23, 42, 0.85);
+      box-shadow: 0 25px 50px -12px rgba(15, 23, 42, 0.65);
+      max-width: 32rem;
+      backdrop-filter: blur(18px);
+    }
+
+    h1 {
+      margin-bottom: 1rem;
+      font-size: clamp(1.75rem, 5vw, 2.5rem);
+      font-weight: 700;
+      color: #e0e7ff;
+    }
+
+    p {
+      margin: 0.75rem 0;
+      line-height: 1.6;
+      color: rgba(226, 232, 240, 0.88);
+    }
+
+    a {
+      color: #6366f1;
+      text-decoration: none;
+      font-weight: 600;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+
+<body>
+  <main>
+    <h1>MCP Agent Mail Viewer</h1>
+    <p>You are being redirected to the hosted viewer experience.</p>
+    <p>If you are not redirected automatically, <a href="./viewer/">click here to open the viewer</a>.</p>
+  </main>
+  <script>
+    try {
+      const target = new URL("./viewer/", window.location.href);
+      window.location.replace(target.toString());
+    } catch (error) {
+      window.location.href = "./viewer/";
+    }
+  </script>
+</body>
+
+</html>
+"""
 
 
 def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
@@ -62,6 +139,12 @@ def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
     cursor = conn.execute(f"PRAGMA table_info({table})")
     columns = [row[1] for row in cursor.fetchall()]
     return column in columns
+
+
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    """Check if a table exists in the snapshot database."""
+    cursor = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1", (table,))
+    return cursor.fetchone() is not None
 
 
 @dataclass(slots=True, frozen=True)
@@ -961,6 +1044,21 @@ def build_materialized_views(snapshot_path: Path) -> None:
     try:
         # Check if thread_id column exists in messages table
         has_thread_id = _column_exists(conn, "messages", "thread_id")
+        has_message_recipients = _table_exists(conn, "message_recipients")
+
+        can_build_message_overview = all(
+            _column_exists(conn, "messages", column)
+            for column in (
+                "project_id",
+                "sender_id",
+                "subject",
+                "body_md",
+                "importance",
+                "ack_required",
+                "created_ts",
+                "attachments",
+            )
+        ) and _table_exists(conn, "agents")
 
         # Build thread_id expression based on column existence
         # Fallback to synthetic thread_id using message ID if column doesn't exist
@@ -969,26 +1067,15 @@ def build_materialized_views(snapshot_path: Path) -> None:
         assert thread_id_expr in ("m.thread_id", "printf('msg:%d', m.id)")
 
         # Message overview materialized view
-        # Denormalizes messages with sender names for efficient list rendering
-        conn.executescript(
-            f"""
-            DROP TABLE IF EXISTS message_overview_mv;
-            CREATE TABLE message_overview_mv AS
-            SELECT
-                m.id,
-                m.project_id,
-                {thread_id_expr} AS thread_id,
-                m.subject,
-                m.importance,
-                m.ack_required,
-                m.created_ts,
-                a.name AS sender_name,
-                LENGTH(m.body_md) AS body_length,
-                json_array_length(m.attachments) AS attachment_count,
-                SUBSTR(COALESCE(m.body_md, ''), 1, 280) AS latest_snippet,
-                COALESCE(r.recipients, '') AS recipients
-            FROM messages m
-            JOIN agents a ON m.sender_id = a.id
+        # Denormalizes messages with sender names for efficient list rendering.
+        #
+        # Some legacy snapshots may not include full message metadata (subject/body/importance) or recipient tables;
+        # in that case, skip this view rather than failing the whole export pipeline.
+        conn.execute("DROP TABLE IF EXISTS message_overview_mv;")
+        if can_build_message_overview:
+            recipients_select = "COALESCE(r.recipients, '')" if has_message_recipients else "''"
+            recipients_join = (
+                """
             LEFT JOIN (
                 SELECT
                     mr.message_id,
@@ -997,68 +1084,93 @@ def build_materialized_views(snapshot_path: Path) -> None:
                 LEFT JOIN agents ag ON ag.id = mr.agent_id
                 GROUP BY mr.message_id
             ) r ON r.message_id = m.id
-            ORDER BY m.created_ts DESC;
+                """
+                if has_message_recipients
+                else ""
+            )
+            conn.executescript(
+                f"""
+                CREATE TABLE message_overview_mv AS
+                SELECT
+                    m.id,
+                    m.project_id,
+                    {thread_id_expr} AS thread_id,
+                    m.subject,
+                    m.importance,
+                    m.ack_required,
+                    m.created_ts,
+                    a.name AS sender_name,
+                    LENGTH(m.body_md) AS body_length,
+                    json_array_length(m.attachments) AS attachment_count,
+                    SUBSTR(COALESCE(m.body_md, ''), 1, 280) AS latest_snippet,
+                    {recipients_select} AS recipients
+                FROM messages m
+                JOIN agents a ON m.sender_id = a.id
+                {recipients_join}
+                ORDER BY m.created_ts DESC;
 
-            -- Covering indexes for common query patterns
-            CREATE INDEX idx_msg_overview_created ON message_overview_mv(created_ts DESC);
-            CREATE INDEX idx_msg_overview_thread ON message_overview_mv(thread_id, created_ts DESC);
-            CREATE INDEX idx_msg_overview_project ON message_overview_mv(project_id, created_ts DESC);
-            CREATE INDEX idx_msg_overview_importance ON message_overview_mv(importance, created_ts DESC);
-            """
-        )
+                -- Covering indexes for common query patterns
+                CREATE INDEX idx_msg_overview_created ON message_overview_mv(created_ts DESC);
+                CREATE INDEX idx_msg_overview_thread ON message_overview_mv(thread_id, created_ts DESC);
+                CREATE INDEX idx_msg_overview_project ON message_overview_mv(project_id, created_ts DESC);
+                CREATE INDEX idx_msg_overview_importance ON message_overview_mv(importance, created_ts DESC);
+                """
+            )
 
         # Attachments by message materialized view
         # Flattens JSON attachments array for easier filtering and counting
-        conn.executescript(
-            f"""
-            DROP TABLE IF EXISTS attachments_by_message_mv;
-            CREATE TABLE attachments_by_message_mv AS
-            SELECT
-                m.id AS message_id,
-                m.project_id,
-                {thread_id_expr} AS thread_id,
-                m.created_ts,
-                json_extract(value, '$.type') AS attachment_type,
-                json_extract(value, '$.media_type') AS media_type,
-                json_extract(value, '$.path') AS path,
-                CAST(json_extract(value, '$.size_bytes') AS INTEGER) AS size_bytes
-            FROM messages m,
-                 json_each(m.attachments)
-            WHERE m.attachments != '[]';
+        conn.execute("DROP TABLE IF EXISTS attachments_by_message_mv;")
+        if _column_exists(conn, "messages", "attachments"):
+            conn.executescript(
+                f"""
+                CREATE TABLE attachments_by_message_mv AS
+                SELECT
+                    m.id AS message_id,
+                    m.project_id,
+                    {thread_id_expr} AS thread_id,
+                    m.created_ts,
+                    json_extract(value, '$.type') AS attachment_type,
+                    json_extract(value, '$.media_type') AS media_type,
+                    json_extract(value, '$.path') AS path,
+                    CAST(json_extract(value, '$.size_bytes') AS INTEGER) AS size_bytes
+                FROM messages m,
+                     json_each(m.attachments)
+                WHERE m.attachments != '[]';
 
-            -- Indexes for attachment queries
-            CREATE INDEX idx_attach_by_msg ON attachments_by_message_mv(message_id);
-            CREATE INDEX idx_attach_by_type ON attachments_by_message_mv(attachment_type, created_ts DESC);
-            CREATE INDEX idx_attach_by_project ON attachments_by_message_mv(project_id, created_ts DESC);
-            """
-        )
+                -- Indexes for attachment queries
+                CREATE INDEX idx_attach_by_msg ON attachments_by_message_mv(message_id);
+                CREATE INDEX idx_attach_by_type ON attachments_by_message_mv(attachment_type, created_ts DESC);
+                CREATE INDEX idx_attach_by_project ON attachments_by_message_mv(project_id, created_ts DESC);
+                """
+            )
 
         # FTS search overview materialized view
         # Pre-computes search result snippets and highlights for efficient rendering
         # Only created if FTS5 is available
         try:
             conn.execute("SELECT 1 FROM fts_messages LIMIT 1")
-            conn.executescript(
-                """
-                DROP TABLE IF EXISTS fts_search_overview_mv;
-                CREATE TABLE fts_search_overview_mv AS
-                SELECT
-                    m.rowid,
-                    m.id,
-                    m.subject,
-                    m.created_ts,
-                    m.importance,
-                    a.name AS sender_name,
-                    SUBSTR(m.body_md, 1, 200) AS snippet
-                FROM messages m
-                JOIN agents a ON m.sender_id = a.id
-                ORDER BY m.created_ts DESC;
+            conn.execute("DROP TABLE IF EXISTS fts_search_overview_mv;")
+            if can_build_message_overview:
+                conn.executescript(
+                    """
+                    CREATE TABLE fts_search_overview_mv AS
+                    SELECT
+                        m.rowid,
+                        m.id,
+                        m.subject,
+                        m.created_ts,
+                        m.importance,
+                        a.name AS sender_name,
+                        SUBSTR(m.body_md, 1, 200) AS snippet
+                    FROM messages m
+                    JOIN agents a ON m.sender_id = a.id
+                    ORDER BY m.created_ts DESC;
 
-                -- Index for FTS result lookups
-                CREATE INDEX idx_fts_overview_rowid ON fts_search_overview_mv(rowid);
-                CREATE INDEX idx_fts_overview_created ON fts_search_overview_mv(created_ts DESC);
-                """
-            )
+                    -- Index for FTS result lookups
+                    CREATE INDEX idx_fts_overview_rowid ON fts_search_overview_mv(rowid);
+                    CREATE INDEX idx_fts_overview_created ON fts_search_overview_mv(created_ts DESC);
+                    """
+                )
         except sqlite3.OperationalError:
             # FTS5 not available or not configured, skip this view
             pass
@@ -1124,6 +1236,10 @@ def create_performance_indexes(snapshot_path: Path) -> None:
               ON messages(sender_lower);
             """
         )
+
+        # Update planner stats after adding indexes to keep viewer queries fast.
+        conn.execute("PRAGMA analysis_limit=400")
+        conn.execute("ANALYZE")
 
         conn.commit()
     finally:
@@ -1846,19 +1962,94 @@ def write_bundle_scaffolding(
     manifest["export_config"] = {k: v for k, v in export_config_payload.items() if v is not None}
     _write_json_file(output_dir / "manifest.json", manifest)
 
-    readme_content = (
-        "MCP Agent Mail Static Export (Prototype)\n"
-        "=======================================\n\n"
-        "This bundle contains a scrubbed SQLite snapshot (`mailbox.sqlite3`), optional chunk manifest, attachments, and a minimal viewer scaffold (`viewer/`).\n"
-        "Run `uv run python -m mcp_agent_mail.cli share preview .` from this directory to launch the local preview, or open `viewer/index.html` after hosting the bundle on a static site as described in `HOW_TO_DEPLOY.md`.\n"
-        "Use `manifest.json` to audit included projects, scrub statistics, hosting hints, and attachment packaging details.\n"
-    )
+    readme_lines = [
+        "# MCP Agent Mail — Shared Mailbox Snapshot",
+        "",
+        "This repository hosts a static export of an MCP Agent Mail project. "
+        "It contains a scrubbed SQLite snapshot plus a self-contained viewer so teammates can browse threads, "
+        "attachments, and metadata without needing direct database access.",
+        "",
+        "## What's Included",
+        "",
+        "- `mailbox.sqlite3` — scrubbed mailbox database (agent names retained, ack/read state cleared).",
+        "- `viewer/` — static web viewer (Alpine.js + Tailwind) with inbox, thread explorer, search, and attachment tooling.",
+        "- `manifest.json` — machine-readable metadata (project scope, scrub stats, hosting hints, asset SRI hashes).",
+        "- `_headers` — COOP/COEP headers for hosts that support Netlify-style header rules.",
+        "- `.nojekyll` — disables GitHub Pages' Jekyll processing so `_headers` and `.wasm` assets are served untouched.",
+        "- `HOW_TO_DEPLOY.md` — detailed deployment checklist for GitHub Pages, Cloudflare Pages, Netlify, or generic hosts.",
+        "",
+        "## Live Viewer",
+        "",
+        "The `viewer/index.html` application renders the exported mailbox locally or when deployed to static hosting. "
+        "If this repo is published via GitHub Pages, the root `index.html` immediately redirects to the viewer.",
+        "",
+    ]
     if hosting_hints:
-        readme_content += "\nDetected hosting targets in this environment:\n"
+        readme_lines.append("Detected hosting signals when this export was generated:")
         for hint in hosting_hints:
             signals_text = "; ".join(hint.signals)
-            readme_content += f"- {hint.title}: {hint.summary} (signals: {signals_text})\n"
-    _write_text_file(output_dir / "README.txt", readme_content)
+            readme_lines.append(f"- **{hint.title}** — {hint.summary} _(signals: {signals_text})_")
+        readme_lines.append("")
+
+    readme_lines.extend(
+        [
+            "## Quick Start",
+            "",
+            "1. **Install dependencies** (first time only):",
+            "   ```bash",
+            "   uv sync",
+            "   ```",
+            "2. **Rebuild or update the export** from the source project:",
+            "   ```bash",
+            "   uv run python -m mcp_agent_mail.cli share update /path/to/this/repo",
+            "   ```",
+            "3. **Preview locally**:",
+            "   ```bash",
+            "   uv run python -m mcp_agent_mail.cli share preview .",
+            "   ```",
+            "   The command serves the viewer at `http://127.0.0.1:9000/` with hot reload.",
+            "4. **Deploy** using GitHub Pages (built into the `share wizard`) or manually follow `HOW_TO_DEPLOY.md`.",
+            "",
+            "## Regenerating a Fresh Snapshot",
+            "",
+            "From the MCP Agent Mail source checkout, run:",
+            "",
+            "```bash",
+            "uv run python -m mcp_agent_mail.cli share export \\",
+            "  --output /path/to/this/repo \\",
+            "  --project <project-slug> \\",
+            "  --scrub-preset standard \\",
+            "  --no-zip",
+            "```",
+            "",
+            "This overwrites the bundle (after you clean the repo) with the latest messages while preserving viewer assets.",
+            "",
+            "## Verifying Integrity",
+            "",
+            "- **Signed bundles**: If `manifest.sig.json` is present, verify with:",
+            "  ```bash",
+            "  uv run python -m mcp_agent_mail.cli share verify . --public-key $(cat signing-*.pub)",
+            "  ```",
+            "- **SRI hashes**: `manifest.json` records SHA256 digests for viewer assets; static hosts can pin hashes if desired.",
+            "",
+            "## Troubleshooting",
+            "",
+            "- **GitHub Pages shows 404**: confirm Pages is set to the `main` branch and root (`/`). "
+            "The wizard calls `gh api repos/:owner/:repo/pages` automatically; re-run it if needed.",
+            "- **`.wasm` served as text/plain**: ensure `.nojekyll` is present and `_headers` are respected, or configure MIME types manually.",
+            "- **Viewer warns about OPFS**: host must send COOP/COEP headers. GitHub Pages requires the bundled `coi-serviceworker.js` to be uncommented (see `HOW_TO_DEPLOY.md`).",
+            "",
+            "## About MCP Agent Mail",
+            "",
+            "MCP Agent Mail is an asynchronous coordination layer for multi-agent coding workflows. "
+            "It captures messages, attachments, and advisory file reservations so agents can collaborate safely. "
+            "Static exports make it easy to share audit trails without granting direct database access.",
+        ]
+    )
+
+    _write_text_file(output_dir / "README.md", "\n".join(readme_lines) + "\n")
+    _write_text_file(output_dir / "index.html", INDEX_REDIRECT_HTML)
+    _write_text_file(output_dir / ".nojekyll", "")
 
     how_to_deploy = build_how_to_deploy(hosting_hints)
     _write_text_file(output_dir / "HOW_TO_DEPLOY.md", how_to_deploy)
@@ -1910,6 +2101,7 @@ __all__ = [
     "build_search_indexes",
     "bundle_attachments",
     "copy_viewer_assets",
+    "create_performance_indexes",
     "create_sqlite_snapshot",
     "decrypt_with_age",
     "detect_hosting_hints",

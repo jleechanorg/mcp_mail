@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from mcp_agent_mail.app import RECENT_TOOL_USAGE
 from mcp_agent_mail.config import clear_settings_cache
 from mcp_agent_mail.db import reset_database_state
 
@@ -20,11 +21,13 @@ def isolated_env(tmp_path, monkeypatch):
     monkeypatch.setenv("MCP_TOOLS_MODE", "extended")
     storage_root = tmp_path / "storage"
     monkeypatch.setenv("STORAGE_ROOT", str(storage_root))
+    monkeypatch.setenv("STORAGE_LOCAL_ARCHIVE_ENABLED", "true")
     monkeypatch.setenv("GIT_AUTHOR_NAME", "test-agent")
     monkeypatch.setenv("GIT_AUTHOR_EMAIL", "test@example.com")
     monkeypatch.setenv("INLINE_IMAGE_MAX_BYTES", "128")
     clear_settings_cache()
     reset_database_state()
+    RECENT_TOOL_USAGE.clear()
     try:
         yield
     finally:
@@ -72,6 +75,7 @@ def isolated_env(tmp_path, monkeypatch):
 
         clear_settings_cache()
         reset_database_state()
+        RECENT_TOOL_USAGE.clear()
 
         if db_path.exists():
             db_path.unlink()

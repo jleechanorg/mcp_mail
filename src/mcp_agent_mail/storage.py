@@ -7,6 +7,7 @@ import base64
 import contextlib
 import hashlib
 import json
+import logging
 import os
 import re
 import time
@@ -23,7 +24,104 @@ from PIL import Image
 
 from .config import Settings
 
+logger = logging.getLogger(__name__)
+
 _IMAGE_PATTERN = re.compile(r"!\[(?P<alt>[^\]]*)\]\((?P<path>[^)]+)\)")
+
+_DEFAULT_RUNTIME_ROOT = Path.home() / ".mcp_agent_mail_runtime"
+
+
+def runtime_root(settings: Settings) -> Path:
+    """Return a non-repo runtime root for lightweight JSON artifacts.
+
+    This is used when Git-backed archive storage is disabled (for example,
+    STORAGE_LOCAL_ARCHIVE_ENABLED=false and STORAGE_PROJECT_KEY_ENABLED=false),
+    but the server still needs a filesystem location for hooks/guards to read
+    advisory artifacts like file reservations.
+    """
+    _ = settings  # reserved for future config wiring
+    env = (os.environ.get("MCP_AGENT_MAIL_RUNTIME_ROOT") or "").strip()
+    root = Path(env).expanduser() if env else _DEFAULT_RUNTIME_ROOT
+    return root.resolve()
+
+
+async def ensure_runtime_project_root(settings: Settings, project_slug: str) -> Path:
+    root = runtime_root(settings) / "projects" / project_slug
+    await _to_thread(root.mkdir, parents=True, exist_ok=True)
+    return root
+
+
+@asynccontextmanager
+async def runtime_write_lock(settings: Settings, project_slug: str, *, timeout_seconds: float = 120.0):
+    root = await ensure_runtime_project_root(settings, project_slug)
+    lock = AsyncFileLock(root / ".runtime.lock", timeout_seconds=timeout_seconds)
+    async with lock:
+        yield root
+
+
+async def write_file_reservation_record_runtime(
+    settings: Settings,
+    project_slug: str,
+    file_reservation: dict[str, object],
+) -> Path:
+    path_pattern = str(file_reservation.get("path_pattern") or file_reservation.get("path") or "").strip()
+    if not path_pattern:
+        raise ValueError("File reservation record must include 'path_pattern'.")
+    normalized_file_reservation = dict(file_reservation)
+    normalized_file_reservation["path_pattern"] = path_pattern
+    normalized_file_reservation.pop("path", None)
+    digest = hashlib.sha1(path_pattern.encode("utf-8")).hexdigest()
+
+    project_root = await ensure_runtime_project_root(settings, project_slug)
+    file_reservations_dir = project_root / "file_reservations"
+    await _to_thread(file_reservations_dir.mkdir, parents=True, exist_ok=True)
+    file_reservation_path = file_reservations_dir / f"{digest}.json"
+    await _write_json(file_reservation_path, normalized_file_reservation)
+    return file_reservation_path
+
+
+async def write_file_reservation_artifacts(
+    settings: Settings,
+    project_slug: str,
+    payloads: list[dict[str, object]],
+    *,
+    project_key: str | None = None,
+) -> list[Path]:
+    """Write file reservation JSON artifacts regardless of archive enablement.
+
+    When archive storage is enabled, writes under the Git-backed project archive.
+    When archive storage is disabled, writes under the runtime artifact root
+    (default: ~/.mcp_agent_mail_runtime).
+    """
+    if not payloads:
+        return []
+
+    if is_archive_enabled(settings):
+        archive = await ensure_archive(settings, project_slug, project_key=project_key)
+        async with archive_write_lock(archive):
+            out: list[Path] = []
+            for payload in payloads:
+                out.append(await write_file_reservation_record(archive, payload))
+            return out
+
+    async with runtime_write_lock(settings, project_slug):
+        out: list[Path] = []
+        for payload in payloads:
+            out.append(await write_file_reservation_record_runtime(settings, project_slug, payload))
+        return out
+
+
+def is_archive_enabled(settings: Settings) -> bool:
+    """Check if archive storage is enabled (either local or project-key based).
+
+    Archive storage is optional for some core features (for example, basic
+    project and agent registration), which can operate using the SQLite
+    database alone. However, many higher-level application operations
+    (such as message archiving and related Git-backed workflows) still
+    require archive storage to be enabled and will call :func:`ensure_archive`.
+    Archive is used for git-based file storage of messages as .md files.
+    """
+    return settings.storage.local_archive_enabled or settings.storage.project_key_storage_enabled
 
 
 @dataclass(slots=True)
@@ -487,7 +585,7 @@ async def write_agent_deletion_marker(
     await _commit(archive.repo, archive.settings, f"agent: delete {agent_name}", [rel])
 
 
-async def write_file_reservation_record(archive: ProjectArchive, file_reservation: dict[str, object]) -> None:
+async def write_file_reservation_record(archive: ProjectArchive, file_reservation: dict[str, object]) -> Path:
     path_pattern = str(file_reservation.get("path_pattern") or file_reservation.get("path") or "").strip()
     if not path_pattern:
         raise ValueError("File reservation record must include 'path_pattern'.")
@@ -504,6 +602,7 @@ async def write_file_reservation_record(archive: ProjectArchive, file_reservatio
         f"file_reservation: {agent_name} {path_pattern}",
         [file_reservation_path.relative_to(archive.repo_root).as_posix()],
     )
+    return file_reservation_path
 
 
 async def write_message_bundle(
@@ -515,6 +614,7 @@ async def write_message_bundle(
     extra_paths: Sequence[str] | None = None,
     commit_text: str | None = None,
 ) -> None:
+    bundle_start = time.perf_counter()
     timestamp_obj: Any = message.get("created") or message.get("created_ts")
     timestamp_str = timestamp_obj if isinstance(timestamp_obj, str) else datetime.now(timezone.utc).isoformat()
     now = datetime.fromisoformat(timestamp_str)
@@ -527,10 +627,12 @@ async def write_message_bundle(
 
     rel_paths: list[str] = []
 
+    mkdir_start = time.perf_counter()
     await _to_thread(canonical_dir.mkdir, parents=True, exist_ok=True)
     await _to_thread(outbox_dir.mkdir, parents=True, exist_ok=True)
     for path in inbox_dirs:
         await _to_thread(path.mkdir, parents=True, exist_ok=True)
+    mkdir_elapsed = time.perf_counter() - mkdir_start
 
     frontmatter = json.dumps(message, indent=2, sort_keys=True)
     content = f"---json\n{frontmatter}\n---\n\n{body_md.strip()}\n"
@@ -541,6 +643,8 @@ async def write_message_bundle(
     subject_slug = re.sub(r"[^a-zA-Z0-9._-]+", "-", subject_value).strip("-_").lower()[:80] or "message"
     id_suffix = str(message.get("id", ""))
     filename = f"{created_iso}__{subject_slug}__{id_suffix}.md" if id_suffix else f"{created_iso}__{subject_slug}.md"
+
+    write_start = time.perf_counter()
     canonical_path = canonical_dir / filename
     await _write_text(canonical_path, content)
     rel_paths.append(canonical_path.relative_to(archive.repo_root).as_posix())
@@ -553,10 +657,13 @@ async def write_message_bundle(
         inbox_path = inbox_dir / filename
         await _write_text(inbox_path, content)
         rel_paths.append(inbox_path.relative_to(archive.repo_root).as_posix())
+    write_elapsed = time.perf_counter() - write_start
 
     # Update thread-level digest for human review if thread_id present
+    digest_elapsed = 0.0
     thread_id_obj = message.get("thread_id")
     if isinstance(thread_id_obj, str) and thread_id_obj.strip():
+        digest_start = time.perf_counter()
         canonical_rel = canonical_path.relative_to(archive.repo_root).as_posix()
         digest_rel = await _update_thread_digest(
             archive,
@@ -572,6 +679,7 @@ async def write_message_bundle(
         )
         if digest_rel:
             rel_paths.append(digest_rel)
+        digest_elapsed = time.perf_counter() - digest_start
 
     if extra_paths:
         rel_paths.extend(extra_paths)
@@ -590,7 +698,21 @@ async def write_message_bundle(
             f"Thread: {thread_key}",
         ]
         commit_message = commit_subject + "\n\n" + "\n".join(commit_body_lines) + "\n"
+    git_commit_start = time.perf_counter()
     await _commit(archive.repo, archive.settings, commit_message, rel_paths)
+    git_commit_elapsed = time.perf_counter() - git_commit_start
+    total_elapsed = time.perf_counter() - bundle_start
+    logger.debug(
+        "[LATENCY] write_message_bundle: total=%.3fs mkdir=%.3fs write=%.3fs "
+        "digest=%.3fs git_commit=%.3fs files=%d msg_id=%s",
+        total_elapsed,
+        mkdir_elapsed,
+        write_elapsed,
+        digest_elapsed,
+        git_commit_elapsed,
+        len(rel_paths),
+        message.get("id"),
+    )
 
 
 async def _update_thread_digest(

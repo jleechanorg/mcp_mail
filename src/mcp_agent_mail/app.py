@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import fnmatch
 import functools
+import hashlib
 import inspect
 import json
 import logging
@@ -24,7 +25,7 @@ from fastmcp import Context, FastMCP
 from fastmcp.tools.tool import ToolResult  # type: ignore
 from git import Repo
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
-from sqlalchemy import asc, delete, desc, func, or_, select, text, update
+from sqlalchemy import Column, Integer, MetaData, Table, asc, bindparam, delete, desc, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, NoResultFound, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -34,7 +35,16 @@ from .config import Settings, get_settings
 from .db import ensure_schema, get_session, init_engine
 from .guard import install_guard as install_guard_script, uninstall_guard as uninstall_guard_script
 from .llm import complete_system_user
-from .models import Agent, FileReservation, Message, MessageRecipient, Project, ProjectSiblingSuggestion
+from .models import (
+    Agent,
+    FileReservation,
+    Message,
+    MessageRecipient,
+    Product,
+    ProductProjectLink,
+    Project,
+    ProjectSiblingSuggestion,
+)
 from .slack_integration import SlackClient, notify_slack_ack, notify_slack_message
 from .slots import (
     acquire_build_slot as acquire_slot_impl,
@@ -48,10 +58,11 @@ from .storage import (
     collect_lock_status,
     ensure_archive,
     heal_archive_locks,
+    is_archive_enabled,
     process_attachments,
     write_agent_deletion_marker,
     write_agent_profile,
-    write_file_reservation_record,
+    write_file_reservation_artifacts,
     write_message_bundle,
 )
 from .utils import generate_agent_name, sanitize_agent_name, slugify
@@ -73,9 +84,116 @@ CLUSTER_MESSAGING = "messaging"
 CLUSTER_SEARCH = "search"
 CLUSTER_FILE_RESERVATIONS = "file_reservations"
 CLUSTER_MACROS = "workflow_macros"
+CLUSTER_PRODUCT = "product"
 
 
 # Global inbox configuration
+
+
+async def _ensure_archive_if_enabled(settings: Settings, project: Project) -> ProjectArchive | None:
+    """Initialize and return the project archive when archive storage is enabled."""
+    if not is_archive_enabled(settings):
+        return None
+    return await ensure_archive(settings, project.slug, project_key=project.human_key)
+
+
+def _resolve_project_identity(target_path: str) -> dict[str, Any]:
+    """
+    Resolve project identity using markers and git metadata.
+
+    Priority:
+    1. Committed marker (.agent-mail-project-id)
+    2. Private marker (.git/agent-mail/project-id)
+    3. Remote fingerprint (SHA1 of normalized remote URL + default branch)
+
+    Returns dict with 'project_uid' key.
+    """
+    import re
+    import subprocess
+
+    path = Path(target_path).resolve()
+
+    # 1. Check for committed marker
+    committed_marker = path / ".agent-mail-project-id"
+    if committed_marker.exists():
+        uid = committed_marker.read_text(encoding="utf-8").strip()
+        if uid:
+            return {"project_uid": uid}
+
+    # 1b. Private marker at conventional .git path
+    direct_private_marker = path / ".git" / "agent-mail" / "project-id"
+    if direct_private_marker.exists():
+        uid = direct_private_marker.read_text(encoding="utf-8").strip()
+        if uid:
+            return {"project_uid": uid}
+
+    # 2. Check for private marker in git-common-dir
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        git_common_dir = result.stdout.strip()
+        if not git_common_dir.startswith("/"):
+            git_common_dir = str(path / git_common_dir)
+
+        private_candidates = [
+            Path(git_common_dir) / "agent-mail" / "project-id",
+            path / ".git" / "agent-mail" / "project-id",
+        ]
+        for private_marker in private_candidates:
+            if private_marker.exists():
+                uid = private_marker.read_text(encoding="utf-8").strip()
+                if uid:
+                    return {"project_uid": uid}
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    # 3. Fall back to remote fingerprint
+    try:
+        # Get remote URL
+        result = subprocess.run(
+            ["git", "-C", str(path), "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        remote_url = result.stdout.strip()
+
+        # Normalize URL to host/owner/repo pattern
+        # Handle both https://github.com/owner/repo.git and git@github.com:owner/repo.git
+        normalized = re.sub(r"\.git$", "", remote_url)
+        normalized = re.sub(r"^https?://", "", normalized)
+        normalized = re.sub(r"^git@([^:]+):", r"\1/", normalized)
+
+        # Get default branch (fallback to 'main' if not found)
+        default_branch = "main"
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(path), "symbolic-ref", "refs/remotes/origin/HEAD"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            branch_guess = result.stdout.strip().split("/")[-1]
+            if branch_guess and branch_guess != "master":
+                default_branch = branch_guess
+        except (subprocess.CalledProcessError, IndexError):
+            pass
+
+        # Create fingerprint and hash it
+        fingerprint = f"{normalized}@{default_branch}"
+        uid = hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()[:20]
+        return {"project_uid": uid}
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    # Final fallback - use path-based slug
+    return {"project_uid": slugify(str(path))}
+
+
 def get_global_inbox_name(project: Project) -> str:
     """Get project-specific global inbox name for message archival organization."""
     return f"global-inbox-{project.slug}"
@@ -360,11 +478,10 @@ def _lifespan_factory(settings: Settings):
             )
         await ensure_schema(settings)
 
-        # Initialize Slack client if enabled
+        # Initialize Slack client if enabled (using singleton to share thread mappings)
         if settings.slack.enabled:
             try:
-                _slack_client = SlackClient(settings.slack)
-                await _slack_client.connect()
+                _slack_client = await SlackClient.get_instance(settings.slack)
                 logger.info("Slack integration initialized successfully")
             except Exception as e:
                 logger.error(f"Failed to initialize Slack integration: {e}")
@@ -394,11 +511,12 @@ def _iso(dt: Any) -> str:
         if isinstance(dt, str):
             try:
                 parsed = datetime.fromisoformat(dt)
-                return parsed.astimezone(timezone.utc).isoformat()
+                return _ensure_utc(parsed).isoformat()
             except Exception:
                 return dt
-        if hasattr(dt, "astimezone"):
-            return dt.astimezone(timezone.utc).isoformat()  # type: ignore[no-any-return]
+        if isinstance(dt, datetime):
+            normalized = _ensure_utc(dt)
+            return normalized.isoformat() if normalized is not None else str(dt)
         return str(dt)
     except Exception:
         return str(dt)
@@ -1382,10 +1500,11 @@ async def _get_or_create_agent(
                             session.add(agent)
                             await session.commit()
                             await session.refresh(agent)
-                            # Write updated profile to archive
-                            archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-                            async with _archive_write_lock(archive):
-                                await write_agent_profile(archive, _agent_to_dict(agent))
+                            # Write updated profile to archive (only if archive is enabled)
+                            if is_archive_enabled(settings):
+                                archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+                                async with _archive_write_lock(archive):
+                                    await write_agent_profile(archive, _agent_to_dict(agent))
                             return agent
                 # If we couldn't find the agent, fall through to regular logic
             # Check if the user-provided name is globally unique
@@ -1509,9 +1628,11 @@ async def _get_or_create_agent(
                         "hint": "Retry the operation; if it persists, call register_agent with force_reclaim=True",
                     },
                 ) from exc
-    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-    async with _archive_write_lock(archive):
-        await write_agent_profile(archive, _agent_to_dict(agent))
+    # Write agent profile to archive (only if archive is enabled)
+    if is_archive_enabled(settings):
+        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+        async with _archive_write_lock(archive):
+            await write_agent_profile(archive, _agent_to_dict(agent))
     return agent
 
 
@@ -1587,10 +1708,11 @@ async def _create_placeholder_agent(
                 return existing
             raise ValueError(f"Failed to create placeholder agent: {sanitized}") from exc
 
-    # Write placeholder profile to archive
-    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-    async with _archive_write_lock(archive):
-        await write_agent_profile(archive, _agent_to_dict(agent))
+    # Write placeholder profile to archive (only if archive is enabled)
+    if is_archive_enabled(settings):
+        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+        async with _archive_write_lock(archive):
+            await write_agent_profile(archive, _agent_to_dict(agent))
     return agent
 
 
@@ -1657,10 +1779,11 @@ async def _delete_agent(project: Project, name: str, settings: Settings) -> dict
         # 5) Finally, delete the agent itself
         await session.execute(delete(Agent).where(Agent.id == agent_id))
 
-    # Write deletion marker to Git archive
-    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-    async with _archive_write_lock(archive):
-        await write_agent_deletion_marker(archive, agent_name, stats)
+    # Write deletion marker to Git archive (only if archive is enabled)
+    if is_archive_enabled(settings):
+        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+        async with _archive_write_lock(archive):
+            await write_agent_deletion_marker(archive, agent_name, stats)
 
     return stats
 
@@ -1710,9 +1833,11 @@ async def _retire_agent(agent: Agent, project: Project, settings: Settings) -> A
         await session.refresh(db_agent)
         agent = db_agent
 
-    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-    async with _archive_write_lock(archive):
-        await write_agent_profile(archive, _agent_to_dict(agent))
+    # Write updated profile to archive (only if archive is enabled)
+    if is_archive_enabled(settings):
+        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+        async with _archive_write_lock(archive):
+            await write_agent_profile(archive, _agent_to_dict(agent))
     return agent
 
 
@@ -1878,8 +2003,11 @@ async def _create_message(
         raise ValueError("Project must have an id before creating messages.")
     if sender.id is None:
         raise ValueError("Sender must have an id before sending messages.")
+    create_start = time.perf_counter()
     await ensure_schema()
+    schema_elapsed = time.perf_counter() - create_start
     async with get_session() as session:
+        session_start = time.perf_counter()
         message = Message(
             project_id=project.id,
             sender_id=sender.id,
@@ -1891,14 +2019,37 @@ async def _create_message(
             attachments=list(attachments),
         )
         session.add(message)
+        flush_start = time.perf_counter()
         await session.flush()
+        flush_elapsed = time.perf_counter() - flush_start
+        if message.id is None:
+            raise RuntimeError("Message id was not assigned after flush().")
         for recipient, kind in recipients:
+            if recipient.id is None:
+                raise ValueError(f"Recipient '{recipient.name}' must have an id before sending messages.")
             entry = MessageRecipient(message_id=message.id, agent_id=recipient.id, kind=kind)
             session.add(entry)
         sender.last_active_ts = datetime.now(timezone.utc)
         session.add(sender)
+        commit_start = time.perf_counter()
         await session.commit()
+        commit_elapsed = time.perf_counter() - commit_start
+        refresh_start = time.perf_counter()
         await session.refresh(message)
+        refresh_elapsed = time.perf_counter() - refresh_start
+        session_elapsed = time.perf_counter() - session_start
+    total_elapsed = time.perf_counter() - create_start
+    logger.debug(
+        "[LATENCY] _create_message: total=%.3fs schema=%.3fs session=%.3fs "
+        "(flush=%.3fs commit=%.3fs refresh=%.3fs) msg_id=%s",
+        total_elapsed,
+        schema_elapsed,
+        session_elapsed,
+        flush_elapsed,
+        commit_elapsed,
+        refresh_elapsed,
+        message.id,
+    )
     return message
 
 
@@ -2162,6 +2313,7 @@ async def _list_inbox(
     include_bodies: bool,
     since_ts: Optional[str],
 ) -> list[dict[str, Any]]:
+    list_inbox_start = time.perf_counter()
     if agent.id is None:
         raise ValueError("Agent must have an id before listing inbox.")
 
@@ -2169,14 +2321,37 @@ async def _list_inbox(
 
     # Skip global inbox scanning if the agent IS the global inbox (prevent recursion)
     if agent.name == global_inbox_name:
-        return await _list_inbox_basic(agent, limit, urgent_only, include_bodies, since_ts)
+        messages = await _list_inbox_basic(agent, limit, urgent_only, include_bodies, since_ts)
+        elapsed = time.perf_counter() - list_inbox_start
+        logger.debug(
+            "[LATENCY] _list_inbox (global inbox agent): total=%.3fs count=%d agent=%s",
+            elapsed,
+            len(messages),
+            agent.name,
+        )
+        return messages
 
     # Get regular inbox messages
+    basic_start = time.perf_counter()
     messages = await _list_inbox_basic(agent, limit, urgent_only, include_bodies, since_ts)
-    message_ids_in_inbox = {msg["id"] for msg in messages}
+    basic_elapsed = time.perf_counter() - basic_start
+    message_ids_in_inbox: set[int] = set()
+    for msg in messages:
+        msg_id = msg.get("id")
+        if msg_id is None:
+            continue
+        try:
+            message_ids_in_inbox.add(int(msg_id))
+        except (TypeError, ValueError):
+            continue
 
     # Scan global inbox for messages mentioning this agent using FTS5 (much faster than regex)
+    fts_elapsed = 0.0
+    basic_count = len(messages)  # Track count before FTS merge
+    fts_requested_count = 0
+    fts_included_count = 0
     try:
+        fts_start = time.perf_counter()
         global_inbox_agent = await _get_agent_by_name(global_inbox_name)
         # Use FTS5-based mention search - only fetches messages that actually mention the agent
         # This is significantly faster than the old approach which loaded 100 messages with bodies
@@ -2188,22 +2363,40 @@ async def _list_inbox(
             since_ts=since_ts,
             limit=30,  # Reduced from 100 - FTS5 query is precise, doesn't need to over-fetch
         )
+        fts_elapsed = time.perf_counter() - fts_start
+        fts_requested_count = len(mentioned_messages)
 
         # Merge with regular inbox, respecting the limit
         messages.extend(mentioned_messages)
-        messages = messages[:limit]
+        if len(messages) > limit:
+            messages = messages[:limit]
+        # Calculate actual FTS count included after truncation
+        fts_included_count = max(0, len(messages) - basic_count)
 
-    except Exception:
+    except Exception as exc:
         # If global inbox doesn't exist or there's an error, just return regular inbox
-        pass
+        logger.debug("global_inbox_fts_failed", exc_info=exc)
 
+    total_elapsed = time.perf_counter() - list_inbox_start
+    logger.debug(
+        "[LATENCY] _list_inbox: total=%.3fs basic=%.3fs fts=%.3fs basic_count=%d "
+        "fts_included=%d fts_requested=%d final_count=%d agent=%s",
+        total_elapsed,
+        basic_elapsed,
+        fts_elapsed,
+        basic_count,
+        fts_included_count,
+        fts_requested_count,
+        len(messages),
+        agent.name,
+    )
     return messages
 
 
 async def _find_mentions_in_global_inbox(
     agent_name: str,
     global_inbox_agent: Agent,
-    exclude_message_ids: set[str],
+    exclude_message_ids: set[int],
     include_bodies: bool,
     since_ts: Optional[str],
     limit: int = 30,
@@ -2217,22 +2410,25 @@ async def _find_mentions_in_global_inbox(
 
     await ensure_schema()
     sender_alias = aliased(Agent)
+    # fts_messages is a SQLite FTS5 virtual table created by db._setup_fts(). It is not part of SQLModel metadata,
+    # so we reference it via a lightweight Table construct for ORM-safe joins.
+    fts_messages = Table(
+        "fts_messages",
+        MetaData(),
+        Column("rowid", Integer),
+        Column("message_id", Integer),
+        Column("subject"),
+        Column("body"),
+    )
+    fts_query = f'"{agent_name}"'
 
     async with get_session() as session:
-        # Use FTS5 MATCH query for fast full-text search
-        # FTS5 query: agent_name will match complete tokens (words) due to tokenization
-        # This is similar to word boundary matching but faster
         stmt = (
             select(Message, MessageRecipient.kind, sender_alias.name)
             .join(MessageRecipient, MessageRecipient.message_id == Message.id)
             .join(sender_alias, Message.sender_id == sender_alias.id)
-            .join(
-                # Join with FTS5 virtual table
-                text("fts_messages ON messages.id = fts_messages.rowid")
-            )
             .where(
                 MessageRecipient.agent_id == global_inbox_agent.id,
-                # FTS5 MATCH query - searches subject and body for the agent name
                 text("fts_messages MATCH :agent_name"),
             )
             .order_by(desc(Message.created_ts))
@@ -2246,14 +2442,16 @@ async def _find_mentions_in_global_inbox(
         # Apply limit after all filters for clarity and maintainability
         stmt = stmt.limit(limit)
 
-        # Execute with agent name as parameter (escaped for FTS5)
-        # FTS5 tokenizes on word boundaries, so this effectively does word matching
-        result = await session.execute(stmt, {"agent_name": f'"{agent_name}"'})
+        stmt = stmt.join(fts_messages, Message.id == fts_messages.c.rowid)
+
+        result = await session.execute(stmt, {"agent_name": fts_query})
         rows = result.all()
 
     messages: list[dict[str, Any]] = []
     for message, recipient_kind, sender_name in rows:
         # Skip if already in regular inbox
+        if message.id is None:
+            continue
         if message.id in exclude_message_ids:
             continue
 
@@ -2274,10 +2472,14 @@ async def _list_inbox_basic(
     since_ts: Optional[str],
 ) -> list[dict[str, Any]]:
     """Basic inbox listing without global inbox scanning."""
+    basic_start = time.perf_counter()
     if agent.id is None:
         raise ValueError("Agent must have an id before listing inbox.")
     sender_alias = aliased(Agent)
+    schema_start = time.perf_counter()
     await ensure_schema()
+    schema_elapsed = time.perf_counter() - schema_start
+    query_start = time.perf_counter()
     async with get_session() as session:
         stmt = (
             select(Message, MessageRecipient.kind, sender_alias.name)
@@ -2298,12 +2500,22 @@ async def _list_inbox_basic(
         stmt = stmt.limit(limit)
         result = await session.execute(stmt)
         rows = result.all()
+    query_elapsed = time.perf_counter() - query_start
     messages: list[dict[str, Any]] = []
     for message, recipient_kind, sender_name in rows:
         payload = _message_to_dict(message, include_body=include_bodies)
         payload["from"] = sender_name
         payload["kind"] = recipient_kind
         messages.append(payload)
+    total_elapsed = time.perf_counter() - basic_start
+    logger.debug(
+        "[LATENCY] _list_inbox_basic: total=%.3fs schema=%.3fs query=%.3fs count=%d agent=%s",
+        total_elapsed,
+        schema_elapsed,
+        query_elapsed,
+        len(messages),
+        agent.name,
+    )
     return messages
 
 
@@ -2397,6 +2609,8 @@ def _canonical_relpath_for_message(project: Project, message: Message, archive) 
 
 async def _commit_info_for_message(settings: Settings, project: Project, message: Message) -> dict[str, Any] | None:
     """Fetch commit metadata for the canonical message file (hexsha, summary, authored_ts, stats)."""
+    if not is_archive_enabled(settings):
+        return None
     archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
     relpath = _canonical_relpath_for_message(project, message, archive)
     if not relpath:
@@ -2696,7 +2910,7 @@ async def _update_recipient_timestamp(
         current: Optional[datetime] = getattr(rec, field, None)
         if current is not None:
             # Already set; return existing value without updating
-            return current
+            return _ensure_utc(current)
         # Set only if null
         stmt = (
             update(MessageRecipient)
@@ -2719,7 +2933,7 @@ async def _get_recipient_timestamp(agent: Agent, message_id: int, field: str) ->
                 MessageRecipient.agent_id == agent.id,
             )
         )
-        return result.scalars().first()
+        return _ensure_utc(result.scalars().first())
 
 
 async def _validate_agent_is_recipient(agent: Agent, message_id: int) -> None:
@@ -2767,6 +2981,7 @@ EXTENDED_TOOLS = {
     "delete_agent",
     "acknowledge_message",
     "search_messages",
+    "create_file_reservation",
     "file_reservation_paths",
     "release_file_reservations",
     "force_release_file_reservation",
@@ -2801,6 +3016,10 @@ EXTENDED_TOOL_METADATA = {
     "file_reservation_paths": {
         "category": "file_reservations",
         "description": "Reserve file paths/globs for exclusive or shared access",
+    },
+    "create_file_reservation": {
+        "category": "file_reservations",
+        "description": "Create a single file reservation (path/glob)",
     },
     "release_file_reservations": {"category": "file_reservations", "description": "Release active file reservations"},
     "force_release_file_reservation": {
@@ -2907,6 +3126,7 @@ def build_mcp_server() -> FastMCP:
         bcc_names = _unique(bcc_names)
 
         # Check if global inbox exists (will be added directly to cc_agents to avoid race condition)
+        recipient_lookup_start = time.perf_counter()
         global_inbox_name = get_global_inbox_name(project)
         global_inbox_agent = await _get_agent_by_name_optional(global_inbox_name)
         # Only add to cc if sender is not the global inbox itself
@@ -2933,8 +3153,9 @@ def build_mcp_server() -> FastMCP:
         recipient_records: list[tuple[Agent, str]] = [(agent, "to") for agent in to_agents]
         recipient_records.extend((agent, "cc") for agent in cc_agents)
         recipient_records.extend((agent, "bcc") for agent in bcc_agents)
+        recipient_lookup_elapsed = time.perf_counter() - recipient_lookup_start
 
-        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+        archive_elapsed = 0.0
         convert_markdown = (
             convert_images_override if convert_images_override is not None else settings.storage.convert_images
         )
@@ -2945,64 +3166,162 @@ def build_mcp_server() -> FastMCP:
             embed_policy = sender.attachments_policy
 
         payload: dict[str, Any] | None = None
+        message: Message | None = None
+        frontmatter: dict[str, Any] = {}
+        recipients_for_archive: list[str] = [agent.name for agent in to_agents + cc_agents + bcc_agents]
+        lock_wait_elapsed = 0.0
+        attachments_elapsed = 0.0
+        db_write_elapsed = 0.0
+        git_write_elapsed = 0.0
 
-        async with _archive_write_lock(archive):
-            # Server-side file_reservations enforcement: block if conflicting active exclusive file_reservation exists
-            if settings.file_reservations_enforcement_enabled:
-                await _expire_stale_file_reservations(project.id or 0)
-                now_ts = datetime.now(timezone.utc)
-                y_dir = now_ts.strftime("%Y")
-                m_dir = now_ts.strftime("%m")
-                candidate_surfaces: list[str] = []
-                candidate_surfaces.append(f"agents/{sender.name}/outbox/{y_dir}/{m_dir}/*.md")
-                for r in to_agents + cc_agents + bcc_agents:
-                    candidate_surfaces.append(f"agents/{r.name}/inbox/{y_dir}/{m_dir}/*.md")
+        if is_archive_enabled(settings):
+            archive_start = time.perf_counter()
+            archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+            archive_elapsed = time.perf_counter() - archive_start
+            lock_acquire_start = time.perf_counter()
 
-                async with get_session() as session:
-                    rows = await session.execute(
-                        select(FileReservation, Agent.name)
-                        .join(Agent, FileReservation.agent_id == Agent.id)
-                        .where(
-                            FileReservation.project_id == project.id,
-                            cast(Any, FileReservation.released_ts).is_(None),
-                            FileReservation.expires_ts > now_ts,
-                        )
-                    )
-                    active_file_reservations = rows.all()
+            async with _archive_write_lock(archive):
+                lock_wait_elapsed = time.perf_counter() - lock_acquire_start
+                # Server-side file_reservations enforcement: block if conflicting active exclusive file_reservation exists
+                if settings.file_reservations_enforcement_enabled:
+                    await _expire_stale_file_reservations(project.id or 0)
+                    now_ts = datetime.now(timezone.utc)
+                    y_dir = now_ts.strftime("%Y")
+                    m_dir = now_ts.strftime("%m")
+                    candidate_surfaces: list[str] = []
+                    candidate_surfaces.append(f"agents/{sender.name}/outbox/{y_dir}/{m_dir}/*.md")
+                    for r in to_agents + cc_agents + bcc_agents:
+                        candidate_surfaces.append(f"agents/{r.name}/inbox/{y_dir}/{m_dir}/*.md")
 
-                conflicts: list[dict[str, Any]] = []
-                for surface in candidate_surfaces:
-                    for file_reservation_record, holder_name in active_file_reservations:
-                        if _file_reservations_conflict(file_reservation_record, surface, True, sender):
-                            conflicts.append(
-                                {
-                                    "surface": surface,
-                                    "holder": holder_name,
-                                    "path_pattern": file_reservation_record.path_pattern,
-                                    "exclusive": file_reservation_record.exclusive,
-                                    "expires_ts": _iso(file_reservation_record.expires_ts),
-                                }
+                    async with get_session() as session:
+                        rows = await session.execute(
+                            select(FileReservation, Agent.name)
+                            .join(Agent, FileReservation.agent_id == Agent.id)
+                            .where(
+                                FileReservation.project_id == project.id,
+                                cast(Any, FileReservation.released_ts).is_(None),
+                                FileReservation.expires_ts > now_ts,
                             )
-                if conflicts:
-                    # Return a structured error payload that clients can surface directly
-                    return {
-                        "error": {
-                            "type": "FILE_RESERVATION_CONFLICT",
-                            "message": "Conflicting active file_reservations prevent message write.",
-                            "conflicts": conflicts,
-                        }
-                    }
+                        )
+                        active_file_reservations = rows.all()
 
-            processed_body, attachments_meta, attachment_files = await process_attachments(
-                archive,
-                body_md,
-                attachment_paths or [],
-                convert_markdown,
-                embed_policy=embed_policy,
-            )
-            # Fallback: if body contains inline data URI, reflect that in attachments meta for API parity
+                    conflicts: list[dict[str, Any]] = []
+                    for surface in candidate_surfaces:
+                        for file_reservation_record, holder_name in active_file_reservations:
+                            if _file_reservations_conflict(file_reservation_record, surface, True, sender):
+                                conflicts.append(
+                                    {
+                                        "surface": surface,
+                                        "holder": holder_name,
+                                        "path_pattern": file_reservation_record.path_pattern,
+                                        "exclusive": file_reservation_record.exclusive,
+                                        "expires_ts": _iso(file_reservation_record.expires_ts),
+                                    }
+                                )
+                    if conflicts:
+                        # Return a structured error payload that clients can surface directly
+                        return {
+                            "error": {
+                                "type": "FILE_RESERVATION_CONFLICT",
+                                "message": "Conflicting active file_reservations prevent message write.",
+                                "conflicts": conflicts,
+                            }
+                        }
+
+                attachments_start = time.perf_counter()
+                processed_body, attachments_meta, attachment_files = await process_attachments(
+                    archive,
+                    body_md,
+                    attachment_paths or [],
+                    convert_markdown,
+                    embed_policy=embed_policy,
+                )
+                attachments_elapsed = time.perf_counter() - attachments_start
+                # Fallback: if body contains inline data URI, reflect that in attachments meta for API parity
+                if not attachments_meta and ("data:image" in body_md):
+                    attachments_meta.append({"type": "inline", "media_type": "image/webp"})
+                db_write_start = time.perf_counter()
+                message = await _create_message(
+                    project,
+                    sender,
+                    subject,
+                    processed_body,
+                    recipient_records,
+                    importance,
+                    ack_required,
+                    thread_id,
+                    attachments_meta,
+                )
+                db_write_elapsed = time.perf_counter() - db_write_start
+                frontmatter = _message_frontmatter(
+                    message,
+                    project,
+                    sender,
+                    to_agents,
+                    cc_agents,
+                    bcc_agents,
+                    attachments_meta,
+                )
+                recipients_for_archive = [agent.name for agent in to_agents + cc_agents + bcc_agents]
+                payload = _message_to_dict(message)
+                payload.update(
+                    {
+                        "from": sender.name,
+                        "to": [agent.name for agent in to_agents],
+                        "cc": [agent.name for agent in cc_agents_for_outbox],
+                        "bcc": [agent.name for agent in bcc_agents],
+                        "attachments": attachments_meta,
+                    }
+                )
+                result_snapshot: dict[str, Any] = {
+                    "deliveries": [
+                        {
+                            "project": project.human_key,
+                            "payload": payload,
+                        }
+                    ],
+                    "count": 1,
+                }
+                panel_end = time.perf_counter()
+                commit_panel_text = _render_commit_panel(
+                    tool_name,
+                    project.human_key,
+                    sender.name,
+                    call_start,
+                    panel_end,
+                    result_snapshot,
+                    frontmatter.get("created"),
+                )
+                git_write_start = time.perf_counter()
+                await write_message_bundle(
+                    archive,
+                    frontmatter,
+                    processed_body,
+                    sender.name,
+                    recipients_for_archive,
+                    attachment_files,
+                    commit_panel_text,
+                )
+                git_write_elapsed = time.perf_counter() - git_write_start
+        else:
+            if attachment_paths:
+                raise ToolExecutionError(
+                    "ARCHIVE_DISABLED",
+                    "Attachment file persistence requires archive storage; start the server with archive enabled "
+                    "(or embed images inline as data URIs).",
+                    recoverable=True,
+                    data={"attachment_paths": list(attachment_paths)},
+                )
+            if settings.file_reservations_enforcement_enabled:
+                await ctx.info("File reservation enforcement skipped (archive storage disabled).")
+            attachments_start = time.perf_counter()
+            processed_body = body_md
+            attachments_meta: list[dict[str, Any]] = []
+            attachment_files = []
+            attachments_elapsed = time.perf_counter() - attachments_start
             if not attachments_meta and ("data:image" in body_md):
                 attachments_meta.append({"type": "inline", "media_type": "image/webp"})
+            db_write_start = time.perf_counter()
             message = await _create_message(
                 project,
                 sender,
@@ -3014,6 +3333,7 @@ def build_mcp_server() -> FastMCP:
                 thread_id,
                 attachments_meta,
             )
+            db_write_elapsed = time.perf_counter() - db_write_start
             frontmatter = _message_frontmatter(
                 message,
                 project,
@@ -3023,7 +3343,6 @@ def build_mcp_server() -> FastMCP:
                 bcc_agents,
                 attachments_meta,
             )
-            recipients_for_archive = [agent.name for agent in to_agents + cc_agents + bcc_agents]
             payload = _message_to_dict(message)
             payload.update(
                 {
@@ -3034,42 +3353,30 @@ def build_mcp_server() -> FastMCP:
                     "attachments": attachments_meta,
                 }
             )
-            result_snapshot: dict[str, Any] = {
-                "deliveries": [
-                    {
-                        "project": project.human_key,
-                        "payload": payload,
-                    }
-                ],
-                "count": 1,
-            }
-            panel_end = time.perf_counter()
-            commit_panel_text = _render_commit_panel(
-                tool_name,
-                project.human_key,
-                sender.name,
-                call_start,
-                panel_end,
-                result_snapshot,
-                frontmatter.get("created"),
-            )
-            await write_message_bundle(
-                archive,
-                frontmatter,
-                processed_body,
-                sender.name,
-                recipients_for_archive,
-                attachment_files,
-                commit_panel_text,
-            )
 
-            # Optional Slack mirror via incoming webhook (env-driven)
-            try:
-                from .slack_integration import mirror_message_to_slack
+        # Optional Slack mirror via incoming webhook (env-driven)
+        try:
+            from .slack_integration import mirror_message_to_slack
 
+            if frontmatter:
                 mirror_message_to_slack(frontmatter, body_md)
-            except Exception:
-                logger.exception("Slack mirror failed (non-blocking)")
+        except Exception:
+            logger.exception("Slack mirror failed (non-blocking)")
+        total_elapsed = time.perf_counter() - call_start
+        logger.info(
+            "[LATENCY] _deliver_message: total=%.3fs recipients=%.3fs archive_init=%.3fs "
+            "lock_wait=%.3fs attachments=%.3fs db_write=%.3fs git_write=%.3fs msg_id=%s",
+            total_elapsed,
+            recipient_lookup_elapsed,
+            archive_elapsed,
+            lock_wait_elapsed,
+            attachments_elapsed,
+            db_write_elapsed,
+            git_write_elapsed,
+            message.id if message is not None else None,
+        )
+        if message is None:
+            raise RuntimeError("Message was not created.")
         await ctx.info(f"Message {message.id} created by {sender.name} (to {', '.join(recipients_for_archive)})")
 
         # Send Slack notification if enabled (fire-and-forget, non-blocking)
@@ -3242,9 +3549,28 @@ def build_mcp_server() -> FastMCP:
 
         try:
             if hasattr(tool_func, "run"):
-                return await tool_func.run(arguments or {})
-            result = await tool_func(ctx, **(arguments or {}))
-            return result
+                result = await tool_func.run(arguments or {})
+            else:
+                result = await tool_func(ctx, **(arguments or {}))
+
+            if isinstance(result, ToolResult):
+                payload: Any = getattr(result, "structured_content", None)
+                if payload is None and hasattr(result, "content"):
+                    payload = result.content
+                if payload is None and hasattr(result, "data"):
+                    payload = result.data
+                if payload is None:
+                    try:
+                        payload = next(iter(result)) if result else None
+                    except (TypeError, IndexError, StopIteration):
+                        payload = None
+                result = payload
+
+            # Avoid double-wrapping if the tool already returned a structured result
+            if isinstance(result, dict) and set(result.keys()) == {"result"}:
+                return result
+
+            return {"result": result}
         except TypeError as e:
             # Invalid arguments
             raise ValueError(f"Invalid arguments for {tool_name}: {e!s}") from e
@@ -3271,8 +3597,9 @@ def build_mcp_server() -> FastMCP:
         - Accepts any string as the project identifier (human_key).
         - Computes a stable slug from `human_key` (lowercased, safe characters) so
           multiple agents can refer to the same project consistently.
-        - Ensures DB row exists and that the on-disk archive is initialized
-          (e.g., `messages/`, `agents/`, `file_reservations/` directories).
+        - Ensures the DB row exists and, when archive storage is enabled, initializes
+          the on-disk archive (e.g., `messages/`, `agents/`, `file_reservations/`
+          directories).
 
         CRITICAL: Project Identity Rules
         ---------------------------------
@@ -3328,11 +3655,12 @@ def build_mcp_server() -> FastMCP:
         Idempotency
         -----------
         - Safe to call multiple times. If the project already exists, the existing
-          record is returned and the archive is ensured on disk (no destructive changes).
+          record is returned and the archive is ensured on disk when archive storage
+          is enabled (no destructive changes).
         """
         await ctx.info(f"Ensuring project for key '{human_key}'.")
         project = await _ensure_project(human_key)
-        await ensure_archive(settings, project.slug, project_key=project.human_key)
+        await _ensure_archive_if_enabled(settings, project)
         return _project_to_dict(project)
 
     @mcp.tool(name="register_agent")
@@ -3359,7 +3687,7 @@ def build_mcp_server() -> FastMCP:
         inbox_include_bodies: bool = False,
     ) -> dict[str, Any]:
         """
-        Create or update an agent identity within a project and persist its profile to Git.
+        Create or update an agent identity within a project and persist its profile to Git when enabled.
 
         IMPORTANT: Global Namespace
         ---------------------------
@@ -3379,7 +3707,10 @@ def build_mcp_server() -> FastMCP:
         - If `name` is omitted, a random adjective+noun name is auto-generated (e.g., "BlueLake").
         - Reusing the same `name` updates the profile (program/model/task) and
           refreshes `last_active_ts`.
-        - A `profile.json` file is written under `agents/<Name>/` in the project archive.
+        - Registration succeeds even when archive storage is disabled; in that case
+          Git profile writes are skipped.
+        - When archive storage is enabled, a `profile.json` file is written under
+          `agents/<Name>/` in the project archive.
         - Providing a name that is active in another project automatically retires that identity so you can claim the handle.
 
         CRITICAL: Agent Naming Rules
@@ -3441,7 +3772,7 @@ def build_mcp_server() -> FastMCP:
         """
         # Auto-create project if it doesn't exist (allows any string as project_key)
         project = await _ensure_project(project_key)
-        await ensure_archive(settings, project.slug, project_key=project.human_key)
+        await _ensure_archive_if_enabled(settings, project)
 
         if settings.tools_log_enabled:
             try:
@@ -3751,9 +4082,10 @@ def build_mcp_server() -> FastMCP:
                 await session.commit()
                 await session.refresh(db_agent)
                 agent = db_agent
-        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-        async with _archive_write_lock(archive):
-            await write_agent_profile(archive, _agent_to_dict(agent))
+        if is_archive_enabled(settings):
+            archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+            async with _archive_write_lock(archive):
+                await write_agent_profile(archive, _agent_to_dict(agent))
         await ctx.info(f"Created new agent identity '{agent.name}' for project '{project.human_key}'.")
         return _agent_to_dict(agent)
 
@@ -4053,8 +4385,8 @@ def build_mcp_server() -> FastMCP:
                             if sanitized:
                                 key_candidates.add(sanitized.lower())
 
-                    # Allow self-send
-                    if sender_candidate_keys.intersection(key_candidates):
+                    # Allow self-send unless explicitly targeting another project
+                    if not target_project and sender_candidate_keys.intersection(key_candidates):
                         if kind == "to":
                             all_to.append(sender.name)
                         elif kind == "cc":
@@ -4096,6 +4428,9 @@ def build_mcp_server() -> FastMCP:
                     # when the real agent registers with that name.
                     newly_registered: list[tuple[str, set[str]]] = []
                     for missing in list(unknown.keys()):
+                        # Skip cross-project address syntaxes; only auto-register simple names
+                        if missing.startswith("project:") or "@" in missing:
+                            continue
                         try:
                             placeholder = await _create_placeholder_agent(
                                 project,
@@ -4669,6 +5004,7 @@ def build_mcp_server() -> FastMCP:
                             message_id=str(message.id),
                             agent_name=agent.name,
                             subject=message.subject,
+                            thread_id=message.thread_id,
                         )
 
                     task = asyncio.create_task(_send_ack_notification())
@@ -5623,6 +5959,123 @@ def build_mcp_server() -> FastMCP:
             await ctx.info(f"No pre-commit guard to remove at {repo_path / '.git/hooks/pre-commit'}.")
         return {"removed": removed}
 
+    @mcp.tool(name="create_file_reservation")
+    @_instrument_tool(
+        "create_file_reservation",
+        cluster=CLUSTER_FILE_RESERVATIONS,
+        capabilities={"file_reservations", "repository"},
+        project_arg="project_key",
+        agent_arg="agent_name",
+    )
+    async def create_file_reservation(
+        ctx: Context,
+        project_key: str,
+        agent_name: str,
+        path_pattern: str,
+        ttl_seconds: int = 3600,
+        exclusive: bool = True,
+        reason: str = "",
+    ) -> dict[str, Any]:
+        """
+        Create a single advisory file reservation (lease) for a project-relative path/glob.
+
+        This is the single-path convenience tool; for multiple paths use `file_reservation_paths`.
+        """
+        project = await _ensure_project(project_key)
+        settings = get_settings()
+        if get_settings().tools_log_enabled:
+            try:
+                import importlib as _imp
+
+                _rc = _imp.import_module("rich.console")
+                _rp = _imp.import_module("rich.panel")
+                Console = _rc.Console
+                Panel = _rp.Panel
+                Console().print(
+                    Panel.fit(
+                        f"path_pattern={path_pattern}",
+                        title=f"tool: create_file_reservation — agent={agent_name} ttl={ttl_seconds}s",
+                        border_style="green",
+                    )
+                )
+            except Exception:
+                pass
+
+        agent = await _get_agent_optional(project, agent_name)
+        if not agent:
+            agent = await _get_or_create_agent(
+                project,
+                agent_name,
+                program="mcp-agent-mail",
+                model="auto",
+                task_description="Auto-created for file reservations",
+                settings=settings,
+            )
+        if project.id is None:
+            raise ValueError("Project must have an id before creating file reservations.")
+        stale_auto_releases = await _expire_stale_file_reservations(project.id)
+        if stale_auto_releases:
+            summary = ", ".join(
+                f"{status.agent.name}:{status.reservation.path_pattern}" for status in stale_auto_releases[:5]
+            )
+            extra = f" ({summary})" if summary else ""
+            await ctx.info(f"Auto-released {len(stale_auto_releases)} stale file_reservation(s){extra}.")
+        project_id = project.id
+        async with get_session() as session:
+            existing_rows = await session.execute(
+                select(FileReservation, Agent.name)
+                .join(Agent, FileReservation.agent_id == Agent.id)
+                .where(
+                    FileReservation.project_id == project_id,
+                    cast(Any, FileReservation.released_ts).is_(None),
+                    FileReservation.expires_ts > datetime.now(timezone.utc),
+                )
+            )
+            existing_reservations = existing_rows.all()
+
+        conflicting_holders: list[dict[str, Any]] = []
+        for file_reservation_record, holder_name in existing_reservations:
+            if _file_reservations_conflict(file_reservation_record, path_pattern, exclusive, agent):
+                conflicting_holders.append(
+                    {
+                        "agent": holder_name,
+                        "path_pattern": file_reservation_record.path_pattern,
+                        "exclusive": file_reservation_record.exclusive,
+                        "expires_ts": _iso(file_reservation_record.expires_ts),
+                    }
+                )
+
+        file_reservation = await _create_file_reservation(project, agent, path_pattern, exclusive, reason, ttl_seconds)
+        file_reservation_payload = {
+            "id": file_reservation.id,
+            "project": project.human_key,
+            "agent": agent.name,
+            "path_pattern": file_reservation.path_pattern,
+            "exclusive": file_reservation.exclusive,
+            "reason": file_reservation.reason,
+            "created_ts": _iso(file_reservation.created_ts),
+            "expires_ts": _iso(file_reservation.expires_ts),
+            "released_ts": None,
+        }
+        await write_file_reservation_artifacts(
+            settings, project.slug, [cast(dict[str, object], file_reservation_payload)], project_key=project.human_key
+        )
+
+        granted = [
+            {
+                "id": file_reservation.id,
+                "path_pattern": file_reservation.path_pattern,
+                "exclusive": file_reservation.exclusive,
+                "reason": file_reservation.reason,
+                "expires_ts": _iso(file_reservation.expires_ts),
+            }
+        ]
+        conflicts: list[dict[str, Any]] = []
+        if conflicting_holders:
+            conflicts.append({"path": path_pattern, "holders": conflicting_holders})
+        await ctx.info(f"Issued 1 file_reservation for '{agent.name}'. Conflicts: {len(conflicts)}")
+        return {"granted": granted, "conflicts": conflicts}
+
     @mcp.tool(name="file_reservation_paths")
     @_instrument_tool(
         "file_reservation_paths",
@@ -5689,7 +6142,7 @@ def build_mcp_server() -> FastMCP:
         }}}
         ```
         """
-        project = await _get_project_by_identifier(project_key)
+        project = await _ensure_project(project_key)
         settings = get_settings()
         if get_settings().tools_log_enabled:
             try:
@@ -5709,7 +6162,16 @@ def build_mcp_server() -> FastMCP:
                 )
             except Exception:
                 pass
-        agent = await _get_agent(project, agent_name)
+        agent = await _get_agent_optional(project, agent_name)
+        if not agent:
+            agent = await _get_or_create_agent(
+                project,
+                agent_name,
+                program="mcp-agent-mail",
+                model="auto",
+                task_description="Auto-created for file reservations",
+                settings=settings,
+            )
         if project.id is None:
             raise ValueError("Project must have an id before reserving file paths.")
         stale_auto_releases = await _expire_stale_file_reservations(project.id)
@@ -5734,45 +6196,46 @@ def build_mcp_server() -> FastMCP:
 
         granted: list[dict[str, Any]] = []
         conflicts: list[dict[str, Any]] = []
-        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-        async with _archive_write_lock(archive):
-            for path in paths:
-                conflicting_holders: list[dict[str, Any]] = []
-                for file_reservation_record, holder_name in existing_reservations:
-                    if _file_reservations_conflict(file_reservation_record, path, exclusive, agent):
-                        conflicting_holders.append(
-                            {
-                                "agent": holder_name,
-                                "path_pattern": file_reservation_record.path_pattern,
-                                "exclusive": file_reservation_record.exclusive,
-                                "expires_ts": _iso(file_reservation_record.expires_ts),
-                            }
-                        )
-                if conflicting_holders:
-                    # Advisory model: still grant the file_reservation but surface conflicts
-                    conflicts.append({"path": path, "holders": conflicting_holders})
-                file_reservation = await _create_file_reservation(project, agent, path, exclusive, reason, ttl_seconds)
-                file_reservation_payload = {
+        artifact_payloads: list[dict[str, object]] = []
+        for path in paths:
+            conflicting_holders = []
+            for file_reservation_record, holder_name in existing_reservations:
+                if _file_reservations_conflict(file_reservation_record, path, exclusive, agent):
+                    conflicting_holders.append(
+                        {
+                            "agent": holder_name,
+                            "path_pattern": file_reservation_record.path_pattern,
+                            "exclusive": file_reservation_record.exclusive,
+                            "expires_ts": _iso(file_reservation_record.expires_ts),
+                        }
+                    )
+            if conflicting_holders:
+                # Advisory model: still grant the file_reservation but surface conflicts
+                conflicts.append({"path": path, "holders": conflicting_holders})
+            file_reservation = await _create_file_reservation(project, agent, path, exclusive, reason, ttl_seconds)
+            file_reservation_payload = {
+                "id": file_reservation.id,
+                "project": project.human_key,
+                "agent": agent.name,
+                "path_pattern": file_reservation.path_pattern,
+                "exclusive": file_reservation.exclusive,
+                "reason": file_reservation.reason,
+                "created_ts": _iso(file_reservation.created_ts),
+                "expires_ts": _iso(file_reservation.expires_ts),
+                "released_ts": None,
+            }
+            artifact_payloads.append(cast(dict[str, object], file_reservation_payload))
+            granted.append(
+                {
                     "id": file_reservation.id,
-                    "project": project.human_key,
-                    "agent": agent.name,
                     "path_pattern": file_reservation.path_pattern,
                     "exclusive": file_reservation.exclusive,
                     "reason": file_reservation.reason,
-                    "created_ts": _iso(file_reservation.created_ts),
                     "expires_ts": _iso(file_reservation.expires_ts),
                 }
-                await write_file_reservation_record(archive, file_reservation_payload)
-                granted.append(
-                    {
-                        "id": file_reservation.id,
-                        "path_pattern": file_reservation.path_pattern,
-                        "exclusive": file_reservation.exclusive,
-                        "reason": file_reservation.reason,
-                        "expires_ts": _iso(file_reservation.expires_ts),
-                    }
-                )
-                existing_reservations.append((file_reservation, agent.name))
+            )
+            existing_reservations.append((file_reservation, agent.name))
+        await write_file_reservation_artifacts(settings, project.slug, artifact_payloads, project_key=project.human_key)
         await ctx.info(f"Issued {len(granted)} file_reservations for '{agent.name}'. Conflicts: {len(conflicts)}")
         return {"granted": granted, "conflicts": conflicts}
 
@@ -5848,23 +6311,55 @@ def build_mcp_server() -> FastMCP:
                 raise ValueError("Project and agent must have ids before releasing file_reservations.")
             await ensure_schema()
             now = datetime.now(timezone.utc)
+            released_reservations: list[FileReservation] = []
             async with get_session() as session:
-                stmt = (
-                    update(FileReservation)
-                    .where(
-                        FileReservation.project_id == project.id,
-                        FileReservation.agent_id == agent.id,
-                        cast(Any, FileReservation.released_ts).is_(None),
-                    )
-                    .values(released_ts=now)
+                sel = select(FileReservation).where(
+                    FileReservation.project_id == project.id,
+                    FileReservation.agent_id == agent.id,
+                    cast(Any, FileReservation.released_ts).is_(None),
+                )
+                if file_reservation_ids:
+                    sel = sel.where(cast(Any, FileReservation.id).in_(file_reservation_ids))
+                if paths:
+                    sel = sel.where(cast(Any, FileReservation.path_pattern).in_(paths))
+                rows = await session.execute(sel)
+                released_reservations = list(rows.scalars().all())
+
+                stmt = update(FileReservation).where(
+                    FileReservation.project_id == project.id,
+                    FileReservation.agent_id == agent.id,
+                    cast(Any, FileReservation.released_ts).is_(None),
                 )
                 if file_reservation_ids:
                     stmt = stmt.where(cast(Any, FileReservation.id).in_(file_reservation_ids))
                 if paths:
                     stmt = stmt.where(cast(Any, FileReservation.path_pattern).in_(paths))
+                stmt = stmt.values(released_ts=now)
                 result = await session.execute(stmt)
                 await session.commit()
             affected = int(result.rowcount or 0)
+            if affected and released_reservations:
+                payloads: list[dict[str, object]] = []
+                for reservation in released_reservations:
+                    payloads.append(
+                        {
+                            "id": reservation.id,
+                            "project": project.human_key,
+                            "agent": agent.name,
+                            "path_pattern": reservation.path_pattern,
+                            "exclusive": reservation.exclusive,
+                            "reason": reservation.reason,
+                            "created_ts": _iso(reservation.created_ts),
+                            "expires_ts": _iso(reservation.expires_ts),
+                            "released_ts": _iso(now),
+                        }
+                    )
+                await write_file_reservation_artifacts(
+                    settings,
+                    project.slug,
+                    payloads,
+                    project_key=project.human_key,
+                )
             await ctx.info(f"Released {affected} file_reservations for '{agent.name}'.")
             return {"released": affected, "released_at": _iso(now)}
         except Exception as exc:
@@ -5995,6 +6490,16 @@ def build_mcp_server() -> FastMCP:
             else None,
             "last_git_activity_ts": _iso(target_status.last_git_activity) if target_status.last_git_activity else None,
         }
+
+        # Emit an updated artifact so hooks/guards can observe the released state.
+        artifact_payload = dict(summary)
+        artifact_payload["project"] = project.human_key
+        await write_file_reservation_artifacts(
+            settings,
+            project.slug,
+            [cast(dict[str, object], artifact_payload)],
+            project_key=project.human_key,
+        )
 
         await ctx.info(
             f"Force released reservation {file_reservation_id} held by '{holder.name}' on '{reservation.path_pattern}'."
@@ -6138,6 +6643,7 @@ def build_mcp_server() -> FastMCP:
             return {"renewed": 0, "file_reservations": []}
 
         updated: list[dict[str, Any]] = []
+        artifact_payloads: list[dict[str, object]] = []
         async with get_session() as session:
             for file_reservation in file_reservations:
                 old_exp = file_reservation.expires_ts
@@ -6156,23 +6662,28 @@ def build_mcp_server() -> FastMCP:
                         "new_expires_ts": _iso(file_reservation.expires_ts),
                     }
                 )
+                artifact_payloads.append(
+                    {
+                        "id": file_reservation.id,
+                        "project": project.human_key,
+                        "agent": agent.name,
+                        "path_pattern": file_reservation.path_pattern,
+                        "exclusive": file_reservation.exclusive,
+                        "reason": file_reservation.reason,
+                        "created_ts": _iso(file_reservation.created_ts),
+                        "expires_ts": _iso(file_reservation.expires_ts),
+                        "released_ts": None,
+                    }
+                )
             await session.commit()
 
-        # Update Git artifacts for the renewed file_reservations
-        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
-        async with _archive_write_lock(archive):
-            for file_reservation_info in updated:
-                payload = {
-                    "id": file_reservation_info["id"],
-                    "project": project.human_key,
-                    "agent": agent.name,
-                    "path_pattern": file_reservation_info["path_pattern"],
-                    "exclusive": True,
-                    "reason": "renew",
-                    "created_ts": _iso(now),
-                    "expires_ts": file_reservation_info["new_expires_ts"],
-                }
-                await write_file_reservation_record(archive, payload)
+        # Update artifacts for the renewed file_reservations (Git archive if enabled; otherwise runtime JSON)
+        await write_file_reservation_artifacts(
+            settings,
+            project.slug,
+            artifact_payloads,
+            project_key=project.human_key,
+        )
         await ctx.info(f"Renewed {len(updated)} file_reservation(s) for '{agent.name}'.")
         return {"renewed": len(updated), "file_reservations": updated}
 
@@ -6214,6 +6725,358 @@ def build_mcp_server() -> FastMCP:
                 "path": settings.http.path,
             },
         }
+
+    # --- Product Bus (Phase 2): ensure/link/search/resources ---------------------------------
+
+    async def _get_product_by_key(session, key: str) -> Optional[Product]:
+        # Key may match product_uid or name (case-sensitive by default)
+        stmt = select(Product).where((Product.product_uid == key) | (Product.name == key))
+        res = await session.execute(stmt)
+        return res.scalars().first()
+
+    @mcp.tool(name="ensure_product")
+    @_instrument_tool("ensure_product", cluster=CLUSTER_PRODUCT, capabilities={"product"})
+    async def ensure_product_tool(
+        ctx: Context,
+        product_key: Optional[str] = None,
+        name: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """
+        Ensure a Product exists. If not, create one.
+
+        - product_key may be a product_uid or a name
+        - If both are absent, error
+        """
+        await ensure_schema()
+        key_raw = (product_key or name or "").strip()
+        if not key_raw:
+            raise ToolExecutionError("INVALID_ARGUMENT", "Provide product_key or name.")
+        async with get_session() as session:
+            prod = await _get_product_by_key(session, key_raw)
+            if prod is None:
+                # Create with strict uid pattern; otherwise generate uid and normalize name
+                import re as _re
+                import uuid as _uuid
+
+                uid_pattern = _re.compile(r"^[A-Fa-f0-9]{8,64}$")
+                if product_key and uid_pattern.fullmatch(product_key.strip()):
+                    uid = product_key.strip().lower()
+                else:
+                    uid = _uuid.uuid4().hex[:20]
+                display_name = (name or key_raw).strip()
+                # Collapse internal whitespace and cap length
+                display_name = " ".join(display_name.split())[:255] or uid
+                prod = Product(product_uid=uid, name=display_name)
+                session.add(prod)
+                await session.commit()
+                await session.refresh(prod)
+        return {"id": prod.id, "product_uid": prod.product_uid, "name": prod.name, "created_at": _iso(prod.created_at)}
+
+    @mcp.tool(name="products_link")
+    @_instrument_tool("products_link", cluster=CLUSTER_PRODUCT, capabilities={"product"}, project_arg="project_key")
+    async def products_link_tool(
+        ctx: Context,
+        product_key: str,
+        project_key: str,
+    ) -> dict[str, Any]:
+        """
+        Link a project into a product (idempotent).
+        """
+        await ensure_schema()
+        async with get_session() as session:
+            prod = await _get_product_by_key(session, product_key.strip())
+            if prod is None:
+                raise ToolExecutionError("NOT_FOUND", f"Product '{product_key}' not found.", recoverable=True)
+            # Resolve project
+            project = await _get_project_by_identifier(project_key)
+            if project.id is None:
+                raise ToolExecutionError("NOT_FOUND", f"Project '{project_key}' not found.", recoverable=True)
+            # Link if missing
+            existing = await session.execute(
+                select(ProductProjectLink).where(
+                    ProductProjectLink.product_id == cast(Any, prod.id),
+                    ProductProjectLink.project_id == cast(Any, project.id),
+                )
+            )
+            link = existing.scalars().first()
+            if link is None:
+                link = ProductProjectLink(product_id=int(prod.id), project_id=int(project.id))
+                session.add(link)
+                await session.commit()
+                await session.refresh(link)
+            return {
+                "product": {"id": prod.id, "product_uid": prod.product_uid, "name": prod.name},
+                "project": {"id": project.id, "slug": project.slug, "human_key": project.human_key},
+                "linked": True,
+            }
+
+    @mcp.resource("resource://product/{key}", mime_type="application/json")
+    def product_resource(key: str) -> dict[str, Any]:
+        """
+        Inspect product and list linked projects.
+        """
+
+        # Safe runner that works even if an event loop is already running
+        def _run_coro_sync(coro):
+            try:
+                asyncio.get_running_loop()
+                # Run in a separate thread to avoid nested loop issues
+            except RuntimeError:
+                return asyncio.run(coro)
+            import queue  # type: ignore
+            import threading  # type: ignore
+
+            q: "queue.Queue[tuple[bool, Any]]" = queue.Queue()
+
+            def _runner():
+                try:
+                    q.put((True, asyncio.run(coro)))
+                except Exception as e:
+                    q.put((False, e))
+
+            t = threading.Thread(target=_runner, daemon=True)
+            t.start()
+            ok, val = q.get()
+            if ok:
+                return val
+            raise val
+
+        async def _load() -> dict[str, Any]:
+            await ensure_schema()
+            async with get_session() as session:
+                prod = await _get_product_by_key(session, key.strip())
+                if prod is None:
+                    raise ToolExecutionError("NOT_FOUND", f"Product '{key}' not found.", recoverable=True)
+                proj_rows = await session.execute(
+                    select(Project)
+                    .join(ProductProjectLink, ProductProjectLink.project_id == Project.id)
+                    .where(ProductProjectLink.product_id == cast(Any, prod.id))
+                )
+                projects = [
+                    {"id": p.id, "slug": p.slug, "human_key": p.human_key, "created_at": _iso(p.created_at)}
+                    for p in proj_rows.scalars().all()
+                ]
+                return {
+                    "id": prod.id,
+                    "product_uid": prod.product_uid,
+                    "name": prod.name,
+                    "created_at": _iso(prod.created_at),
+                    "projects": projects,
+                }
+
+        # Run async in a synchronous resource
+        return _run_coro_sync(_load())
+
+    @mcp.tool(name="search_messages_product")
+    @_instrument_tool("search_messages_product", cluster=CLUSTER_PRODUCT, capabilities={"search"})
+    async def search_messages_product(
+        ctx: Context,
+        product_key: str,
+        query: str,
+        limit: int = 20,
+    ) -> Any:
+        """
+        Full-text search across all projects linked to a product.
+        """
+        await ensure_schema()
+        async with get_session() as session:
+            prod = await _get_product_by_key(session, product_key.strip())
+            if prod is None:
+                raise ToolExecutionError("NOT_FOUND", f"Product '{product_key}' not found.", recoverable=True)
+            proj_ids_rows = await session.execute(
+                select(ProductProjectLink.project_id).where(ProductProjectLink.product_id == cast(Any, prod.id))
+            )
+            proj_ids = [int(row[0]) for row in proj_ids_rows.fetchall()]
+            if not proj_ids:
+                return []
+            # FTS search limited to projects in proj_ids
+            result = await session.execute(
+                text(
+                    """
+                    SELECT m.id, m.subject, m.body_md, m.importance, m.ack_required, m.created_ts,
+                           m.thread_id, a.name AS sender_name, m.project_id
+                    FROM fts_messages
+                    JOIN messages m ON fts_messages.rowid = m.id
+                    JOIN agents a ON m.sender_id = a.id
+                    WHERE m.project_id IN (:proj_ids) AND fts_messages MATCH :query
+                    ORDER BY bm25(fts_messages) ASC
+                    LIMIT :limit
+                    """
+                ).bindparams(bindparam("proj_ids", expanding=True)),
+                {"proj_ids": proj_ids, "query": query, "limit": limit},
+            )
+            rows = result.mappings().all()
+        items = [
+            {
+                "id": row["id"],
+                "subject": row["subject"],
+                "importance": row["importance"],
+                "ack_required": row["ack_required"],
+                "created_ts": _iso(row["created_ts"]),
+                "thread_id": row["thread_id"],
+                "from": row["sender_name"],
+                "project_id": row["project_id"],
+            }
+            for row in rows
+        ]
+        try:
+            from fastmcp.tools.tool import ToolResult  # type: ignore
+
+            return ToolResult(structured_content={"result": items})
+        except Exception:
+            return items
+
+    @mcp.tool(name="fetch_inbox_product")
+    @_instrument_tool("fetch_inbox_product", cluster=CLUSTER_PRODUCT, capabilities={"messaging", "read"})
+    async def fetch_inbox_product(
+        ctx: Context,
+        product_key: str,
+        agent_name: str,
+        limit: int = 20,
+        urgent_only: bool = False,
+        include_bodies: bool = False,
+        since_ts: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Retrieve recent messages for an agent across all projects linked to a product (non-mutating).
+        """
+        await ensure_schema()
+        # Collect linked projects
+        async with get_session() as session:
+            prod = await _get_product_by_key(session, product_key.strip())
+            if prod is None:
+                raise ToolExecutionError("NOT_FOUND", f"Product '{product_key}' not found.", recoverable=True)
+            proj_rows = await session.execute(
+                select(Project)
+                .join(ProductProjectLink, ProductProjectLink.project_id == Project.id)
+                .where(ProductProjectLink.product_id == cast(Any, prod.id))
+            )
+            projects: list[Project] = list(proj_rows.scalars().all())
+        # For each project, if agent exists, list inbox items
+        messages: list[dict[str, Any]] = []
+        for project in projects:
+            try:
+                ag = await _get_agent(project, agent_name)
+            except Exception:
+                continue
+            proj_items = await _list_inbox(project, ag, limit, urgent_only, include_bodies, since_ts)
+            for item in proj_items:
+                item["project_id"] = item.get("project_id") or project.id
+                messages.append(item)
+
+        # Sort by created_ts desc and trim to limit
+        def _dt_key(it: dict[str, Any]) -> float:
+            ts = _parse_iso(str(it.get("created_ts") or ""))
+            return ts.timestamp() if ts else 0.0
+
+        messages.sort(key=_dt_key, reverse=True)
+        return messages[: max(0, int(limit))]
+
+    @mcp.tool(name="summarize_thread_product")
+    @_instrument_tool("summarize_thread_product", cluster=CLUSTER_PRODUCT, capabilities={"summarization", "search"})
+    async def summarize_thread_product(
+        ctx: Context,
+        product_key: str,
+        thread_id: str,
+        include_examples: bool = False,
+        llm_mode: bool = True,
+        llm_model: Optional[str] = None,
+        per_thread_limit: Optional[int] = None,
+    ) -> dict[str, Any]:
+        """
+        Summarize a thread (by id or thread key) across all projects linked to a product.
+        """
+        await ensure_schema()
+        sender_alias = aliased(Agent)
+        try:
+            seed_id = int(thread_id)
+        except ValueError:
+            seed_id = None
+        criteria = [Message.thread_id == thread_id]
+        if seed_id is not None:
+            criteria.append(Message.id == seed_id)
+
+        async with get_session() as session:
+            prod = await _get_product_by_key(session, product_key.strip())
+            if prod is None:
+                raise ToolExecutionError("NOT_FOUND", f"Product '{product_key}' not found.", recoverable=True)
+            proj_ids_rows = await session.execute(
+                select(ProductProjectLink.project_id).where(ProductProjectLink.product_id == cast(Any, prod.id))
+            )
+            proj_ids = [int(row[0]) for row in proj_ids_rows.fetchall()]
+            if not proj_ids:
+                return {
+                    "thread_id": thread_id,
+                    "summary": {"participants": [], "key_points": [], "action_items": [], "total_messages": 0},
+                    "examples": [],
+                }
+            stmt = (
+                select(Message, sender_alias.name)
+                .join(sender_alias, Message.sender_id == sender_alias.id)
+                .where(cast(Any, Message.project_id).in_(proj_ids), or_(*criteria))
+                .order_by(asc(Message.created_ts))
+            )
+            if per_thread_limit:
+                stmt = stmt.limit(per_thread_limit)
+            rows = (await session.execute(stmt)).all()
+        summary = _summarize_messages(rows)
+
+        # Optional LLM refinement (same as project-level)
+        if llm_mode and get_settings().llm.enabled:
+            try:
+                excerpts: list[str] = []
+                for message, sender_name in rows[:15]:
+                    excerpts.append(f"- {sender_name}: {message.subject}\n{message.body_md[:800]}")
+                if excerpts:
+                    system = (
+                        "You are a senior engineer. Produce a concise JSON summary with keys: "
+                        "participants[], key_points[], action_items[], mentions[{name,count}], code_references[], "
+                        "total_messages, open_actions, done_actions. Derive from the given thread excerpts."
+                    )
+                    user = "\n\n".join(excerpts)
+                    llm_resp = await complete_system_user(system, user, model=llm_model)
+                    parsed = _parse_json_safely(llm_resp.content)
+                    if parsed:
+                        for key in (
+                            "participants",
+                            "key_points",
+                            "action_items",
+                            "mentions",
+                            "code_references",
+                            "total_messages",
+                            "open_actions",
+                            "done_actions",
+                        ):
+                            value = parsed.get(key)
+                            if value:
+                                summary[key] = value
+            except Exception as e:
+                await ctx.debug(f"summarize_thread_product.llm_skipped: {e}")
+
+        examples: list[dict[str, Any]] = []
+        if include_examples:
+            for message, sender_name in rows[:3]:
+                examples.append(
+                    {
+                        "id": message.id,
+                        "subject": message.subject,
+                        "from": sender_name,
+                        "created_ts": _iso(message.created_ts),
+                    }
+                )
+        await ctx.info(f"Summarized thread '{thread_id}' across product '{product_key}' with {len(rows)} messages")
+        return {"thread_id": thread_id, "summary": summary, "examples": examples}
+
+    @mcp.resource("resource://identity/{project}", mime_type="application/json")
+    def identity_resource(project: str) -> dict[str, Any]:
+        """
+        Inspect identity resolution for a given project path. Returns the slug actually used,
+        the identity mode in effect, canonical path for the selected mode, and git repo facts.
+        """
+        raw_path, _ = _split_slug_and_query(project)
+        target_path = str(Path(raw_path).expanduser().resolve())
+
+        return _resolve_project_identity(target_path)
 
     @mcp.resource("resource://tooling/directory", mime_type="application/json")
     def tooling_directory_resource() -> dict[str, Any]:
@@ -7036,6 +7899,11 @@ def build_mcp_server() -> FastMCP:
         - File reservations communicate edit intent and reduce collisions across agents.
         - Surfacing them helps humans review ongoing work and resolve contention.
 
+        Why this exists
+        ---------------
+        - Claims communicate edit intent and reduce collisions across agents.
+        - Surfacing them helps humans review ongoing work and resolve contention.
+
         Parameters
         ----------
         slug : str
@@ -7057,6 +7925,11 @@ def build_mcp_server() -> FastMCP:
         Also see all historical (including released) file_reservations:
         ```json
         {"jsonrpc":"2.0","id":"r4b","method":"resources/read","params":{"uri":"resource://file_reservations/backend-abc123?active_only=false"}}
+        ```
+
+        Also see all historical (including released) claims:
+        ```json
+        {"jsonrpc":"2.0","id":"r4b","method":"resources/read","params":{"uri":"resource://claims/backend-abc123?active_only=false"}}
         ```
         """
         slug_value, query_params = _split_slug_and_query(slug)
@@ -7741,18 +8614,19 @@ def build_mcp_server() -> FastMCP:
 
         # Attach recent commit summaries touching the archive (best-effort)
         commits_index: dict[str, dict[str, str]] = {}
-        try:
-            archive = await ensure_archive(settings, project_obj.slug, project_key=project_obj.human_key)
-            repo: Repo = archive.repo
-            for commit in repo.iter_commits(paths=["."], max_count=200):
-                # Heuristic: extract message id from commit summary when present in canonical subject format
-                # Expected: "mail: <from> -> ... | <subject>"
-                summary = str(commit.summary)
-                hexsha = commit.hexsha[:12]
-                if hexsha not in commits_index:
-                    commits_index[hexsha] = {"hexsha": hexsha, "summary": summary}
-        except Exception:
-            pass
+        if is_archive_enabled(settings):
+            try:
+                archive = await ensure_archive(settings, project_obj.slug, project_key=project_obj.human_key)
+                repo: Repo = archive.repo
+                for commit in repo.iter_commits(paths=["."], max_count=200):
+                    # Heuristic: extract message id from commit summary when present in canonical subject format
+                    # Expected: "mail: <from> -> ... | <subject>"
+                    summary = str(commit.summary)
+                    hexsha = commit.hexsha[:12]
+                    if hexsha not in commits_index:
+                        commits_index[hexsha] = {"hexsha": hexsha, "summary": summary}
+            except Exception:
+                pass
 
         # Map messages to nearest commit (best-effort: none if not determinable)
         out: list[dict[str, Any]] = []
@@ -8163,6 +9037,7 @@ def build_mcp_server() -> FastMCP:
             "acknowledge_message": acknowledge_message,
             "acquire_build_slot": acquire_build_slot,
             "create_agent_identity": create_agent_identity,
+            "create_file_reservation": create_file_reservation,
             "delete_agent": delete_agent,
             "file_reservation_paths": file_reservation_paths,
             "force_release_file_reservation": force_release_file_reservation,

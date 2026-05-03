@@ -1,6 +1,6 @@
 import httpx
 import pytest
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 
 from mcp_agent_mail.config import get_settings
 from mcp_agent_mail.db import ensure_schema, get_session
@@ -63,3 +63,38 @@ async def test_slackbox_rejects_invalid_token(monkeypatch):
         )
 
     assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_slackbox_rejects_disallowed_channel(monkeypatch):
+    monkeypatch.setenv("SLACK_ENABLED", "1")
+    monkeypatch.setenv("SLACKBOX_ENABLED", "1")
+    monkeypatch.setenv("SLACKBOX_TOKEN", "slackbox-token")
+    monkeypatch.setenv("SLACKBOX_CHANNELS", "CCHAN_ALLOWED")
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+    settings = get_settings()
+    app = build_http_app(settings)
+    await ensure_schema()
+
+    async with get_session() as session:
+        before_count = (await session.execute(select(func.count(Message.id)))).scalar_one()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/slackbox/incoming",
+            data={
+                "token": "slackbox-token",
+                "channel_id": "COTHER",
+                "text": "Slackbox disallowed channel",
+                "timestamp": "2222.3333",
+            },
+        )
+
+    assert resp.status_code == 200
+
+    async with get_session() as session:
+        after_count = (await session.execute(select(func.count(Message.id)))).scalar_one()
+
+    assert after_count == before_count

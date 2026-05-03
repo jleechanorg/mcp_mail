@@ -65,6 +65,32 @@ bash -lc "cd /Users/jleechan/mcp_agent_mail && ./scripts/run_server_with_token.s
 - Logs live in `/tmp/mcp_agent_mail_server.log`; tail that file to debug startup issues.
 - Do **not** run the helper script directly in the foreground—Claude/Codex agents should assume a persistent background process started exactly as above.
 
+### MCP Agent Mail Credentials
+
+Credentials for MCP Agent Mail (especially Slack integration) should be stored in `~/.mcp_mail/credentials.json`. This is the **recommended location for PyPI package installs**.
+
+**Credential precedence** (highest to lowest):
+1. Environment variables
+2. `~/.mcp_mail/credentials.json` (user-level, recommended)
+3. Local `.env` file (development)
+4. Built-in defaults
+
+**Quick setup:**
+```bash
+mkdir -p ~/.mcp_mail
+cat > ~/.mcp_mail/credentials.json <<'EOF'
+{
+  "SLACK_ENABLED": "true",
+  "SLACK_BOT_TOKEN": "xoxb-your-bot-token",
+  "SLACK_SIGNING_SECRET": "your-signing-secret",
+  "SLACK_WEBHOOK_URL": "https://your-public-url/slack/events"
+}
+EOF
+chmod 600 ~/.mcp_mail/credentials.json
+```
+
+**Tunnelmole for public URLs:** Use `npm i -g tunnelmole && tmole 8765` to get a permanent public URL for Slack webhooks.
+
 You can also consult `third_party_docs/fastmcp_distilled_docs.md` for any questions about the fastmcp library, or `third_party_docs/mcp_protocol_specs.md` for any questions about the MCP protocol in general. For anything relating to Postgres, be sure to read `third_party_docs/POSTGRES18_AND_PYTHON_BEST_PRACTICES.md`.
 
 We load all configuration details from the existing .env file (even if you can't see this file, it DOES exist, and must NEVER be overwritten!). We NEVER use os.getenv() or dotenv or other methods to get variables from our .env file other than using python-decouple in this very specific pattern of usage (this is just an example but it always follows the same basic pattern):
@@ -196,6 +222,23 @@ Macros vs granular tools
 - Tips:
   - Combine with `mcp-agent-mail amctl env --path . --agent $AGENT_NAME` to get `CACHE_KEY` and `ARTIFACT_DIR`.
   - Use `mcp-agent-mail am-run <slot> -- <cmd...>` to run with prepped env; future versions will auto-acquire/renew/release.
+
+### Product Bus
+
+- Create or ensure a product:
+  - `mcp-agent-mail products ensure MyProduct --name "My Product"`
+- Link a repo/worktree into the product (use slug or path):
+  - `mcp-agent-mail products link MyProduct .`
+- View product status and linked projects:
+  - `mcp-agent-mail products status MyProduct`
+- Search messages across all linked projects:
+  - `mcp-agent-mail products search MyProduct "bd-123 OR \"release plan\"" --limit 50`
+
+Server tools (for orchestrators)
+- `ensure_product(product_key|name)`
+- `products_link(product_key, project_key)`
+- `resource://product/{key}`
+- `search_messages_product(product_key, query, limit=20)`
 
 Common pitfalls
 - "from_agent not registered": always `register_agent` in the correct `project_key` first.
