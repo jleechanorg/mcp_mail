@@ -6,6 +6,11 @@ if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then
     HTTP_BEARER_TOKEN=$(grep -E '^HTTP_BEARER_TOKEN=' .env | sed -E 's/^HTTP_BEARER_TOKEN=//') || true
   fi
 fi
+if [[ -z "${SLACK_WEBHOOK_URL:-}" ]]; then
+  if [[ -f .env ]]; then
+    SLACK_WEBHOOK_URL=$(grep -E '^SLACK_WEBHOOK_URL=' .env | sed -E 's/^SLACK_WEBHOOK_URL=//') || true
+  fi
+fi
 if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then
   if command -v uv >/dev/null 2>&1; then
     HTTP_BEARER_TOKEN=$(uv run python - <<'PY'
@@ -17,5 +22,6 @@ PY
   fi
 fi
 export HTTP_BEARER_TOKEN
+export SLACK_WEBHOOK_URL
 
 uv run python -m mcp_agent_mail.cli serve-http "$@"

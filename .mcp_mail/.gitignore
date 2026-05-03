@@ -1,12 +1,7 @@
-# SQLite cache (local only)
+# SQLite cache files should never be committed
 *.db
 *.db-shm
 *.db-wal
 
-# Temporary files
-*.tmp
-.lock
-
-# Test artifacts (runtime generated files, not project configuration)
-# Note: This .gitattributes is a test artifact, not the project's Git configuration
+# Test artifact placeholder
 .gitattributes

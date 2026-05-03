@@ -248,7 +248,7 @@ def render_prepush_script(archive: ProjectArchive) -> str:
 async def install_guard(settings: Settings, project_slug: str, repo_path: Path) -> Path:
     """Install the pre-commit guard for the given project into the repo."""
 
-    archive = await ensure_archive(settings, project_slug)
+    archive = await ensure_archive(settings, project_slug, project_key=str(repo_path))
     hooks_dir = repo_path / ".git" / "hooks"
     if not hooks_dir.is_dir():
         raise ValueError(f"No git hooks directory at {hooks_dir}")
@@ -265,7 +265,7 @@ async def install_guard(settings: Settings, project_slug: str, repo_path: Path) 
 
 async def install_prepush_guard(settings: Settings, project_slug: str, repo_path: Path) -> Path:
     """Install the pre-push guard for the given project into the repo."""
-    archive = await ensure_archive(settings, project_slug)
+    archive = await ensure_archive(settings, project_slug, project_key=str(repo_path))
 
     def _git(cwd: Path, *args: str) -> str | None:
         try:
