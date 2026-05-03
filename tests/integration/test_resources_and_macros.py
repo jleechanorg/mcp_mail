@@ -9,7 +9,6 @@ These tests validate:
 
 from __future__ import annotations
 
-import json
 import subprocess
 from pathlib import Path
 
@@ -450,21 +449,11 @@ async def test_delete_agent(mcp_client, tmp_path):
         },
     )
 
-    # Extended tool wraps result payload under "result"
+    # Extended tool returns result in data - check it succeeded
+    # delete_agent returns a dict with agent_name, agent_id, and deletion statistics
     assert delete_result.data is not None
-    assert "result" in delete_result.data
-    delete_payload = delete_result.data["result"]
-    # Extended tool may wrap result in [{"text": json_string}] format
-    if isinstance(delete_payload, list):
-        first_item = delete_payload[0] if delete_payload else {}
-        if isinstance(first_item, dict) and "text" in first_item:
-            try:
-                delete_payload = json.loads(first_item["text"])
-            except (json.JSONDecodeError, ValueError):
-                delete_payload = first_item
-    assert isinstance(delete_payload, dict)
-    assert "agent_name" in delete_payload, "delete_agent response missing 'agent_name'"
-    assert delete_payload["agent_name"] == agent
+    assert "agent_name" in delete_result.data, "delete_agent response missing 'agent_name'"
+    assert delete_result.data["agent_name"] == agent, f"Expected agent_name '{agent}', got '{delete_result.data['agent_name']}'"
 
     # Verify agent is no longer active - whois should return error or inactive status
     whois_after = await mcp_client.call_tool(
@@ -473,20 +462,14 @@ async def test_delete_agent(mcp_client, tmp_path):
             "project_key": str(project_path),
             "agent_name": agent,
         },
-        raise_on_error=False,
     )
     # After deletion, whois returns an error response OR shows agent as inactive
-    whois_data = whois_after.data or {}
-    if getattr(whois_after, "isError", False):
+    if "error" in whois_after.data:
         # Agent not found error is acceptable
-        error_value = whois_data.get("error")
-        if error_value is None and getattr(whois_after, "content", None):
-            first_block = whois_after.content[0]
-            error_value = getattr(first_block, "text", None) if first_block else None
-        assert "not found" in str(error_value).lower()
+        assert "not found" in str(whois_after.data["error"]).lower()
     else:
         # If agent still exists in some form, it should be marked inactive
-        assert whois_data.get("is_active", False) is False
+        assert whois_after.data.get("is_active") is False
 
 
 @pytest.mark.asyncio
