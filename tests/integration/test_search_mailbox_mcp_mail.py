@@ -124,11 +124,7 @@ async def test_search_with_mcp_mail_storage_structure(mcp_mail_search_env):
 
 @pytest.mark.asyncio
 async def test_search_respects_project_context_in_mcp_mail(mcp_mail_search_env):
-<<<<<<< HEAD
-    """Test that search results respect project context in .mcp_mail/ storage.
-=======
     """Test that search results respect project context in isolated storage.
->>>>>>> origin/main
 
     Note: Agent names are globally unique across all projects. This test uses
     different agent names for each project to comply with global uniqueness.
