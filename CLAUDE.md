@@ -22,6 +22,28 @@ For development with local code changes:
 bash -lc "cd /Users/jleechan/mcp_agent_mail && ./scripts/run_server_with_token.sh >/tmp/mcp_agent_mail_server.log 2>&1 & echo \$!"
 ```
 
+### Testing Philosophy — Real Over Fake
+
+**Always prefer real end-to-end tests.** Mocks and stubs are only acceptable for isolated unit tests.
+
+For any suite or artifact under `testing_*/`:
+- No mocks
+- No monkeypatching
+- No stubbed external service behavior (Slack, GitHub, databases, etc.)
+- No direct registry/state injection
+- No modifying the system under test through internal hooks, direct state injection, or other non-public control paths while claiming verification
+
+`testing_*/` directories may only trigger the system from the outside and observe evidence. Public/API-driven setup and teardown (e.g., using documented endpoints, test accounts, or CLI commands) is permitted. If a test needs simulated internals, it belongs in `tests/` (or equivalent unit test directory) and must not be described as end-to-end proof.
+
+When an agent tries to create or modify any artifact under `testing_*/` in a way that introduces any prohibited pattern above (mocks, stubs, monkeypatching, registry injection, monkey patched globals, or other banned testing-side effects), it must block itself and log the violation to `.claude/blocked_violations.log` with:
+- Timestamp
+- Full path it attempted to create or modify
+- The specific rule violated
+
+If a real test is too slow or expensive, ask the user — do not silently downgrade to a fake.
+
+See also: [Test Execution Policy](#test-execution-policy) below.
+
 ## Running from Local Build (Testing)
 
 For testing locally built packages before publishing to PyPI:
@@ -257,15 +279,15 @@ Current credentials configured in `~/.bashrc`:
 
 ### MCP Agent Mail Credentials
 
-For MCP Agent Mail server credentials (especially Slack integration), use the dedicated credentials file at `~/.mcp_mail/credentials.json`. This is the **preferred location for PyPI installs** where there's no local `.env` file.
+For MCP Agent Mail server credentials (especially Slack integration), use the dedicated credentials file at `~/.mcp_agent_mail_git_mailbox_repo/credentials.json`. This is the **preferred location for PyPI installs** where there's no local `.env` file.
 
 **Credential precedence** (highest to lowest):
 1. Environment variables
-2. `~/.mcp_mail/credentials.json` (user-level, recommended)
+2. `~/.mcp_agent_mail_git_mailbox_repo/credentials.json` (user-level, recommended)
 3. Local `.env` file (development)
 4. Built-in defaults
 
-**Example `~/.mcp_mail/credentials.json`:**
+**Example `~/.mcp_agent_mail_git_mailbox_repo/credentials.json`:**
 ```json
 {
   "SLACK_ENABLED": "true",
@@ -282,9 +304,9 @@ For MCP Agent Mail server credentials (especially Slack integration), use the de
 ```
 
 **Setup steps:**
-1. Create the directory: `mkdir -p ~/.mcp_mail`
+1. Create the directory: `mkdir -p ~/.mcp_agent_mail_git_mailbox_repo`
 2. Create the credentials file with your values
-3. Secure permissions: `chmod 600 ~/.mcp_mail/credentials.json`
+3. Secure permissions: `chmod 600 ~/.mcp_agent_mail_git_mailbox_repo/credentials.json`
 4. Restart the MCP Agent Mail server
 
 **Where to get Slack credentials:**

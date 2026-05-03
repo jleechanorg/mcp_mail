@@ -15,6 +15,7 @@ class Project(SQLModel, table=True):
     slug: str = Field(index=True, unique=True, max_length=255)
     human_key: str = Field(max_length=255, index=True)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    archived_at: Optional[datetime] = Field(default=None)
 
 
 class Agent(SQLModel, table=True):
@@ -49,6 +50,8 @@ class Agent(SQLModel, table=True):
     # When officially registered, this is set to False. Placeholder agents can be "claimed"
     # by a later registration call, which updates the agent's program/model/task_description.
     is_placeholder: bool = Field(default=False)
+    retired_at: Optional[datetime] = Field(default=None)
+    registration_token: Optional[str] = Field(default=None, max_length=64)
 
 
 class MessageRecipient(SQLModel, table=True):
@@ -82,6 +85,7 @@ class Message(SQLModel, table=True):
         default_factory=list,
         sa_column=Column(JSON, nullable=False, server_default="[]"),
     )
+    topic: Optional[str] = Field(default=None, max_length=64)
 
 
 class FileReservation(SQLModel, table=True):

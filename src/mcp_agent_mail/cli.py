@@ -29,12 +29,9 @@ from rich.table import Table
 from sqlalchemy import asc, bindparam, desc, func, select, text
 from sqlalchemy.engine import make_url
 
-# Note: .app and .http imports deferred to serve_http() to allow Python version check first
 from .config import get_settings
 from .db import ensure_schema, get_session
 from .guard import install_guard as install_guard_script, uninstall_guard as uninstall_guard_script
-
-# Note: .http import deferred to serve_http() to allow Python version check first
 from .models import Agent, FileReservation, Message, MessageRecipient, Product, ProductProjectLink, Project
 from .share import (
     DEFAULT_CHUNK_SIZE,
@@ -53,13 +50,24 @@ from .share import (
     sign_manifest,
     summarize_snapshot,
 )
-from .storage import ensure_archive, ensure_runtime_project_root, is_archive_enabled
+from .storage import ensure_runtime_project_root
 from .utils import safe_filesystem_component, slugify
 
 # Suppress annoying bleach CSS sanitizer warning from dependencies
 warnings.filterwarnings("ignore", category=UserWarning, module="bleach")
 
 console = Console()
+
+
+def _ensure_supported_python_version() -> None:
+    if sys.version_info >= (3, 14):
+        error_console = Console(stderr=True)
+        error_console.print("[bold red]❌ Error:[/bold red] Python 3.14+ is not supported.")
+        error_console.print("[yellow]MCP Mail requires Python 3.11, 3.12, or 3.13.[/yellow]")
+        error_console.print(
+            "[dim]Reason: the beartype dependency imports collections.abc.ByteString, which was removed in Python 3.14.[/dim]"
+        )
+        raise typer.Exit(code=1)
 
 
 DEFAULT_ENV_PATH = Path(".env")
@@ -617,21 +625,8 @@ def serve_http(
     path: Optional[str] = typer.Option(None, help="HTTP path where the MCP endpoint is exposed."),
 ) -> None:
     """Run the MCP server over the Streamable HTTP transport."""
-    # Check Python version compatibility
-    if sys.version_info >= (3, 14):
-        console.print("[bold red]❌ Error: Python 3.14+ is not supported[/]")
-        console.print("[yellow]MCP Mail requires Python 3.11, 3.12, or 3.13[/]")
-        console.print("[yellow]Reason: Upstream dependency (beartype) incompatibility with Python 3.14[/]")
-        console.print(
-            f"[yellow]Current version: Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}[/]"
-        )
-        console.print("\n[cyan]Please use one of these Python versions:[/]")
-        console.print("  • python3.13")
-        console.print("  • python3.12")
-        console.print("  • python3.11")
-        raise typer.Exit(code=1)
+    _ensure_supported_python_version()
 
-    # Import after version check to prevent import-time failures on Python 3.14+
     from .app import build_mcp_server
     from .http import build_http_app
 
@@ -2048,6 +2043,20 @@ def file_reservations_list(
     console.print(table)
 
 
+def _get_git_branch(repo_path: Path) -> str:
+    """Return the current git branch name, or 'unknown' on failure."""
+    try:
+        cp = subprocess.run(
+            ["git", "-C", str(repo_path), "rev-parse", "--abbrev-ref", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return cp.stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
 @app.command("amctl-env")
 def amctl_env(
     project_path: Path = typer.Option(
@@ -2069,18 +2078,7 @@ def amctl_env(
     slug = slugify(str(p))
     project_uid = hashlib.sha256(str(p).encode()).hexdigest()[:16]
     # Determine branch
-    branch = ""
-    if True:
-        try:
-            from git import Repo as _Repo
-
-            repo = _Repo(str(p), search_parent_directories=True)
-            try:
-                branch = repo.active_branch.name
-            except Exception:
-                branch = repo.git.rev_parse("--abbrev-ref", "HEAD").strip()
-        except Exception:
-            branch = "unknown"
+    branch = _get_git_branch(p)
     # Compute cache key and artifact dir
     settings = get_settings()
     cache_key = f"am-cache-{project_uid}-{agent_name}-{branch}"
@@ -2121,29 +2119,14 @@ def am_run(
     # Generate project identity from path
     slug = slugify(str(p))
     project_uid = hashlib.sha256(str(p).encode()).hexdigest()[:16]
-    branch = ""
-    if not branch:
-        try:
-            from git import Repo as _Repo
-
-            repo = _Repo(str(p), search_parent_directories=True)
-            try:
-                branch = repo.active_branch.name
-            except Exception:
-                branch = repo.git.rev_parse("--abbrev-ref", "HEAD").strip()
-        except Exception:
-            branch = "unknown"
+    branch = _get_git_branch(p)
     settings = get_settings()
     guard_mode = (os.environ.get("AGENT_MAIL_GUARD_MODE", "block") or "block").strip().lower()
-    worktrees_enabled = bool(settings.worktrees_enabled) and is_archive_enabled(settings)
+    worktrees_enabled = bool(settings.worktrees_enabled)
 
     async def _ensure_slot_paths() -> Path:
-        if is_archive_enabled(settings):
-            archive = await ensure_archive(settings, slug, project_key=str(p))
-            slot_dir = archive.root / "build_slots" / safe_filesystem_component(slot)
-        else:
-            runtime_project_root = await ensure_runtime_project_root(settings, slug)
-            slot_dir = runtime_project_root / "build_slots" / safe_filesystem_component(slot)
+        runtime_project_root = await ensure_runtime_project_root(settings, slug)
+        slot_dir = runtime_project_root / "build_slots" / safe_filesystem_component(slot)
         slot_dir.mkdir(parents=True, exist_ok=True)
         return slot_dir
 
@@ -2301,18 +2284,13 @@ def mail_status(
 
     normalized_remote: Optional[str] = None
     try:
-        from git import Repo as _Repo  # local import to avoid CLI startup cost
-
-        repo = _Repo(str(p), search_parent_directories=True)
-        try:
-            url = repo.git.remote("get-url", remote_name).strip() or None
-        except Exception:
-            try:
-                r = next((r for r in repo.remotes if r.name == remote_name), None)
-                url = next(iter(r.urls), None) if r and r.urls else None
-            except Exception:
-                url = None
-        normalized_remote = _norm_remote(url)
+        cp = subprocess.run(
+            ["git", "-C", str(p), "remote", "get-url", remote_name],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        normalized_remote = _norm_remote(cp.stdout.strip() or None)
     except Exception:
         normalized_remote = None
 
