@@ -22,17 +22,18 @@ from fastmcp import Client
 from mcp_agent_mail.app import build_mcp_server
 from mcp_agent_mail.db import reset_database_state
 
+
 # Test configuration constants
-MAX_RETRY_ATTEMPTS = 20
-RETRY_DELAY_SECONDS = 0.1
-NUM_RAPID_CYCLES = 10
-NUM_FETCH_MEASUREMENTS = 20
-MAX_FETCH_LATENCY_SECONDS = 0.5
-NUM_FRESH_SESSION_TESTS = 5
-MAX_WAIT_SECONDS = 5.0
-POLL_INTERVAL_SECONDS = 0.1
-NUM_STRESS_SENDERS = 5
-MESSAGES_PER_SENDER = 5
+MAX_RETRY_ATTEMPTS = 20  # Maximum number of retry attempts for message visibility
+RETRY_DELAY_SECONDS = 0.1  # Delay between retry attempts in seconds
+NUM_RAPID_CYCLES = 10  # Number of rapid send-fetch cycles to test
+NUM_FETCH_MEASUREMENTS = 20  # Number of fetch operations to measure latency
+MAX_FETCH_LATENCY_SECONDS = 0.5  # Maximum acceptable average fetch latency
+NUM_FRESH_SESSION_TESTS = 5  # Number of fresh session test iterations
+MAX_WAIT_SECONDS = 5.0  # Maximum time to wait for message visibility
+POLL_INTERVAL_SECONDS = 0.1  # Polling interval for message visibility checks
+NUM_STRESS_SENDERS = 5  # Number of concurrent senders in stress test
+MESSAGES_PER_SENDER = 5  # Number of messages each sender sends in stress test
 
 
 def extract_inbox(inbox_result) -> list[dict[str, Any]]:
@@ -116,9 +117,7 @@ async def test_immediate_message_visibility_single_client(isolated_env):
 
         # Should find message immediately
         matching = [m for m in inbox if m["id"] == message_id]
-        assert matching, (
-            f"Message {message_id} not found. Send took {send_elapsed:.3f}s, fetch took {fetch_elapsed:.3f}s"
-        )
+        assert matching, f"Message {message_id} not found. Send took {send_elapsed:.3f}s, fetch took {fetch_elapsed:.3f}s"
 
         print(f"\n[TIMING] Single client - Send: {send_elapsed:.3f}s, Fetch: {fetch_elapsed:.3f}s")
 
@@ -171,9 +170,7 @@ async def test_immediate_message_visibility_separate_clients(isolated_env):
         inbox = extract_inbox(inbox_result)
 
         matching = [m for m in inbox if m["id"] == message_id]
-        assert matching, (
-            f"Message {message_id} not found with separate client. Send: {send_elapsed:.3f}s, Fetch: {fetch_elapsed:.3f}s"
-        )
+        assert matching, f"Message {message_id} not found with separate client. Send: {send_elapsed:.3f}s, Fetch: {fetch_elapsed:.3f}s"
 
         print(f"\n[TIMING] Separate clients - Send: {send_elapsed:.3f}s, Fetch: {fetch_elapsed:.3f}s")
 
@@ -196,12 +193,7 @@ async def test_concurrent_send_and_fetch(isolated_env):
         )
         await client.call_tool(
             "register_agent",
-            {
-                "project_key": "/latency/concurrent",
-                "program": "receiver",
-                "model": "test",
-                "name": "ConcurrentReceiver",
-            },
+            {"project_key": "/latency/concurrent", "program": "receiver", "model": "test", "name": "ConcurrentReceiver"},
         )
 
         results: dict[str, Any] = {"message_id": None, "found": False, "attempts": 0}
@@ -304,15 +296,13 @@ async def test_rapid_send_fetch_cycles(isolated_env):
             inbox = extract_inbox(inbox_result)
             found = any(m["id"] == message_id for m in inbox)
 
-            timings.append(
-                {
-                    "cycle": i,
-                    "send": send_elapsed,
-                    "fetch": fetch_elapsed,
-                    "total": send_elapsed + fetch_elapsed,
-                    "found": found,
-                }
-            )
+            timings.append({
+                "cycle": i,
+                "send": send_elapsed,
+                "fetch": fetch_elapsed,
+                "total": send_elapsed + fetch_elapsed,
+                "found": found,
+            })
 
             if not found:
                 failures.append(i)
@@ -323,15 +313,9 @@ async def test_rapid_send_fetch_cycles(isolated_env):
         total_times = [t["total"] for t in timings]
 
         print(f"\n[TIMING] Rapid cycles (n={NUM_RAPID_CYCLES}):")
-        print(
-            f"  Send  - min: {min(send_times):.3f}s, max: {max(send_times):.3f}s, avg: {sum(send_times) / len(send_times):.3f}s"
-        )
-        print(
-            f"  Fetch - min: {min(fetch_times):.3f}s, max: {max(fetch_times):.3f}s, avg: {sum(fetch_times) / len(fetch_times):.3f}s"
-        )
-        print(
-            f"  Total - min: {min(total_times):.3f}s, max: {max(total_times):.3f}s, avg: {sum(total_times) / len(total_times):.3f}s"
-        )
+        print(f"  Send  - min: {min(send_times):.3f}s, max: {max(send_times):.3f}s, avg: {sum(send_times)/len(send_times):.3f}s")
+        print(f"  Fetch - min: {min(fetch_times):.3f}s, max: {max(fetch_times):.3f}s, avg: {sum(fetch_times)/len(fetch_times):.3f}s")
+        print(f"  Total - min: {min(total_times):.3f}s, max: {max(total_times):.3f}s, avg: {sum(total_times)/len(total_times):.3f}s")
 
         if failures:
             print(f"  FAILURES at cycles: {failures}")
@@ -486,9 +470,9 @@ async def test_fetch_latency_measurement(isolated_env):
 
         avg = sum(fetch_times) / len(fetch_times)
         print(f"\n[TIMING] Fetch latency (n={NUM_FETCH_MEASUREMENTS}):")
-        print(f"  min: {min(fetch_times) * 1000:.1f}ms")
-        print(f"  max: {max(fetch_times) * 1000:.1f}ms")
-        print(f"  avg: {avg * 1000:.1f}ms")
+        print(f"  min: {min(fetch_times)*1000:.1f}ms")
+        print(f"  max: {max(fetch_times)*1000:.1f}ms")
+        print(f"  avg: {avg*1000:.1f}ms")
 
         # Fetch should be fast for empty inbox
         assert avg < MAX_FETCH_LATENCY_SECONDS, f"Average fetch latency {avg:.3f}s exceeds {MAX_FETCH_LATENCY_SECONDS}s threshold"
@@ -619,8 +603,8 @@ async def test_stress_many_concurrent_messages(isolated_env):
         for sender_results in all_results:
             all_message_ids.update(sender_results)
 
-        expected_messages = NUM_STRESS_SENDERS * MESSAGES_PER_SENDER
-        assert len(all_message_ids) == expected_messages, f"Expected {expected_messages} message IDs, got {len(all_message_ids)}"
+        expected_total = NUM_STRESS_SENDERS * MESSAGES_PER_SENDER
+        assert len(all_message_ids) == expected_total, f"Expected {expected_total} message IDs, got {len(all_message_ids)}"
 
         # Now fetch inbox and check all messages are visible
         fetch_start = time.perf_counter()
@@ -635,10 +619,11 @@ async def test_stress_many_concurrent_messages(isolated_env):
 
         missing = all_message_ids - found_ids
 
-        print(f"\n[TIMING] Stress test ({expected_messages} messages from {NUM_STRESS_SENDERS} senders):")
+        expected_total = NUM_STRESS_SENDERS * MESSAGES_PER_SENDER
+        print(f"\n[TIMING] Stress test ({expected_total} messages from {NUM_STRESS_SENDERS} senders):")
         print(f"  Total send time: {send_elapsed:.3f}s")
         print(f"  Fetch time: {fetch_elapsed:.3f}s")
-        print(f"  Messages found: {len(found_ids)}/{expected_messages}")
+        print(f"  Messages found: {len(found_ids)}/{expected_total}")
 
         if missing:
             print(f"  MISSING: {len(missing)} messages")
