@@ -22,6 +22,28 @@ For development with local code changes:
 bash -lc "cd /Users/jleechan/mcp_agent_mail && ./scripts/run_server_with_token.sh >/tmp/mcp_agent_mail_server.log 2>&1 & echo \$!"
 ```
 
+### Testing Philosophy — Real Over Fake
+
+**Always prefer real end-to-end tests.** Mocks and stubs are only acceptable for isolated unit tests.
+
+For any suite or artifact under `testing_*/`:
+- No mocks
+- No monkeypatching
+- No stubbed external service behavior (Slack, GitHub, databases, etc.)
+- No direct registry/state injection
+- No modifying the system under test through internal hooks, direct state injection, or other non-public control paths while claiming verification
+
+`testing_*/` directories may only trigger the system from the outside and observe evidence. Public/API-driven setup and teardown (e.g., using documented endpoints, test accounts, or CLI commands) is permitted. If a test needs simulated internals, it belongs in `tests/` (or equivalent unit test directory) and must not be described as end-to-end proof.
+
+When an agent tries to create or modify any artifact under `testing_*/` in a way that introduces any prohibited pattern above (mocks, stubs, monkeypatching, registry injection, monkey patched globals, or other banned testing-side effects), it must block itself and log the violation to `.claude/blocked_violations.log` with:
+- Timestamp
+- Full path it attempted to create or modify
+- The specific rule violated
+
+If a real test is too slow or expensive, ask the user — do not silently downgrade to a fake.
+
+See also: [Test Execution Policy](#test-execution-policy) below.
+
 ## Running from Local Build (Testing)
 
 For testing locally built packages before publishing to PyPI:
@@ -33,7 +55,7 @@ bash -lc "cd /Users/jleechan/mcp_agent_mail && ./scripts/run_server_local_build.
 This script:
 - Uses the wheel file from `dist/` (built with `uv build`)
 - Installs in an isolated temporary virtual environment
-- Uses Python 3.11-3.13 (avoiding Python 3.14 RC due to Pydantic compatibility issues)
+- Uses Python 3.11-3.13 (Python 3.14+ not supported due to beartype dependency incompatibility with collections.abc.ByteString removal)
 - Runs the server from the locally built package
 
 ## General Notes
@@ -43,6 +65,103 @@ This script:
 - Launch Claude Code/Claude Desktop **after** the command above succeeds so it can reuse the existing HTTP MCP endpoint at `http://127.0.0.1:8765/mcp/`.
 
 With the server running, Claude agents can call `ensure_project`, `register_agent`, `fetch_inbox`, and the other MCP tools without additional setup.
+
+## Claude Code Settings and Hooks
+
+### Settings.json Format
+
+**CRITICAL: Always use the correct hook format** to avoid breaking Claude Code. The settings file uses a **matcher-based hook structure**.
+
+**Correct format for SessionStart hooks:**
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "your-command-here"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**Common mistakes:**
+
+❌ **Wrong** (missing `hooks` array wrapper):
+```json
+{
+  "SessionStart": [
+    {
+      "type": "command",
+      "command": "..."
+    }
+  ]
+}
+```
+
+✅ **Correct** (with `hooks` array):
+```json
+{
+  "SessionStart": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "..."
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Hook Structure
+
+All hooks follow this pattern:
+
+```json
+{
+  "HookType": [
+    {
+      "matcher": {...},  // Optional for SessionStart, required for Pre/PostToolUse
+      "hooks": [         // REQUIRED: Array of hook objects
+        {
+          "type": "command",
+          "command": "..."
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Official Documentation
+
+**Before modifying settings.json, always check the official docs:**
+
+- **Hooks Reference**: https://code.claude.com/docs/en/hooks
+- **Settings Reference**: https://code.claude.com/docs/en/settings
+
+**To find latest documentation:**
+```bash
+# Web search for current year to get latest docs
+"Claude Code hooks settings.json format 2026"
+"Claude Code SessionStart hook documentation"
+```
+
+### Validation
+
+After editing `.claude/settings.json`:
+1. Restart Claude Code
+2. Check for settings errors in the startup output
+3. If errors appear, compare your format against official docs
+4. Fix immediately - invalid settings break the entire hooks system
 
 ## GitHub Authentication
 
@@ -160,15 +279,15 @@ Current credentials configured in `~/.bashrc`:
 
 ### MCP Agent Mail Credentials
 
-For MCP Agent Mail server credentials (especially Slack integration), use the dedicated credentials file at `~/.mcp_mail/credentials.json`. This is the **preferred location for PyPI installs** where there's no local `.env` file.
+For MCP Agent Mail server credentials (especially Slack integration), use the dedicated credentials file at `~/.mcp_agent_mail_git_mailbox_repo/credentials.json`. This is the **preferred location for PyPI installs** where there's no local `.env` file.
 
 **Credential precedence** (highest to lowest):
 1. Environment variables
-2. `~/.mcp_mail/credentials.json` (user-level, recommended)
+2. `~/.mcp_agent_mail_git_mailbox_repo/credentials.json` (user-level, recommended)
 3. Local `.env` file (development)
 4. Built-in defaults
 
-**Example `~/.mcp_mail/credentials.json`:**
+**Example `~/.mcp_agent_mail_git_mailbox_repo/credentials.json`:**
 ```json
 {
   "SLACK_ENABLED": "true",
@@ -185,9 +304,9 @@ For MCP Agent Mail server credentials (especially Slack integration), use the de
 ```
 
 **Setup steps:**
-1. Create the directory: `mkdir -p ~/.mcp_mail`
+1. Create the directory: `mkdir -p ~/.mcp_agent_mail_git_mailbox_repo`
 2. Create the credentials file with your values
-3. Secure permissions: `chmod 600 ~/.mcp_mail/credentials.json`
+3. Secure permissions: `chmod 600 ~/.mcp_agent_mail_git_mailbox_repo/credentials.json`
 4. Restart the MCP Agent Mail server
 
 **Where to get Slack credentials:**

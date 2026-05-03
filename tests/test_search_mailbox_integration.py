@@ -13,13 +13,7 @@ import pytest
 from fastmcp import Client
 
 from mcp_agent_mail.app import build_mcp_server
-
-
-def _extract_result(call_result):
-    """Extract the actual data from a CallToolResult."""
-    if hasattr(call_result, "structured_content") and call_result.structured_content:
-        return call_result.structured_content.get("result", call_result.data)
-    return call_result.data
+from tests.conftest import extract_result
 
 
 @pytest.mark.asyncio
@@ -98,7 +92,7 @@ Also added comprehensive tests for edge cases like:
             },
         )
 
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
 
         # Bob should find Alice's work
         assert len(results) == 2, f"Should find 2 messages about authentication, found {len(results)}"
@@ -193,7 +187,7 @@ async def test_multi_agent_coordination_via_search(isolated_env):
             },
         )
 
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
 
         # Diana should find all the context
         assert len(results) == 3, f"Should find all 3 messages about user table work, found {len(results)}"
@@ -272,7 +266,7 @@ useEffect(() => {
             },
         )
 
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
 
         assert len(results) >= 1, f"Should find TypeError solution, found {len(results)}"
 
@@ -337,7 +331,7 @@ async def test_search_with_phrase_queries_for_exact_matches(isolated_env):
             },
         )
 
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
 
         # Should find only the exact match
         assert len(results) == 1, "Phrase query should find only exact match"
@@ -392,7 +386,7 @@ async def test_search_across_long_conversation_history(isolated_env):
             },
         )
 
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
 
         # Should find API-related messages (there are 4 API messages, so should get 4)
         assert len(results) >= 4, f"Should find at least 4 API messages with limit 5, found {len(results)}"
@@ -408,7 +402,7 @@ async def test_search_across_long_conversation_history(isolated_env):
             },
         )
 
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
 
         # Should find authentication message
         assert len(results) >= 1, "Should find at least 1 authentication message"
@@ -438,7 +432,7 @@ async def test_empty_project_search(isolated_env):
             },
         )
 
-        results = _extract_result(search_result)
+        results = extract_result(search_result)
         assert len(results) == 0, "Should return empty list for empty project"
 
 
@@ -501,7 +495,7 @@ async def test_search_respects_agent_filter_in_multi_agent_project(isolated_env)
             },
         )
 
-        all_results = _extract_result(search_result)
+        all_results = extract_result(search_result)
         assert len(all_results) == 3, "Should find all 3 feature-related messages"
 
         # Search only Bob's involvement in "feature"
@@ -514,7 +508,7 @@ async def test_search_respects_agent_filter_in_multi_agent_project(isolated_env)
             },
         )
 
-        bob_results = _extract_result(search_result)
+        bob_results = extract_result(search_result)
 
         # Should only find messages where Bob is sender or recipient
         assert len(bob_results) == 2, "Should find only Bob's 2 messages about features"

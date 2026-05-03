@@ -112,7 +112,7 @@ echo -e "${YELLOW}Manual setup instructions (if needed):${NC}"
 echo ""
 echo "  1. Go to: https://api.slack.com/apps"
 echo "  2. Click 'Create New App' → 'From manifest'"
-echo "  3. Select workspace, paste manifest from: $PROJECT_ROOT/slack_app_manifest.json"
+echo "  3. Select workspace, paste manifest from: $PROJECT_ROOT/examples/slack_app_manifest.json"
 echo "  4. Update the request_url to your server's /slack/events endpoint"
 echo "  5. Create and install the app"
 echo "  6. Copy Bot Token and Signing Secret"
@@ -125,8 +125,8 @@ read -p "Press Enter when you've completed the Slack App setup..."
 # =============================================================================
 print_header "Step 3: Configure Credentials"
 
-# Create ~/.mcp_mail directory if it doesn't exist
-CREDS_DIR="$HOME/.mcp_mail"
+# Create ~/.mcp_agent_mail_git_mailbox_repo directory if it doesn't exist
+CREDS_DIR="$HOME/.mcp_agent_mail_git_mailbox_repo"
 CREDS_FILE="$CREDS_DIR/credentials.json"
 mkdir -p "$CREDS_DIR"
 chmod 700 "$CREDS_DIR"
