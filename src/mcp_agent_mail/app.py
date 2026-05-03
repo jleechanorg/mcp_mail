@@ -2007,7 +2007,11 @@ async def _create_message(
         flush_start = time.perf_counter()
         await session.flush()
         flush_elapsed = time.perf_counter() - flush_start
+        if message.id is None:
+            raise RuntimeError("Message id was not assigned after flush().")
         for recipient, kind in recipients:
+            if recipient.id is None:
+                raise ValueError(f"Recipient '{recipient.name}' must have an id before sending messages.")
             entry = MessageRecipient(message_id=message.id, agent_id=recipient.id, kind=kind)
             session.add(entry)
         sender.last_active_ts = datetime.now(timezone.utc)
@@ -2316,12 +2320,21 @@ async def _list_inbox(
     basic_start = time.perf_counter()
     messages = await _list_inbox_basic(agent, limit, urgent_only, include_bodies, since_ts)
     basic_elapsed = time.perf_counter() - basic_start
-    message_ids_in_inbox = {msg["id"] for msg in messages}
+    message_ids_in_inbox: set[int] = set()
+    for msg in messages:
+        msg_id = msg.get("id")
+        if msg_id is None:
+            continue
+        try:
+            message_ids_in_inbox.add(int(msg_id))
+        except (TypeError, ValueError):
+            continue
 
     # Scan global inbox for messages mentioning this agent using FTS5 (much faster than regex)
     fts_elapsed = 0.0
     basic_count = len(messages)  # Track count before FTS merge
-    fts_count = 0
+    fts_requested_count = 0
+    fts_included_count = 0
     try:
         fts_start = time.perf_counter()
         global_inbox_agent = await _get_agent_by_name(global_inbox_name)
@@ -2336,25 +2349,29 @@ async def _list_inbox(
             limit=30,  # Reduced from 100 - FTS5 query is precise, doesn't need to over-fetch
         )
         fts_elapsed = time.perf_counter() - fts_start
+        fts_requested_count = len(mentioned_messages)
 
         # Merge with regular inbox, respecting the limit
         messages.extend(mentioned_messages)
-        messages = messages[:limit]
+        if len(messages) > limit:
+            messages = messages[:limit]
         # Calculate actual FTS count included after truncation
-        fts_count = max(0, len(messages) - basic_count)
+        fts_included_count = max(0, len(messages) - basic_count)
 
-    except Exception:
+    except Exception as exc:
         # If global inbox doesn't exist or there's an error, just return regular inbox
-        pass
+        logger.debug("global_inbox_fts_failed", exc_info=exc)
 
     total_elapsed = time.perf_counter() - list_inbox_start
     logger.debug(
-        "[LATENCY] _list_inbox: total=%.3fs basic=%.3fs fts=%.3fs basic_count=%d fts_count=%d final_count=%d agent=%s",
+        "[LATENCY] _list_inbox: total=%.3fs basic=%.3fs fts=%.3fs basic_count=%d "
+        "fts_included=%d fts_requested=%d final_count=%d agent=%s",
         total_elapsed,
         basic_elapsed,
         fts_elapsed,
         basic_count,
-        fts_count,
+        fts_included_count,
+        fts_requested_count,
         len(messages),
         agent.name,
     )
@@ -2364,7 +2381,7 @@ async def _list_inbox(
 async def _find_mentions_in_global_inbox(
     agent_name: str,
     global_inbox_agent: Agent,
-    exclude_message_ids: set[str],
+    exclude_message_ids: set[int],
     include_bodies: bool,
     since_ts: Optional[str],
     limit: int = 30,
@@ -2415,6 +2432,8 @@ async def _find_mentions_in_global_inbox(
     messages: list[dict[str, Any]] = []
     for message, recipient_kind, sender_name in rows:
         # Skip if already in regular inbox
+        if message.id is None:
+            continue
         if message.id in exclude_message_ids:
             continue
 
@@ -3127,7 +3146,7 @@ def build_mcp_server() -> FastMCP:
         lock_acquire_start = time.perf_counter()
 
         async with _archive_write_lock(archive):
-            lock_acquired_elapsed = time.perf_counter() - lock_acquire_start
+            lock_wait_elapsed = time.perf_counter() - lock_acquire_start
             # Server-side file_reservations enforcement: block if conflicting active exclusive file_reservation exists
             if settings.file_reservations_enforcement_enabled:
                 await _expire_stale_file_reservations(project.id or 0)
@@ -3264,7 +3283,7 @@ def build_mcp_server() -> FastMCP:
             total_elapsed,
             recipient_lookup_elapsed,
             archive_elapsed,
-            lock_acquired_elapsed,
+            lock_wait_elapsed,
             attachments_elapsed,
             db_write_elapsed,
             git_write_elapsed,
