@@ -1,6 +1,0 @@
-# Project-local Codex MCP configuration
-[mcp_servers.mcp_agent_mail]
-transport = "http"
-url = "http://127.0.0.1:8765/mcp/"
-headers = { Authorization = "Bearer ${HTTP_BEARER_TOKEN}" }
-timeout_seconds = 180
