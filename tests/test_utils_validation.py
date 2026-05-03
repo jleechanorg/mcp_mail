@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-from mcp_agent_mail.utils import (
-    generate_agent_name,
-    sanitize_agent_name,
-    validate_agent_name_format,
-)
+from mcp_agent_mail.utils import generate_agent_name, sanitize_agent_name, validate_agent_name_format
 
 
 def test_validate_agent_name_format_valid_names():
@@ -117,6 +113,8 @@ def test_generate_agent_name_structure():
         assert name[0].isupper()
         # Should be alphanumeric only
         assert name.isalnum()
+        # Should include numeric suffix for larger namespace
+        assert any(ch.isdigit() for ch in name)
 
 
 def test_sanitize_agent_name_basic():

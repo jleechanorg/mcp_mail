@@ -44,10 +44,11 @@ async def test_rate_limit_redis_backend_path(isolated_env, monkeypatch):
     server = build_mcp_server()
     app = build_http_app(settings, server)
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # Call a resource twice; redis path should be exercised and allow both
-        r1 = await client.post(settings.http.path, json=_rpc("resources/read", {"uri": "resource://projects"}))
-        assert r1.status_code in (200, 429)
-        r2 = await client.post(settings.http.path, json=_rpc("resources/read", {"uri": "resource://projects"}))
-        assert r2.status_code in (200, 429)
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Call a resource twice; redis path should be exercised and allow both
+            r1 = await client.post(settings.http.path, json=_rpc("resources/read", {"uri": "resource://projects"}))
+            assert r1.status_code in (200, 429)
+            r2 = await client.post(settings.http.path, json=_rpc("resources/read", {"uri": "resource://projects"}))
+            assert r2.status_code in (200, 429)

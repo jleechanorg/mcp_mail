@@ -6,11 +6,13 @@ import argparse
 import asyncio
 import base64
 import contextlib
+import hmac
 import importlib
 import json
 import logging
 import re
-from collections.abc import MutableMapping
+from collections import deque
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
@@ -21,13 +23,17 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
-from sqlalchemy import text
-from sqlalchemy.exc import NoResultFound
+from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError, NoResultFound
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.types import Receive, Scope, Send
 
 from .app import (
+    _create_message,
+    _ensure_project,
     _expire_stale_file_reservations,
+    _get_agent_by_name_optional,
+    _message_frontmatter,
     _tool_metrics_snapshot,
     build_mcp_server,
     get_project_sibling_data,
@@ -50,7 +56,13 @@ from .storage import (
     get_timeline_commits,
     write_agent_profile,
     write_file_reservation_record,
+    write_message_bundle,
 )
+
+# Slack webhook dedupe cache (in-memory best-effort)
+_slack_event_cache: set[tuple[str, str]] = set()
+_slack_event_cache_order: deque[tuple[str, str]] = deque(maxlen=5000)
+_slack_event_cache_lock = asyncio.Lock()
 
 
 async def _project_slug_from_id(pid: int | None) -> str | None:
@@ -60,6 +72,18 @@ async def _project_slug_from_id(pid: int | None) -> str | None:
         row = await session.execute(text("SELECT slug FROM projects WHERE id = :pid"), {"pid": pid})
         res = row.fetchone()
         return res[0] if res and res[0] else None
+
+
+async def _project_identifiers_from_id(pid: int | None) -> tuple[str | None, str | None]:
+    """Return (slug, human_key) for a project id, or (None, None) if missing."""
+    if pid is None:
+        return None, None
+    async with get_session() as session:
+        row = await session.execute(text("SELECT slug, human_key FROM projects WHERE id = :pid"), {"pid": pid})
+        res = row.fetchone()
+        if not res:
+            return None, None
+        return (res[0], res[1])
 
 
 __all__ = ["build_http_app", "main"]
@@ -123,6 +147,33 @@ def _configure_logging(settings: Settings) -> None:
     _LOGGING_CONFIGURED = True
 
 
+def _has_forwarded_headers(request: Request) -> bool:
+    """Return True if the request contains standard reverse-proxy forwarding headers."""
+    forwarded = request.headers.get("X-Forwarded-For") or request.headers.get("X-Real-IP")
+    return bool(forwarded)
+
+
+def _is_trusted_localhost(request: Request) -> bool:
+    """Return True if the request is from a trusted localhost source.
+
+    When the server runs behind a reverse proxy on the same host, the proxy's
+    outbound socket appears as 127.0.0.1. We only trust localhost as "local"
+    when either the connection is direct (no forwarded headers, meaning the
+    client is truly on the same machine) or when the request comes from the
+    loopback interface explicitly (::1). This prevents unauthenticated
+    access when a reverse proxy sits in front of the server.
+    """
+    try:
+        client_host = request.client.host if request.client else ""
+    except Exception:
+        return False
+    if client_host not in {"127.0.0.1", "::1", "localhost"}:
+        return False
+    # Require forwarding headers to be present before trusting a loopback address,
+    # unless the request comes from ::1 (kernel-level loopback, not a forwarded socket).
+    return client_host == "::1" or _has_forwarded_headers(request)
+
+
 class BearerAuthMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: FastAPI, token: str, allow_localhost: bool = False) -> None:
         super().__init__(app)
@@ -130,16 +181,13 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         self._allow_localhost = allow_localhost
 
     async def dispatch(self, request: Request, call_next):
+        path = request.url.path or ""
         if request.method == "OPTIONS":  # allow CORS preflight
             return await call_next(request)
-        if request.url.path.startswith("/health/"):
+        if path.startswith("/health/") or path in {"/slack/events", "/slackbox/incoming"}:
             return await call_next(request)
-        # Allow localhost without Authorization when enabled
-        try:
-            client_host = request.client.host if request.client else ""
-        except Exception:
-            client_host = ""
-        if self._allow_localhost and client_host in {"127.0.0.1", "::1", "localhost"}:
+        # Allow localhost without Authorization when enabled (requires direct loopback or forwarded headers)
+        if self._allow_localhost and _is_trusted_localhost(request):
             return await call_next(request)
         auth_header = request.headers.get("Authorization", "")
         if auth_header != f"Bearer {self._token}":
@@ -301,8 +349,21 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
         return True
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint):
-        # Allow CORS preflight and health endpoints
-        if request.method == "OPTIONS" or request.url.path.startswith("/health/"):
+        # Allow CORS preflight and health checks
+        path = request.url.path or ""
+        if request.method == "OPTIONS" or path.startswith("/health/"):
+            return await call_next(request)
+
+        # Apply dedicated rate limiting for Slack webhooks
+        if path == "/slack/events":
+            slack_rpm = int(getattr(self.settings.http, "rate_limit_slack_per_minute", 120) or 120)
+            slack_burst = int(getattr(self.settings.http, "rate_limit_slack_burst", 0) or 0)
+            slack_burst = slack_burst if slack_burst > 0 else max(1, slack_rpm)
+            client_ip = request.client.host if request.client else "unknown"
+            key = f"slack:{client_ip}"
+            allowed = await self._consume_bucket(key, slack_rpm, slack_burst)
+            if not allowed:
+                return JSONResponse({"detail": "Rate limit exceeded"}, status_code=status.HTTP_429_TOO_MANY_REQUESTS)
             return await call_next(request)
 
         # Only read/patch body for POST requests. GET (including SSE) must not receive http.request messages.
@@ -311,14 +372,14 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
             try:
                 body_bytes = await request.body()
 
-                async def _receive() -> dict:
+                async def _receive() -> dict[str, Any]:
                     return {"type": "http.request", "body": body_bytes, "more_body": False}
 
                 cast(Any, request)._receive = _receive
             except Exception:
                 body_bytes = b""
 
-        kind, tool_name = self._classify_request(request.url.path, request.method, body_bytes)
+        kind, tool_name = self._classify_request(path, request.method, body_bytes)
 
         # JWT auth (if enabled)
         if self._jwt_enabled:
@@ -343,27 +404,15 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
         else:
             roles = {self._default_role}
             # Elevate localhost to writer when unauthenticated localhost is allowed
-            try:
-                client_host = request.client.host if request.client else ""
-            except Exception:
-                client_host = ""
-            if bool(getattr(self.settings.http, "allow_localhost_unauthenticated", False)) and client_host in {
-                "127.0.0.1",
-                "::1",
-                "localhost",
-            }:
+            if bool(getattr(self.settings.http, "allow_localhost_unauthenticated", False)) and _is_trusted_localhost(
+                request
+            ):
                 roles.add("writer")
 
         # RBAC enforcement (skip for localhost when allowed)
-        try:
-            client_host = request.client.host if request.client else ""
-        except Exception:
-            client_host = ""
-        is_local_ok = bool(getattr(self.settings.http, "allow_localhost_unauthenticated", False)) and client_host in {
-            "127.0.0.1",
-            "::1",
-            "localhost",
-        }
+        is_local_ok = bool(
+            getattr(self.settings.http, "allow_localhost_unauthenticated", False)
+        ) and _is_trusted_localhost(request)
         # When RBAC is enabled but no authentication mechanism is available, return 401
         if self._rbac_enabled and not is_local_ok and kind in {"tools", "resources"}:
             # If JWT is not enabled AND bearer token is not configured, there's no way to authenticate
@@ -600,9 +649,15 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                                     hid2 = hid_row2.scalar_one_or_none()
                                                     if isinstance(hid2, int):
                                                         holder_agent_id = hid2
+                                                        (
+                                                            project_slug,
+                                                            project_human_key,
+                                                        ) = await _project_identifiers_from_id(project_id)
                                                         # Write profile.json to archive
                                                         archive = await ensure_archive(
-                                                            settings, (await _project_slug_from_id(project_id)) or ""
+                                                            settings,
+                                                            project_slug or "",
+                                                            project_key=project_human_key,
                                                         )
                                                         async with archive_write_lock(archive):
                                                             await write_agent_profile(
@@ -612,10 +667,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                                                     "name": settings.ack_escalation_claim_holder_name,
                                                                     "program": "ops",
                                                                     "model": "system",
-                                                                    "project_slug": (
-                                                                        await _project_slug_from_id(project_id)
-                                                                    )
-                                                                    or "",
+                                                                    "project_slug": project_slug or "",
                                                                     "inception_ts": now.astimezone().isoformat(),
                                                                     "inception_iso": now.astimezone().isoformat(),
                                                                     "task": "ops-escalation",
@@ -642,8 +694,10 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                             )
                                             await s2.commit()
                                         # Also write JSON artifact to archive
-                                        project_slug = (await _project_slug_from_id(project_id)) or ""
-                                        archive = await ensure_archive(settings, project_slug)
+                                        project_slug, project_human_key = await _project_identifiers_from_id(project_id)
+                                        archive = await ensure_archive(
+                                            settings, project_slug or "", project_key=project_human_key
+                                        )
                                         expires_at = now + _dt.timedelta(
                                             seconds=settings.ack_escalation_claim_ttl_seconds
                                         )
@@ -772,7 +826,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         for task in tasks:
             task.cancel()
         for task in tasks:
-            with contextlib.suppress(Exception):
+            # Suppress both Exception (pre-3.11 CancelledError) and BaseException CancelledError (3.11+)
+            with contextlib.suppress(Exception, asyncio.CancelledError):
                 await task
 
     from contextlib import asynccontextmanager
@@ -897,6 +952,347 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
     async def oauth_meta_root_mcp() -> JSONResponse:
         return JSONResponse({"mcp_oauth": False})
 
+    async def _ingest_slack_bridge_message(
+        message_info: dict[str, Any],
+        *,
+        logger: structlog.stdlib.BoundLogger,
+        dedupe_key: tuple[str, str] | None = None,
+        source: str = "slack",
+    ) -> JSONResponse:
+        """Shared ingestion path for Slack-derived payloads."""
+        from .models import Agent
+
+        slack_ts = message_info.get("slack_ts")
+        slack_channel = message_info.get("slack_channel")
+        cache_key = dedupe_key or ((slack_channel, slack_ts) if slack_ts and slack_channel else None)
+
+        if cache_key:
+            async with _slack_event_cache_lock:
+                if cache_key in _slack_event_cache:
+                    logger.info(
+                        "slack_message_duplicate_skipped",
+                        slack_ts=slack_ts,
+                        channel=slack_channel,
+                        source=source,
+                    )
+                    return JSONResponse({"ok": True, "message": "Duplicate Slack event skipped"})
+                # Pre-evict if deque is at capacity so set and deque stay in sync
+                if len(_slack_event_cache_order) >= _slack_event_cache_order.maxlen:
+                    old = _slack_event_cache_order.popleft()
+                    _slack_event_cache.discard(old)
+                _slack_event_cache.add(cache_key)
+                _slack_event_cache_order.append(cache_key)
+
+        # Route to the original thread's project if thread_id is provided, so Slack
+        # ack replies land in the same project as the original message.
+        thread_id = message_info.get("thread_id")
+        project = None
+        if thread_id:
+            async with get_session() as session:
+                if thread_id.isdigit():
+                    result = await session.execute(
+                        text(
+                            "SELECT p.id, p.slug, p.human_key FROM messages m JOIN projects p ON p.id = m.project_id WHERE m.id = :mid"
+                        ),
+                        {"mid": int(thread_id)},
+                    )
+                else:
+                    result = await session.execute(
+                        text("""
+                            SELECT p.id, p.slug, p.human_key
+                            FROM messages m
+                            JOIN projects p ON p.id = m.project_id
+                            WHERE m.thread_id = :tid
+                            ORDER BY m.id ASC
+                            LIMIT 1
+                        """),
+                        {"tid": thread_id},
+                    )
+                row = result.fetchone()
+                if row:
+                    from .models import Project
+
+                    project = Project(id=row[0], slug=row[1], human_key=row[2])
+                    logger.info(
+                        "slack_reply_routed_to_original_project",
+                        thread_id=thread_id,
+                        project_slug=project.slug,
+                        source=source,
+                    )
+        if not project:
+            # Fall back to sync_project_name for new Slack-originated threads
+            project = await _ensure_project(settings.slack.sync_project_name)
+
+        sender_name = message_info["sender_name"]
+        sender_agent = await _get_agent_by_name_optional(sender_name)
+
+        if not sender_agent:
+            async with get_session() as session:
+                sender_agent = Agent(
+                    name=sender_name,
+                    project_id=project.id,
+                    program="slack_bridge",
+                    model="slack-events",
+                    task_description="Bridges Slack messages into MCP Agent Mail",
+                    is_active=True,
+                )
+                session.add(sender_agent)
+                try:
+                    await session.commit()
+                    await session.refresh(sender_agent)
+                    logger.info("slack_bridge_agent_created", agent_name=sender_name)
+                except IntegrityError:
+                    await session.rollback()
+                    result = await session.execute(
+                        select(Agent).where(
+                            cast(Any, Agent.project_id) == project.id,
+                            cast(Any, Agent.name) == sender_name,
+                        )
+                    )
+                    existing_agent = result.scalars().first()
+                    if not existing_agent:
+                        raise
+                    sender_agent = existing_agent
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(Agent).where(
+                    cast(Any, Agent.project_id) == project.id,
+                    cast(Any, Agent.is_active).is_(True),
+                    cast(Any, Agent.id) != sender_agent.id,
+                )
+            )
+            recipient_agents = list(result.scalars().all())
+
+        if not recipient_agents:
+            logger.warning("slack_no_recipients", project=project.slug, source=source)
+            return JSONResponse({"ok": True, "message": "No active recipients"})
+
+        recipients_list = [(agent, "to") for agent in recipient_agents]
+        message = await _create_message(
+            project=project,
+            sender=sender_agent,
+            subject=message_info["subject"],
+            body_md=message_info["body_md"],
+            recipients=recipients_list,
+            importance="normal",
+            ack_required=False,
+            thread_id=message_info.get("thread_id"),
+            attachments=[],
+        )
+
+        to_agents = [r[0] for r in recipients_list if r[1] == "to"]
+        cc_agents = [r[0] for r in recipients_list if r[1] == "cc"]
+        bcc_agents = [r[0] for r in recipients_list if r[1] == "bcc"]
+        frontmatter = _message_frontmatter(
+            message=message,
+            project=project,
+            sender=sender_agent,
+            to_agents=to_agents,
+            cc_agents=cc_agents,
+            bcc_agents=bcc_agents,
+            attachments=[],
+        )
+
+        async def _persist_archive() -> None:
+            try:
+                archive = await ensure_archive(settings, project.slug)
+                await write_message_bundle(
+                    archive=archive,
+                    message=frontmatter,
+                    body_md=message.body_md,
+                    sender=sender_agent.name,
+                    recipients=[agent.name for agent in recipient_agents],
+                    extra_paths=[],
+                )
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.error("slack_archive_write_failed", error=str(exc), source=source)
+
+        _archive_task = asyncio.create_task(_persist_archive())
+        _ = _archive_task
+
+        slack_client_ref = None
+        try:
+            from .app import _slack_client as _global_slack_client
+
+            slack_client_ref = _global_slack_client
+        except Exception:
+            slack_client_ref = None
+
+        slack_thread_ts = message_info.get("slack_thread_ts") or message_info.get("slack_ts")
+        slack_channel_id = message_info.get("slack_channel")
+        if slack_client_ref and message_info.get("thread_id") and slack_thread_ts and slack_channel_id:
+            try:
+                await slack_client_ref.map_thread(
+                    mcp_thread_id=message_info["thread_id"],
+                    slack_channel_id=slack_channel_id,
+                    slack_thread_ts=slack_thread_ts,
+                )
+            except Exception as exc:
+                logger.warning("slack_thread_map_failed", error=str(exc), source=source)
+
+        logger.info(
+            "slack_message_ingested",
+            message_id=message.id,
+            thread_id=message.thread_id,
+            slack_ts=slack_ts,
+            source=source,
+        )
+
+        return JSONResponse({"ok": True, "message": "Message created"})
+
+    # Slack Events API webhook endpoint for bidirectional sync
+    @fastapi_app.post("/slack/events")
+    async def slack_events_webhook(request: Request) -> JSONResponse:
+        """Handle incoming Slack events for bidirectional sync.
+
+        Implements:
+        - URL verification challenge (for Slack app setup)
+        - Signature verification (security)
+        - Message event processing (Slack → MCP Mail sync)
+        - Reaction handling (optional acknowledgment sync)
+
+        Reference: https://api.slack.com/apis/connections/events-api
+        """
+        logger = structlog.get_logger("slack")
+
+        if not settings.slack.enabled:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Slack integration disabled")
+
+        # Read raw body for signature verification
+        body_bytes = await request.body()
+
+        if not settings.slack.signing_secret:
+            logger.error("slack_signing_secret_missing")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Slack signing secret not configured",
+            )
+
+        from .slack_integration import SlackClient
+
+        timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
+        signature = request.headers.get("X-Slack-Signature", "")
+
+        if not SlackClient.verify_signature(
+            signing_secret=settings.slack.signing_secret,
+            timestamp=timestamp,
+            signature=signature,
+            body=body_bytes,
+        ):
+            logger.warning("slack_signature_verification_failed")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid signature")
+
+        # Parse JSON payload
+        try:
+            payload = json.loads(body_bytes.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            logger.error("slack_payload_decode_error", error=str(e))
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON") from e
+
+        event_type = payload.get("type")
+        logger.info("slack_event_received", event_type=event_type)
+
+        # Handle URL verification challenge (required for Slack app setup)
+        if event_type == "url_verification":
+            challenge = payload.get("challenge", "")
+            logger.info("slack_url_verification", challenge=challenge[:20])
+            return JSONResponse({"challenge": challenge})
+
+        # Handle event callback
+        if event_type == "event_callback":
+            event = payload.get("event", {})
+            event_subtype = event.get("type")
+            logger.info("slack_event_callback", subtype=event_subtype)
+
+            # Handle message events
+            if event_subtype == "message":
+                from .slack_integration import handle_slack_message_event
+
+                message_info = await handle_slack_message_event(event, settings)
+
+                if message_info:
+                    slack_ts = message_info.get("slack_ts")
+                    slack_channel = message_info.get("slack_channel")
+                    dedupe_key = (slack_channel, slack_ts) if slack_ts and slack_channel else None
+
+                    return await _ingest_slack_bridge_message(
+                        message_info,
+                        logger=logger,
+                        dedupe_key=dedupe_key,
+                        source="slack_events",
+                    )
+
+                else:
+                    # Message was filtered/ignored (e.g., bot message, wrong channel)
+                    return JSONResponse({"ok": True, "message": "Event ignored"})
+
+            # Handle reaction_added events (future: map to acknowledgments)
+            elif event_subtype == "reaction_added":
+                logger.info("slack_reaction_received", reaction=event.get("reaction"))
+                # TODO: Implement reaction → acknowledgment mapping
+                return JSONResponse({"ok": True, "message": "Reaction handling not yet implemented"})
+
+        # Return success for unhandled event types
+        return JSONResponse({"ok": True})
+
+    @fastapi_app.post("/slackbox/incoming")
+    async def slackbox_incoming(request: Request) -> JSONResponse:
+        """Handle legacy Slack outgoing webhook payloads (Slackbox)."""
+
+        logger = structlog.get_logger("slackbox")
+
+        if not settings.slack.slackbox_enabled:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Slackbox disabled")
+
+        form = await request.form()
+
+        token = (form.get("token") or "").strip()
+        expected_token = (settings.slack.slackbox_token or "").strip()
+        if not expected_token:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Slackbox token not configured",
+            )
+
+        if not hmac.compare_digest(token, expected_token):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Slackbox token")
+
+        text = (form.get("text") or "").strip()
+        if not text:
+            return JSONResponse({"ok": True, "message": "No text provided"})
+
+        channel_id = (form.get("channel_id") or form.get("channel_name") or "").strip()
+        if settings.slack.slackbox_channels and channel_id not in settings.slack.slackbox_channels:
+            logger.info("slackbox_channel_skipped", channel=channel_id)
+            return JSONResponse({"ok": True, "message": "Channel not allowed"})
+
+        timestamp = (form.get("timestamp") or form.get("ts") or "").strip()
+        dedupe_key = (channel_id, timestamp) if channel_id and timestamp else None
+
+        subject_line = text.split("\n", 1)[0].strip() or "Slackbox message"
+        subject_prefixed = f"{settings.slack.slackbox_subject_prefix} {subject_line}".strip()
+        subject = subject_prefixed[:120]
+
+        thread_id = f"slackbox_{channel_id}_{timestamp}" if channel_id and timestamp else None
+
+        message_info = {
+            "sender_name": settings.slack.slackbox_sender_name,
+            "subject": subject,
+            "body_md": text,
+            "thread_id": thread_id,
+            "slack_channel": channel_id,
+            "slack_ts": timestamp,
+            "slack_thread_ts": timestamp,
+        }
+
+        return await _ingest_slack_bridge_message(
+            message_info,
+            logger=logger,
+            dedupe_key=dedupe_key,
+            source="slackbox",
+        )
+
     # A minimal stateless ASGI adapter that does not rely on ASGI lifespan management
     # and runs a fresh StreamableHTTP transport per request.
     from mcp.server.streamable_http import StreamableHTTPServerTransport
@@ -1001,7 +1397,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         status_code = 200
         headers: dict[str, str] = {}
 
-        async def _send(message: MutableMapping[str, Any]) -> None:
+        async def _send(message: Mapping[str, Any]) -> None:
             nonlocal response_body, status_code, headers
             if message.get("type") == "http.response.start":
                 status_code = int(message.get("status", 200))
@@ -1732,7 +2128,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             commit_sha = None
             try:
                 settings = get_settings()
-                archive = await ensure_archive(settings, prow[1])
+                archive = await ensure_archive(settings, prow[1], project_key=prow[2])
                 commit_sha = await get_message_commit_sha(archive, mid)
             except Exception:
                 pass  # Commit SHA is optional
@@ -2389,7 +2785,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     from .storage import ensure_archive, write_message_bundle
 
                     settings = get_settings()
-                    archive = await ensure_archive(settings, project_slug)
+                    archive = await ensure_archive(settings, project_slug, project_key=project_human_key)
 
                     # Build message dict for Git
                     message_dict = {
@@ -2639,8 +3035,16 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             if not _validate_project_slug(project):
                 return await _render("error.html", message="Invalid project identifier")
 
+            async with get_session() as session:
+                human_row = (
+                    await session.execute(
+                        text("SELECT human_key FROM projects WHERE slug = :s OR human_key = :s"), {"s": project}
+                    )
+                ).fetchone()
+                project_human_key = human_row[0] if human_row else None
+
             settings = get_settings()
-            archive = await ensure_archive(settings, project)
+            archive = await ensure_archive(settings, project, project_key=project_human_key)
             tree = await get_archive_tree(archive, path)
 
             return await _render("archive_browser.html", tree=tree, project=project, path=path)
@@ -2653,8 +3057,15 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 raise HTTPException(status_code=400, detail="Invalid project identifier")
 
             try:
+                async with get_session() as session:
+                    human_row = (
+                        await session.execute(
+                            text("SELECT human_key FROM projects WHERE slug = :s OR human_key = :s"), {"s": project}
+                        )
+                    ).fetchone()
+                    project_human_key = human_row[0] if human_row else None
                 settings = get_settings()
-                archive = await ensure_archive(settings, project)
+                archive = await ensure_archive(settings, project, project_key=project_human_key)
                 content = await get_file_content(archive, path)
 
                 if content is None:
@@ -2761,7 +3172,14 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             try:
                 # Get project archive
                 settings = get_settings()
-                repo = await ensure_archive(settings, project)
+                async with get_session() as session:
+                    human_row = (
+                        await session.execute(
+                            text("SELECT human_key FROM projects WHERE slug = :s OR human_key = :s"), {"s": project}
+                        )
+                    ).fetchone()
+                    project_human_key = human_row[0] if human_row else None
+                repo = await ensure_archive(settings, project, project_key=project_human_key)
 
                 # Get historical snapshot
                 snapshot = await get_historical_inbox_snapshot(repo, agent, timestamp, limit=200)

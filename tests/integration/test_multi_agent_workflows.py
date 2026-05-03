@@ -13,8 +13,8 @@ These tests validate end-to-end agent coordination scenarios:
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
+import anyio
 import pytest
 
 from mcp_agent_mail.config import get_settings
@@ -97,9 +97,9 @@ async def test_basic_agent_registration_and_messaging(mcp_client, tmp_path):
     assert inbox_messages[0]["from"] == agent1_name
 
     # Verify .mcp_mail/ directory structure exists
-    storage_root = Path(settings.storage.root)
+    storage_root = anyio.Path(settings.storage.root)
     # The storage structure is under storage_root, organized by project
-    assert storage_root.exists()
+    assert await storage_root.exists()
 
 
 @pytest.mark.asyncio
@@ -559,18 +559,21 @@ async def test_message_search(mcp_client, tmp_path):
         },
     )
 
-    # Search for "authentication"
+    # Search for "authentication" using search_mailbox (core tool)
     search_result = await mcp_client.call_tool(
-        "search_messages",
+        "search_mailbox",
         {
             "project_key": str(project_path),
             "query": "authentication",
             "limit": 10,
+            "include_bodies": True,
         },
     )
 
-    # search_messages returns a list directly in structured_content
-    results = search_result.structured_content
+    # search_mailbox returns structured content; normalize to a list
+    results = search_result.structured_content or []
+    if isinstance(results, dict) and "result" in results:
+        results = results["result"]
     # Should find 2 messages mentioning authentication
     assert len(results) >= 2
 

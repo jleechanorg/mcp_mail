@@ -14,6 +14,9 @@ cd "$ROOT_DIR"
 echo "==> Installing dependencies (uv sync)"
 uv sync --dev
 
+echo "==> Setting git core.hooksPath to .githooks"
+git config core.hooksPath .githooks
+
 if [ ! -f .env ]; then
   echo "==> No .env found; copying from deploy/env/example.env"
   cp deploy/env/example.env .env
@@ -47,12 +50,14 @@ echo "==> Ensuring storage archive exists"
 uv run python - <<'PY'
 import asyncio
 from mcp_agent_mail.config import get_settings
-from mcp_agent_mail.storage import ensure_archive_root
+from mcp_agent_mail.storage import ensure_archive, ensure_archive_root
 
 
 async def _main() -> None:
     settings = get_settings()
-    repo_root, _repo = await ensure_archive_root(settings)
+    slug = "bootstrap"
+    repo_root, _ = await ensure_archive_root(settings, project_key=None, slug=slug)
+    archive = await ensure_archive(settings, slug=slug, project_key=None)
     print(f"Storage archive ready at {repo_root}")
 
 
