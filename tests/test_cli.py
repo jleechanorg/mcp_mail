@@ -51,6 +51,18 @@ def test_cli_serve_http_uses_settings(isolated_env, monkeypatch):
     assert call_args["port"] == 8765
 
 
+def test_cli_serve_http_rejects_python_314(monkeypatch):
+    runner = CliRunner()
+    monkeypatch.setattr("mcp_agent_mail.cli.sys.version_info", (3, 14, 0))
+
+    result = runner.invoke(app, ["serve-http"])
+
+    combined_output = f"{result.stdout}\n{result.stderr}"
+    assert result.exit_code != 0
+    assert "Python 3.14+ is not supported" in combined_output
+    assert "Python 3.11, 3.12, or 3.13" in combined_output
+
+
 def test_cli_migrate(monkeypatch):
     runner = CliRunner()
     invoked: dict[str, bool] = {"called": False}

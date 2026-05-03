@@ -11,25 +11,12 @@ import pytest
 from fastmcp import Client
 
 from mcp_agent_mail.app import build_mcp_server
+from tests.conftest import extract_result, get_field
 
 
 def get_global_inbox_name(project_slug: str) -> str:
     """Get project-specific global inbox name."""
     return f"global-inbox-{project_slug}"
-
-
-def _get(field: str, obj):
-    """Get field from dict or object"""
-    if isinstance(obj, dict):
-        return obj.get(field)
-    return getattr(obj, field, None)
-
-
-def _extract_result(call_result):
-    """Extract the actual data from a CallToolResult."""
-    if hasattr(call_result, "structured_content") and call_result.structured_content:
-        return call_result.structured_content.get("result", call_result.data)
-    return call_result.data
 
 
 @pytest.mark.asyncio
@@ -70,10 +57,10 @@ async def test_inbox_includes_direct_messages_to_agent_from_global_inbox(isolate
             {"project_key": "test-project", "agent_name": "Charlie"},
         )
 
-        messages = _extract_result(charlie_inbox)
+        messages = extract_result(charlie_inbox)
 
         # Charlie should NOT see this message since they're not a recipient and not mentioned
-        found = any(_get("subject", msg) == "Direct to Bob" for msg in messages)
+        found = any(get_field("subject", msg) == "Direct to Bob" for msg in messages)
         assert not found, "Charlie should not see message not addressed to them and not mentioning them"
 
         # Bob fetches their inbox
@@ -82,10 +69,10 @@ async def test_inbox_includes_direct_messages_to_agent_from_global_inbox(isolate
             {"project_key": "test-project", "agent_name": "Bob"},
         )
 
-        bob_messages = _extract_result(bob_inbox)
+        bob_messages = extract_result(bob_inbox)
 
         # Bob should see the message (they're a direct recipient)
-        found = any(_get("subject", msg) == "Direct to Bob" for msg in bob_messages)
+        found = any(get_field("subject", msg) == "Direct to Bob" for msg in bob_messages)
         assert found, "Bob should see message addressed to them"
 
 
@@ -127,15 +114,15 @@ async def test_inbox_includes_messages_mentioning_agent_from_global_inbox(isolat
             {"project_key": "test-project", "agent_name": "Charlie"},
         )
 
-        messages = _extract_result(charlie_inbox)
+        messages = extract_result(charlie_inbox)
 
         # Charlie should see this message because they're mentioned in the body
         found = False
         for msg in messages:
-            if _get("subject", msg) == "Discussing Charlie":
+            if get_field("subject", msg) == "Discussing Charlie":
                 found = True
                 # Verify it's marked as from global inbox scan
-                source = _get("source", msg)
+                source = get_field("source", msg)
                 assert source == "global_inbox_mention", f"Expected source='global_inbox_mention', got '{source}'"
                 break
 
@@ -181,10 +168,10 @@ async def test_inbox_includes_cc_messages_from_global_inbox(isolated_env):
             {"project_key": "test-project", "agent_name": "Charlie"},
         )
 
-        messages = _extract_result(charlie_inbox)
+        messages = extract_result(charlie_inbox)
 
         # Charlie should see this message (they're cc'd, which means they're already a direct recipient)
-        found = any(_get("subject", msg) == "CC'd to Charlie" for msg in messages)
+        found = any(get_field("subject", msg) == "CC'd to Charlie" for msg in messages)
         assert found, "Charlie should see message where they are cc'd"
 
 
@@ -222,10 +209,10 @@ async def test_inbox_deduplicates_messages_from_global_inbox(isolated_env):
             {"project_key": "test-project", "agent_name": "Bob"},
         )
 
-        messages = _extract_result(bob_inbox)
+        messages = extract_result(bob_inbox)
 
         # Count how many times the message appears
-        count = sum(1 for msg in messages if _get("subject", msg) == "Direct Message")
+        count = sum(1 for msg in messages if get_field("subject", msg) == "Direct Message")
 
         # Should appear exactly once (not duplicated from global inbox)
         assert count == 1, f"Message should appear exactly once, but appeared {count} times"
@@ -269,10 +256,10 @@ async def test_inbox_mention_detection_case_insensitive(isolated_env):
             {"project_key": "test-project", "agent_name": "Charlie"},
         )
 
-        messages = _extract_result(charlie_inbox)
+        messages = extract_result(charlie_inbox)
 
         # Charlie should see this message (case-insensitive mention)
-        found = any(_get("subject", msg) == "About charlie" for msg in messages)
+        found = any(get_field("subject", msg) == "About charlie" for msg in messages)
         assert found, "Charlie should see message mentioning them (case-insensitive)"
 
 
@@ -315,7 +302,7 @@ async def test_inbox_global_scan_respects_limit(isolated_env):
             {"project_key": "test-project", "agent_name": "Charlie", "limit": 2},
         )
 
-        messages = _extract_result(charlie_inbox)
+        messages = extract_result(charlie_inbox)
 
         # Should get at most 2 messages (respecting limit)
         assert len(messages) <= 2, f"Expected at most 2 messages, got {len(messages)}"
