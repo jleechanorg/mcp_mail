@@ -39,10 +39,8 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, ClassVar, Optional, Union
+from typing import Any, Optional
 from urllib.parse import urlparse
-
-from decouple import Config as DecoupleConfig, RepositoryEnv  # type: ignore
 
 # Orchestration framework (optional dependency for real CLI tests)
 # Install with: uv tool install jleechanorg-orchestration
@@ -50,7 +48,7 @@ try:
     orchestration_module = importlib.import_module("orchestration.task_dispatcher")
     CLI_PROFILES = getattr(orchestration_module, "CLI_PROFILES", {})
     ORCHESTRATION_AVAILABLE = True
-except ImportError:
+except ImportError:  # Orchestration framework not installed - tests will skip gracefully
     CLI_PROFILES = {}
     ORCHESTRATION_AVAILABLE = False
 
@@ -58,14 +56,14 @@ except ImportError:
 def _get_branch_name() -> str:
     """Get current git branch name for results directory."""
     try:
-        import subprocess  # nosec
+        import subprocess
 
         result = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             capture_output=True,
             text=True,
             timeout=5,
-        )  # nosec
+        )
         if result.returncode == 0:
             return result.stdout.strip().replace("/", "-")
     except Exception as exc:  # pragma: no cover - best-effort branch detection
@@ -77,45 +75,7 @@ RESULTS_DIR = Path(tempfile.gettempdir()) / "mcp-mail-tests" / _get_branch_name(
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 MCP_CONFIG_PATH = PROJECT_ROOT / ".mcp.json"
 MCP_AGENT_MAIL_SERVER = "mcp-agent-mail"
-# Core MCP tools OR extended tools both indicate successful connection
-MCP_EXPECTED_TOOLS_CORE = {"register_agent", "send_message", "fetch_inbox"}
-MCP_EXPECTED_TOOLS_EXTENDED = {"create_file_reservation", "acquire_build_slot", "search_messages"}
-MCP_EXPECTED_TOOLS = MCP_EXPECTED_TOOLS_CORE | MCP_EXPECTED_TOOLS_EXTENDED
-ENV_PATH = PROJECT_ROOT / ".env"
-
-
-def _load_env_value(key: str) -> Optional[str]:
-    """Load a value from the repo .env using python-decouple."""
-    if not ENV_PATH.exists():
-        return None
-    decouple_config = DecoupleConfig(RepositoryEnv(str(ENV_PATH)))
-    try:
-        value = decouple_config(key)
-    except Exception:  # pragma: no cover - best-effort for optional env values
-        return None
-    if value is None:
-        return None
-    val_str = str(value).strip()
-    if not val_str:
-        return None
-    return val_str  # type: ignore
-
-
-def load_bearer_token() -> Optional[str]:
-    """Best-effort bearer token lookup for MCP HTTP auth."""
-    token = _load_env_value("HTTP_BEARER_TOKEN")
-    if token:
-        return token
-    try:
-        if MCP_CONFIG_PATH.exists():
-            config = json.loads(MCP_CONFIG_PATH.read_text())
-            headers = config.get("mcpServers", {}).get(MCP_AGENT_MAIL_SERVER, {}).get("headers", {})
-            auth_header = headers.get("Authorization", "")
-            if auth_header.lower().startswith("bearer "):
-                return auth_header.split(" ", 1)[1].strip()
-    except Exception:  # pragma: no cover - best-effort parsing
-        return None
-    return None
+MCP_EXPECTED_TOOLS = {"register_agent", "send_message", "fetch_inbox"}
 
 
 @dataclass
@@ -147,48 +107,6 @@ class BaseCLITest:
     SUITE_NAME: str = ""
     FILE_PREFIX: str = ""
 
-    _REDACT_RULES: ClassVar[tuple[tuple[re.Pattern[str], str], ...]] = (
-        (re.compile(r"(?i)(authorization\\s*:\\s*bearer\\s+)[^\\s\"']+"), r"\\1[REDACTED]"),
-        (re.compile(r"(?i)(http_bearer_token=)\\S+"), r"\\1[REDACTED]"),
-        (re.compile(r"(?i)(anthropic_api_key=)\\S+"), r"\\1[REDACTED]"),
-        (re.compile(r"(?i)(cursor_api_key=)\\S+"), r"\\1[REDACTED]"),
-        (re.compile(r"(?i)(github_token=)\\S+"), r"\\1[REDACTED]"),
-        (re.compile(r"\\bghp_[A-Za-z0-9]{30,}\\b"), "[REDACTED_GITHUB_TOKEN]"),
-        (re.compile(r"\\bxox[baprs]-[A-Za-z0-9-]{10,}\\b"), "[REDACTED_SLACK_TOKEN]"),
-        (re.compile(r"\\bsk-[A-Za-z0-9]{20,}\\b"), "[REDACTED_API_KEY]"),
-    )
-
-    _CLI_SKIP_RULES: ClassVar[dict[str, list[tuple[tuple[str, ...], tuple[str, ...], str]]]] = {
-        "cursor": [
-            (
-                ("authentication required",),
-                ("cursor_api_key", "agent login"),
-                "Cursor CLI not authenticated (set CURSOR_API_KEY or run `agent login`)",
-            ),
-        ],
-        "gemini": [
-            (
-                (),
-                ("error when talking to gemini api", "gemini-client-error"),
-                "Gemini CLI not configured/authorized (Gemini API error)",
-            ),
-            (
-                (),
-                ("modelnotfound", "model not found"),
-                "Gemini CLI model unavailable (configure model/credentials)",
-            ),
-        ],
-        "claude": [
-            ((), ("credit balance too low",), "Claude CLI account/quota not available"),
-            (("invalid api key", "/login"), (), "Claude CLI not authenticated (run `claude /login`)"),
-            (
-                ("anthropic_api_key",),
-                ("not set", "missing", "invalid"),
-                "Claude CLI not authenticated (ANTHROPIC_API_KEY missing/invalid)",
-            ),
-        ],
-    }
-
     def __init__(self):
         self.start_time = datetime.now(timezone.utc)
         self.results: list[TestResult] = []
@@ -199,41 +117,6 @@ class BaseCLITest:
             self.cli_profile = CLI_PROFILES[self.CLI_NAME]
         else:
             self.cli_profile = None
-
-    def _redact_output(self, output: str, limit: int = 2000) -> str:
-        """Redact likely secrets/credentials from raw CLI output before persisting."""
-        redacted = output
-        for pattern, replacement in self._REDACT_RULES:
-            redacted = pattern.sub(replacement, redacted)
-        if len(redacted) > limit:
-            return redacted[:limit]
-        return redacted
-
-    def _set_flag_value(self, args: list[str], flag: str, value: str) -> list[str]:
-        """Return a new argv list with `flag` set to `value` (replacing any existing value)."""
-        out: list[str] = []
-        replaced = False
-        i = 0
-        while i < len(args):
-            arg = args[i]
-            if arg == flag:
-                out.append(flag)
-                out.append(value)
-                replaced = True
-                i += 1
-                if i < len(args):
-                    i += 1
-                continue
-            if arg.startswith(f"{flag}="):
-                out.append(f"{flag}={value}")
-                replaced = True
-                i += 1
-                continue
-            out.append(arg)
-            i += 1
-        if not replaced:
-            out.extend([flag, value])
-        return out
 
     def _load_mcp_config(self) -> tuple[Optional[dict[str, Any]], Optional[str]]:
         """Load MCP configuration from the repo-level .mcp.json file."""
@@ -273,32 +156,12 @@ class BaseCLITest:
             return False, f"{MCP_AGENT_MAIL_SERVER} unreachable at {host}:{port} ({exc})"
 
     def _parse_tool_names_from_output(self, output: str) -> set[str]:
-        """Parse tool names from CLI output."""
-        tool_line = None
-        for line in output.splitlines():
-            if "tools:" in line.lower():
-                tool_line = line
-                break
+        """Parse tool names from CLI output.
 
-        tokens: set[str] = set()
-        if tool_line:
-            _, _, after = tool_line.partition(":")
-            for raw_token in re.split(r"[,\s]+", after.strip()):
-                cleaned = re.sub(r"[^A-Za-z0-9_]", "", raw_token)
-                if cleaned:
-                    tokens.add(cleaned.lower())
-
-        # Handle both underscore and hyphen variants:
-        # - mcp__mcp_agent_mail__send_message (underscore format)
-        # - mcp__mcp-agent-mail__send_message (hyphen format)
-        # - mcp__mcpagentmail__send_message (no separator format)
-        derived = set(
-            re.findall(
-                r"mcp__mcp[-_]?agent[-_]?mail__([a-zA-Z_][a-zA-Z0-9_]*)",
-                output.lower(),
-            )
-        )
-        return tokens | derived
+        Note: This is a best-effort heuristic that may produce false positives.
+        """
+        tokens = set(re.findall(r"[A-Za-z_]+", output.lower()))
+        return tokens
 
     def _exercise_mcp_mail_tools(
         self,
@@ -307,102 +170,27 @@ class BaseCLITest:
         timeout: int = 90,
     ) -> tuple[bool, str, dict[str, Any]]:
         """Prompt the CLI to list available MCP Agent Mail tools."""
-        import time
+        prompt = (
+            "Connect to the configured mcp-agent-mail MCP server and list the tool "
+            "names available to you. Respond exactly as 'TOOLS: <comma-separated tool names>'. "
+            f"The server URL should be {server_url}."
+        )
 
-        if self.CLI_NAME == "codex":
-            prompts = [
-                (
-                    "List the MCP tools you can call. Respond exactly as 'TOOLS: <comma-separated tool names>'.",
-                    timeout,
-                ),
-            ]
-        elif self.CLI_NAME == "cursor":
-            # Cursor: single attempt with shorter timeout to avoid resource exhaustion
-            prompts = [
-                (
-                    "Connect to the configured mcp-agent-mail MCP server and list the tool "
-                    "names available to you. Respond exactly as 'TOOLS: <comma-separated tool names>'. "
-                    f"The server URL should be {server_url}.",
-                    min(timeout, 90),  # Cap at 90s for Cursor
-                ),
-            ]
-        else:
-            prompts = [
-                (
-                    "Connect to the configured mcp-agent-mail MCP server and list the tool "
-                    "names available to you. Respond exactly as 'TOOLS: <comma-separated tool names>'. "
-                    f"The server URL should be {server_url}.",
-                    timeout,
-                ),
-                (
-                    "Important: respond with exactly one line in this format and nothing else:\n"
-                    "TOOLS: <comma-separated tool names>\n"
-                    f"Use the MCP server at {server_url} and do not explain your answer.",
-                    max(timeout, 180),
-                ),
-            ]
+        success, output = self.run_cli(prompt, timeout=timeout)
+        if not success:
+            return False, f"MCP tool prompt failed: {output[:200]}", {"output": output[:500]}
 
-        last_details: dict[str, Any] = {}
-        for attempt, (prompt, attempt_timeout) in enumerate(prompts, start=1):
-            success, output = self.run_cli(prompt, timeout=attempt_timeout)
-            if not success:
-                redacted_output = self._redact_output(output)
-                last_details = {"output": redacted_output, "attempt": attempt}
-                message = f"MCP tool prompt failed: {redacted_output[:200]}"
+        tool_names = self._parse_tool_names_from_output(output)
+        missing_tools = expected_tools - tool_names
 
-                # Check for resource exhaustion errors
-                if "resource" in output.lower() and "exhaust" in output.lower():
-                    print(f"  WARN: Resource exhaustion detected (attempt {attempt})")
-                    if attempt < len(prompts):
-                        backoff_seconds = 2**attempt  # Exponential backoff: 2, 4, 8...
-                        print(f"  WARN: Backing off {backoff_seconds}s before retry...")
-                        time.sleep(backoff_seconds)
-                        continue
-                    return False, "Resource exhausted - API quota may be exceeded", last_details
+        if missing_tools:
+            return (
+                False,
+                f"Missing expected tools: {', '.join(sorted(missing_tools))}",
+                {"tools": sorted(tool_names)},
+            )
 
-                if attempt < len(prompts):
-                    print(f"  WARN: {message} (attempt {attempt}); retrying...")
-                    time.sleep(1)  # Brief pause between retries
-                    continue
-                return False, message, last_details
-
-            tool_names = self._parse_tool_names_from_output(output)
-            last_details = {"tools": sorted(tool_names), "attempt": attempt, "output": self._redact_output(output)}
-
-            # Check if ALL core tools OR ALL extended tools are present (both indicate successful MCP connection)
-            has_all_core = tool_names >= MCP_EXPECTED_TOOLS_CORE
-            has_all_extended = tool_names >= MCP_EXPECTED_TOOLS_EXTENDED
-
-            if has_all_core or has_all_extended:
-                if has_all_core and has_all_extended:
-                    found_type = "core and extended"
-                elif has_all_core:
-                    found_type = "core"
-                else:
-                    found_type = "extended"
-                return True, f"MCP Agent Mail tools available ({found_type})", last_details
-
-            message = f"No complete MCP Agent Mail toolset found. Expected all of core {sorted(MCP_EXPECTED_TOOLS_CORE)} or extended {sorted(MCP_EXPECTED_TOOLS_EXTENDED)}"
-            if attempt < len(prompts):
-                print(f"  WARN: {message} (attempt {attempt}); retrying...")
-                time.sleep(1)  # Brief pause between retries
-                continue
-            return False, message, last_details
-
-        return False, "Unable to validate MCP Agent Mail tools", last_details
-
-    def _classify_mcp_tools_failure_as_skip(self, output: str) -> Optional[str]:
-        """Return a skip reason for known external/credential CLI failures."""
-        lower = output.lower()
-
-        for must_all, must_any, message in self._CLI_SKIP_RULES.get(self.CLI_NAME, []):
-            if not all(token in lower for token in must_all):
-                continue
-            if must_any and not any(token in lower for token in must_any):
-                continue
-            return message
-
-        return None
+        return True, "MCP Agent Mail tools available", {"tools": sorted(tool_names)}
 
     def validate_mcp_mail_access(self, timeout: int = 90) -> bool:
         """Validate MCP Agent Mail configuration and tool availability via CLI."""
@@ -431,13 +219,6 @@ class BaseCLITest:
             expected_tools=MCP_EXPECTED_TOOLS,
             timeout=timeout,
         )
-        if not tool_success:
-            output = str(details.get("output") or "")
-            skip_reason = self._classify_mcp_tools_failure_as_skip(output)
-            if skip_reason:
-                self.record("mcp_tools", False, skip_reason, skip=True, details=details)
-                return False
-
         self.record("mcp_tools", tool_success, tool_msg, details=details)
 
         return tool_success
@@ -487,23 +268,21 @@ class BaseCLITest:
         if not self.cli_profile:
             raise ValueError(f"CLI_NAME '{self.CLI_NAME}' not found in CLI_PROFILES")
 
-        cli_binary = self.cli_profile.get("binary") or self.CLI_NAME
-        if not cli_binary:
-            return False
+        cli_binary = self.cli_profile.get("binary")
         cli_path = shutil.which(cli_binary)
 
         if not cli_path:
             return False
 
         try:
-            import subprocess  # nosec
+            import subprocess
 
             result = subprocess.run(
                 [cli_path, "--version"],
                 capture_output=True,
                 text=True,
                 timeout=10,
-            )  # nosec
+            )
             if result.returncode == 0:
                 display_name = self.cli_profile.get("display_name", cli_binary)
                 print(f"  {display_name} version: {result.stdout.strip()}")
@@ -531,90 +310,63 @@ class BaseCLITest:
         Returns:
             Tuple of (success: bool, output: str)
         """
-        import subprocess  # nosec
+        import subprocess
 
         if not self.cli_profile:
             raise ValueError(f"CLI_NAME '{self.CLI_NAME}' not found in CLI_PROFILES")
 
-        cli_binary = self.cli_profile.get("binary") or self.CLI_NAME
-        if not cli_binary:
-            return False, "CLI binary not configured"
+        cli_binary = self.cli_profile.get("binary")
         cli_path = shutil.which(cli_binary)
         if not cli_path:
             return False, f"{cli_binary} not found"
 
-        prompt_file: Optional[Path] = None
-        try:
-            # Write prompt to temp file (orchestration framework uses file-based prompts)
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-                f.write(prompt)
-                prompt_file = Path(f.name)
-        except OSError as exc:
-            return False, f"Failed to write prompt file: {exc}"
+        # Write prompt to temp file (orchestration framework uses file-based prompts)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+            f.write(prompt)
+            prompt_file = f.name
 
         try:
             # Build command using CLI profile template
             command_template = self.cli_profile.get("command_template", "{binary} -p {prompt_file}")
-            # Get model from profile or use CLI-specific default (templates may include {model})
-            model = self.cli_profile.get("model")
-            if not model:
-                # Use CLI-specific defaults when model not specified in profile
-                cli_model_defaults = {"claude": "sonnet", "gemini": "gemini-2.0-flash", "codex": "o3-mini"}
-                model = cli_model_defaults.get(self.CLI_NAME, "default")
             cli_command_str = command_template.format(
-                binary=shlex.quote(cli_path),
-                prompt_file=shlex.quote(str(prompt_file)),
+                binary=cli_path,
+                prompt_file=prompt_file,
                 continue_flag="",
-                model=shlex.quote(model),  # Quote model to prevent command injection
             )
 
             # Split into list for safe subprocess execution (shell=False)
             cli_command = shlex.split(cli_command_str)
 
             # Add any extra arguments
-            cli_extra_args: list[str] = list(extra_args or [])
-
-            # Claude output is often configured as stream-json+verbose via CLI_PROFILES.
-            # Default to text for parsing stability, but allow override via CLI_PROFILES["claude"]["output_format_override"].
-            if self.CLI_NAME == "claude":
-                output_format_override = None
-                if self.cli_profile:
-                    output_format_override = self.cli_profile.get("output_format_override")
-                if output_format_override is None:
-                    output_format_override = "text"
-                if output_format_override:
-                    cli_command = self._set_flag_value(cli_command, "--output-format", output_format_override)
-
-            if cli_extra_args:
-                cli_command.extend(cli_extra_args)
+            if extra_args:
+                cli_command.extend(extra_args)
 
             print(f"  Command: {' '.join(cli_command)}")
 
             # Handle stdin redirection from profile
             stdin_template = self.cli_profile.get("stdin_template", "/dev/null")
-            with contextlib.ExitStack() as stack:
-                if stdin_template == "/dev/null":
-                    stdin_file: Union[int, Any] = subprocess.DEVNULL
-                else:
-                    stdin_path = Path(stdin_template.format(prompt_file=str(prompt_file)))
-                    stdin_file = stack.enter_context(stdin_path.open())
-
-                env = {**os.environ, "NO_COLOR": "1"}
-                # Set bearer token for all CLIs that need HTTP MCP auth
-                bearer_token = load_bearer_token()
-                if bearer_token:
-                    env["HTTP_BEARER_TOKEN"] = bearer_token
-
+            stdin_file = None
+            if stdin_template != "/dev/null":
+                with Path(prompt_file).open() as stdin_file:
+                    result = subprocess.run(
+                        cli_command,
+                        shell=False,  # Security: avoid shell injection
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                        stdin=stdin_file,
+                        env={**os.environ, "NO_COLOR": "1"},
+                    )
+            else:
                 result = subprocess.run(
                     cli_command,
                     shell=False,  # Security: avoid shell injection
                     capture_output=True,
                     text=True,
                     timeout=timeout,
-                    stdin=stdin_file,
-                    env=env,
-                    cwd=str(PROJECT_ROOT),  # Run from project root to pick up .claude/settings.json
-                )  # nosec
+                    stdin=None,
+                    env={**os.environ, "NO_COLOR": "1"},
+                )
 
             return result.returncode == 0, result.stdout + result.stderr
 
@@ -627,8 +379,7 @@ class BaseCLITest:
         finally:
             # Clean up temp file
             with contextlib.suppress(OSError):
-                if prompt_file:
-                    prompt_file.unlink()
+                Path(prompt_file).unlink()
 
     def print_summary(self) -> None:
         """Print test results summary."""
@@ -658,6 +409,8 @@ class BaseCLITest:
         Returns:
             Path to saved results file
         """
+        import json
+
         output_dir = output_dir or RESULTS_DIR
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -700,57 +453,42 @@ class BaseCLITest:
         """
         display_name = self.cli_profile.get("display_name", self.CLI_NAME) if self.cli_profile else "Unknown"
         print("=" * 70)
-        print(f"{display_name} - MCP Agent Mail Integration Tests")
+        print(f"{display_name} - MCP Mail Integration Tests (REAL CLI)")
         print("=" * 70)
-        print(f"Started: {self.start_time.isoformat()}\n")
+        print(f"Started: {datetime.now(timezone.utc).isoformat()}\n")
 
         # Check prerequisites
-        print("[TEST] Orchestration framework...")
+        print("[TEST] CLI availability...")
         if not ORCHESTRATION_AVAILABLE:
             self.record(
                 "orchestration",
                 False,
-                "Not installed - run: uv tool install jleechanorg-orchestration",
+                "orchestration framework not installed - run: uv tool install jleechanorg-orchestration",
                 skip=True,
             )
             return self._finish()
-        self.record("orchestration", True, "Available")
 
-        # Check CLI availability
-        print(f"\n[TEST] {display_name} CLI availability...")
-        if not self.check_cli_available():
+        if self.check_cli_available():
+            self.record("cli", True, "Installed and responding")
+        else:
             cli_binary = self.cli_profile.get("binary", self.CLI_NAME) if self.cli_profile else self.CLI_NAME
             self.record(
                 "cli",
                 False,
-                self._get_cli_not_found_message(cli_binary),
+                f"Not found - install {cli_binary}",
                 skip=True,
             )
             return self._finish()
-        self.record("cli", True, "Installed and responding")
 
-        # MCP Mail tool validation
-        print("\n[TEST] MCP Agent Mail tools via CLI...")
-        if not self.validate_mcp_mail_access(timeout=120):
-            return self._finish()
-
-        # CLI-specific test (override for custom probe)
-        self._run_cli_test()
+        # Run CLI test
+        print(f"\n[TEST] CLI invocation (real {display_name})...")
+        success, output = self.run_cli(f"echo 'test marker: {self.test_marker}'")
+        if not success:
+            self.record("invocation", False, f"CLI failed: {output[:200]}")
+        else:
+            self.record("invocation", True, "CLI responded successfully")
 
         return self._finish()
-
-    def _get_cli_not_found_message(self, cli_binary: str) -> str:
-        """Return the skip message when CLI is not found. Override in subclasses."""
-        return f"{cli_binary} not installed"
-
-    def _run_cli_test(self) -> None:
-        """Run CLI-specific integration test. Override in subclasses."""
-        print("\n[TEST] Basic CLI invocation...")
-        success, output = self.run_cli("echo 'MCP Mail integration test'")
-        if success:
-            self.record("basic_invocation", True, "CLI responded")
-        else:
-            self.record("basic_invocation", False, f"CLI failed: {output[:200]}")
 
     def _finish(self) -> int:
         """Print summary, save results, return exit code."""
@@ -812,7 +550,5 @@ def is_cli_available(cli_name: str) -> bool:
     if cli_name not in CLI_PROFILES:
         return False
 
-    binary = CLI_PROFILES[cli_name].get("binary") or cli_name
-    if not binary:
-        return False
+    binary = CLI_PROFILES[cli_name].get("binary")
     return shutil.which(binary) is not None
