@@ -1,27 +1,42 @@
-# Real Claude Multi-Agent Coordination Test
+# Real CLI Multi-Agent Coordination Test
 > [!IMPORTANT]
-> **This test spawns REAL Claude Code CLI processes** that communicate via MCP Agent Mail
+> This test spawns **real CLI agents** (Codex CLI, Claude CLI, or Gemini CLI) that communicate via MCP Agent Mail.
 
 ## Test Objective
-Validate that multiple Claude Code CLI instances can coordinate through MCP Agent Mail by having real `claude` processes register as agents, send messages, and respond to each other.
+Validate that multiple real CLI instances can coordinate through MCP Agent Mail by registering as agents, exchanging messages, and responding to each other.
 
 ## Test Parameters
-- **Agent Count**: 3 Claude Code instances
+- **Agent Count**: 3 CLI instances
 - **Communication Pattern**: Chain messaging (Agent1 → Agent2 → Agent3 → Agent1)
 - **Expected Duration**: 60-120 seconds
-- **Uses**: Real `claude -p --dangerously-skip-permissions` processes
+- **CLIs supported**: Codex CLI (recommended fallback), Claude CLI, Gemini CLI
 
 ## Prerequisites
 - MCP Agent Mail server running on http://127.0.0.1:8765/mcp/
-- `claude` CLI installed and authenticated
-- ANTHROPIC_API_KEY commented out (using subscription)
+- At least one working CLI:
+  - **Codex CLI**: `codex exec "hello"`
+  - **Claude CLI**: `claude -p "hello"`
+  - **Gemini CLI**: `gemini "hello"` (if you see ModelNotFound/404, switch to Codex/Claude or adjust model flag)
+- MCP configs:
+  - Codex: `MCP_CONFIG=.codex/config.toml`
+  - Claude: `MCP_CONFIG=.mcp.json`
+  - Gemini: `GEMINI_CONFIG=./gemini.mcp.json`
+- **Agent names are global (not project-scoped).** To avoid collisions with prior runs, generate unique names:
+  ```bash
+  RUN_ID=$(date +"%Y%m%d_%H%M%S")
+  PROJECT_KEY="/tmp/real_cli_test_project_${RUN_ID}"
+  FRONTEND="FrontendDev-${RUN_ID}"
+  BACKEND="BackendDev-${RUN_ID}"
+  DBA="DatabaseAdmin-${RUN_ID}"
+  ```
+  Replace the names and project_key in the prompt files below before running.
 
 ## Test Setup
 
 ### 1. Create Evidence Directory
 ```bash
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-TEST_DIR="/tmp/real_claude_multiagent_${TIMESTAMP}"
+TEST_DIR="/tmp/real_cli_multiagent_${TIMESTAMP}"
 mkdir -p "$TEST_DIR"/{prompts,outputs,evidence}
 
 echo "TEST_DIR=$TEST_DIR"
@@ -38,17 +53,17 @@ ps aux | grep "mcp_agent_mail.*serve-http" | grep -v grep
 
 ### Step 1: Agent 1 - Registers and Sends Initial Message
 
-Create prompt file:
+Create prompt file (substitute your RUN_ID variables if you defined them):
 ```bash
 cat > "$TEST_DIR/prompts/agent1_task.txt" <<'EOF'
 You are Agent1 (FrontendDev). Your task:
 
 1. Register yourself using the mcp-agent-mail MCP server:
    - Use tool: register_agent
-   - project_key: "/tmp/real_claude_test_project"
+   - project_key: "/tmp/real_cli_test_project"
    - name: "FrontendDev"
-   - program: "claude-code"
-   - model: "sonnet-4.5"
+   - program: "codex-cli"
+   - model: "o3"
    - task_description: "React UI Development"
 
 2. Send a message to BackendDev:
@@ -71,17 +86,29 @@ You are Agent1 (FrontendDev). Your task:
 Save all output to demonstrate successful coordination.
 EOF
 ```
+> Note: If you are using Claude or Gemini, edit `program`/`model` in the prompt to match your CLI (e.g., `program: "claude-code", model: "sonnet-4.1"` or `program: "gemini-cli", model: "gemini-1.5-pro"`).
 
-Run Agent1:
-```bash
-claude -p --dangerously-skip-permissions "$(cat $TEST_DIR/prompts/agent1_task.txt)" > "$TEST_DIR/outputs/agent1_output.txt" 2>&1 &
-AGENT1_PID=$!
+Run Agent1 (pick ONE CLI; keep the same for all agents):
+- Codex CLI:
+  ```bash
+  MCP_CONFIG=.codex/config.toml codex exec --yolo "$(cat $TEST_DIR/prompts/agent1_task.txt)" > "$TEST_DIR/outputs/agent1_output.txt" 2>&1 &
+  AGENT1_PID=$!
+  ```
+- Claude CLI:
+  ```bash
+  MCP_CONFIG=.mcp.json claude -p --dangerously-skip-permissions "$(cat $TEST_DIR/prompts/agent1_task.txt)" > "$TEST_DIR/outputs/agent1_output.txt" 2>&1 &
+  AGENT1_PID=$!
+  ```
+- Gemini CLI:
+  ```bash
+  GEMINI_CONFIG=./gemini.mcp.json gemini --approval-mode yolo --allowed-mcp-server-names mcp-agent-mail "$(cat $TEST_DIR/prompts/agent1_task.txt)" > "$TEST_DIR/outputs/agent1_output.txt" 2>&1 &
+  AGENT1_PID=$!
+  ```
 echo "Agent1 (FrontendDev) started - PID: $AGENT1_PID"
-```
 
 ### Step 2: Agent 2 - Registers, Reads Message, Responds
 
-Create prompt file:
+Create prompt file (update names/project_key if you set RUN_ID):
 ```bash
 cat > "$TEST_DIR/prompts/agent2_task.txt" <<'EOF'
 You are Agent2 (BackendDev). Your task:
@@ -118,17 +145,22 @@ You are Agent2 (BackendDev). Your task:
 EOF
 ```
 
-Run Agent2:
+Run Agent2 (same CLI as Agent1):
 ```bash
 sleep 2  # Give Agent1 time to start
-claude -p --dangerously-skip-permissions "$(cat $TEST_DIR/prompts/agent2_task.txt)" > "$TEST_DIR/outputs/agent2_output.txt" 2>&1 &
+# Codex example:
+MCP_CONFIG=.codex/config.toml codex exec --yolo "$(cat $TEST_DIR/prompts/agent2_task.txt)" > "$TEST_DIR/outputs/agent2_output.txt" 2>&1 &
+# Claude example:
+# MCP_CONFIG=.mcp.json claude -p --dangerously-skip-permissions "$(cat $TEST_DIR/prompts/agent2_task.txt)" > "$TEST_DIR/outputs/agent2_output.txt" 2>&1 &
+# Gemini example:
+# GEMINI_CONFIG=./gemini.mcp.json gemini --approval-mode yolo --allowed-mcp-server-names mcp-agent-mail "$(cat $TEST_DIR/prompts/agent2_task.txt)" > "$TEST_DIR/outputs/agent2_output.txt" 2>&1 &
 AGENT2_PID=$!
 echo "Agent2 (BackendDev) started - PID: $AGENT2_PID"
 ```
 
 ### Step 3: Agent 3 - Registers, Reads Message, Completes Chain
 
-Create prompt file:
+Create prompt file (update names/project_key if you set RUN_ID):
 ```bash
 cat > "$TEST_DIR/prompts/agent3_task.txt" <<'EOF'
 You are Agent3 (DatabaseAdmin). Your task:
@@ -161,10 +193,15 @@ You are Agent3 (DatabaseAdmin). Your task:
 EOF
 ```
 
-Run Agent3:
+Run Agent3 (same CLI as Agent1/2):
 ```bash
 sleep 4  # Give other agents time to start
-claude -p --dangerously-skip-permissions "$(cat $TEST_DIR/prompts/agent3_task.txt)" > "$TEST_DIR/outputs/agent3_output.txt" 2>&1 &
+# Codex example:
+MCP_CONFIG=.codex/config.toml codex exec --yolo "$(cat $TEST_DIR/prompts/agent3_task.txt)" > "$TEST_DIR/outputs/agent3_output.txt" 2>&1 &
+# Claude example:
+# MCP_CONFIG=.mcp.json claude -p --dangerously-skip-permissions "$(cat $TEST_DIR/prompts/agent3_task.txt)" > "$TEST_DIR/outputs/agent3_output.txt" 2>&1 &
+# Gemini example:
+# GEMINI_CONFIG=./gemini.mcp.json gemini --approval-mode yolo --allowed-mcp-server-names mcp-agent-mail "$(cat $TEST_DIR/prompts/agent3_task.txt)" > "$TEST_DIR/outputs/agent3_output.txt" 2>&1 &
 AGENT3_PID=$!
 echo "Agent3 (DatabaseAdmin) started - PID: $AGENT3_PID"
 ```
@@ -267,7 +304,7 @@ grep -i "error\|exception\|failed" "$TEST_DIR/outputs"/*.txt || echo "✅ No err
 **Solution**: Verify ANTHROPIC_API_KEY is commented out in ~/.bashrc
 
 ### Issue: Agents can't find each other
-**Solution**: All must use same project_key: "/tmp/real_claude_test_project"
+**Solution**: All agents must share the same project_key you set for this run (e.g., "/tmp/real_cli_test_project_<RUN_ID>"). Also ensure names include the RUN_ID to avoid collisions with older agents.
 
 ### Issue: Message delivery delays
 **Solution**: Add sleep delays between agent starts (already included)
@@ -279,10 +316,10 @@ grep -i "error\|exception\|failed" "$TEST_DIR/outputs"/*.txt || echo "✅ No err
 - **Total Test Time**: 60-120 seconds
 
 ## Notes
-- This test demonstrates REAL multi-agent coordination
-- Each Claude instance is independent and autonomous
-- Communication happens ONLY through MCP Agent Mail
-- This proves the system works for actual agent coordination scenarios
+- This test demonstrates REAL multi-agent coordination using Codex/Claude/Gemini CLIs.
+- Agent names are global: reuse can route to old agents; always suffix with RUN_ID.
+- Communication happens ONLY through MCP Agent Mail.
+- If you see ModelNotFound/404 from a CLI, switch to another CLI or adjust the model flag.
 
 ## Cleanup (Optional)
 

@@ -35,6 +35,7 @@ from .db import ensure_schema, get_session, init_engine
 from .guard import install_guard as install_guard_script, uninstall_guard as uninstall_guard_script
 from .llm import complete_system_user
 from .models import Agent, FileReservation, Message, MessageRecipient, Project, ProjectSiblingSuggestion
+from .slack_integration import SlackClient, notify_slack_ack, notify_slack_message
 from .slots import (
     acquire_build_slot as acquire_slot_impl,
     release_build_slot as release_slot_impl,
@@ -42,6 +43,7 @@ from .slots import (
 )
 from .storage import (
     ProjectArchive,
+    ProjectStorageResolutionError,
     archive_write_lock,
     collect_lock_status,
     ensure_archive,
@@ -55,6 +57,9 @@ from .storage import (
 from .utils import generate_agent_name, sanitize_agent_name, slugify
 
 logger = logging.getLogger(__name__)
+
+# Global Slack client instance (initialized in lifespan)
+_slack_client: Optional[SlackClient] = None
 
 TOOL_METRICS: defaultdict[str, dict[str, int]] = defaultdict(lambda: {"calls": 0, "errors": 0})
 TOOL_CLUSTER_MAP: dict[str, str] = {}
@@ -217,6 +222,24 @@ def _instrument_tool(
                 _record_tool_error(tool_name, exc)
                 error = exc
                 raise
+            except ProjectStorageResolutionError as exc:
+                metrics["errors"] += 1
+                _record_tool_error(tool_name, exc)
+                error_type = "PROJECT_STORAGE_PROMPT" if getattr(exc, "prompt", None) else "PROJECT_STORAGE"
+                base_message = str(exc)
+                message = (
+                    f"{base_message} Choose a resolution option from the prompt."
+                    if getattr(exc, "prompt", None)
+                    else base_message
+                )
+                wrapped_exc = ToolExecutionError(
+                    error_type,
+                    message,
+                    recoverable=bool(getattr(exc, "prompt", None)),
+                    data={"tool": tool_name, "project": project_value, "prompt": getattr(exc, "prompt", {})},
+                )
+                error = wrapped_exc
+                raise wrapped_exc from exc
             except NoResultFound as exc:
                 # Handle agent/project not found errors with helpful messages
                 metrics["errors"] += 1
@@ -322,6 +345,8 @@ def _capabilities_for(agent: Optional[str], project: Optional[str]) -> list[str]
 def _lifespan_factory(settings: Settings):
     @asynccontextmanager
     async def lifespan(app: FastMCP):
+        global _slack_client
+
         init_engine(settings)
         heal_summary = await heal_archive_locks(settings)
         if heal_summary.get("locks_removed") or heal_summary.get("metadata_removed"):
@@ -334,7 +359,28 @@ def _lifespan_factory(settings: Settings):
                 },
             )
         await ensure_schema(settings)
+
+        # Initialize Slack client if enabled
+        if settings.slack.enabled:
+            try:
+                _slack_client = SlackClient(settings.slack)
+                await _slack_client.connect()
+                logger.info("Slack integration initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize Slack integration: {e}")
+                _slack_client = None
+
         yield
+
+        # Cleanup Slack client
+        if _slack_client:
+            try:
+                await _slack_client.close()
+                logger.info("Slack client closed")
+            except Exception as e:
+                logger.error(f"Error closing Slack client: {e}")
+            finally:
+                _slack_client = None
 
     return lifespan
 
@@ -623,6 +669,7 @@ def _agent_to_dict(agent: Agent) -> dict[str, Any]:
         "contact_policy": getattr(agent, "contact_policy", "auto"),
         "is_active": getattr(agent, "is_active", True),
         "deleted_ts": _iso(deleted_ts) if (deleted_ts := getattr(agent, "deleted_ts", None)) is not None else None,
+        "is_placeholder": getattr(agent, "is_placeholder", False),
     }
 
 
@@ -677,18 +724,18 @@ async def _ensure_project(human_key: str) -> Project:
         project = result.scalars().first()
         if project:
             # Ensure global inbox agent exists for existing project
-            await _ensure_global_inbox_agent(project, session=session)
+            await _ensure_global_inbox_agent(project, session)
             return project
         project = Project(slug=slug, human_key=human_key)
         session.add(project)
         await session.commit()
         await session.refresh(project)
         # Create global inbox agent for new project
-        await _ensure_global_inbox_agent(project, session=session)
+        await _ensure_global_inbox_agent(project, session)
         return project
 
 
-async def _ensure_global_inbox_agent(project: Project, session: Optional[AsyncSession] = None) -> Agent:
+async def _ensure_global_inbox_agent(project: Project, session: AsyncSession | None = None) -> Agent:
     """Ensure the global inbox agent exists for the given project.
 
     Each project gets its own global inbox agent with a project-specific name
@@ -700,16 +747,10 @@ async def _ensure_global_inbox_agent(project: Project, session: Optional[AsyncSe
     global_inbox_name = get_global_inbox_name(project)
 
     await ensure_schema()
+    if session is None:
+        async with get_session() as session_local:
+            return await _ensure_global_inbox_agent(project, session_local)
 
-    # Use provided session or create a new one
-    if session:
-        return await _create_or_get_global_inbox(session, project, global_inbox_name)
-
-    async with get_session() as new_session:
-        return await _create_or_get_global_inbox(new_session, project, global_inbox_name)
-
-
-async def _create_or_get_global_inbox(session: AsyncSession, project: Project, global_inbox_name: str) -> Agent:
     # Check if global inbox agent already exists for this project
     result = await session.execute(
         select(Agent).where(
@@ -1156,6 +1197,23 @@ async def _agent_name_exists_globally(name: str) -> bool:
         return result.first() is not None
 
 
+async def _get_placeholder_agent_globally(name: str) -> Optional[Agent]:
+    """Get a placeholder agent by name globally, if one exists.
+
+    Returns the Agent if it exists and is_placeholder=True, otherwise None.
+    This is used to "claim" placeholder agents during official registration.
+    """
+    async with get_session() as session:
+        result = await session.execute(
+            select(Agent).where(
+                func.lower(Agent.name) == name.lower(),
+                cast(Any, Agent.is_active).is_(True),
+                cast(Any, Agent.is_placeholder).is_(True),
+            )
+        )
+        return result.scalars().first()
+
+
 async def _generate_unique_agent_name(
     project: Project,
     settings: Settings,
@@ -1290,6 +1348,46 @@ async def _get_or_create_agent(
                 )
             desired_name = await _generate_unique_agent_name(project, settings, None)
         else:
+            # Check if there's a placeholder agent with this name that can be claimed
+            placeholder = await _get_placeholder_agent_globally(sanitized)
+            if placeholder:
+                # Claim the placeholder: update its details and mark as non-placeholder
+                await ensure_schema()
+                async with get_session() as session:
+                    result = await session.execute(
+                        select(Agent).where(
+                            Agent.id == placeholder.id,
+                            cast(Any, Agent.is_placeholder).is_(True),
+                            cast(Any, Agent.is_active).is_(True),
+                        )
+                    )
+                    agent = result.scalars().first()
+                    if agent:
+                        # Race condition check: verify it's still a placeholder
+                        if not getattr(agent, "is_placeholder", False):
+                            # Already claimed by another process, fall through to regular logic
+                            pass
+                        else:
+                            # Update placeholder to claim it
+                            agent.project_id = project.id
+                            agent.program = program
+                            agent.model = model
+                            agent.task_description = task_description
+                            agent.last_active_ts = datetime.now(timezone.utc)
+                            agent.is_placeholder = False
+                            # Reactivate if previously retired
+                            if not getattr(agent, "is_active", True):
+                                agent.is_active = True
+                                agent.deleted_ts = None
+                            session.add(agent)
+                            await session.commit()
+                            await session.refresh(agent)
+                            # Write updated profile to archive
+                            archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+                            async with _archive_write_lock(archive):
+                                await write_agent_profile(archive, _agent_to_dict(agent))
+                            return agent
+                # If we couldn't find the agent, fall through to regular logic
             # Check if the user-provided name is globally unique
             if await _agent_name_exists_globally(sanitized):
                 # Name exists globally; check if it's in THIS project
@@ -1321,15 +1419,16 @@ async def _get_or_create_agent(
                     )
                     # Verify retirement cleared the conflict; otherwise provide a clear path
                     if await _agent_name_exists_globally(sanitized):
-                        if mode == "strict":
-                            raise ToolExecutionError(
-                                "NAME_TAKEN",
-                                f"Agent name '{sanitized}' is still in use after attempting retirement.",
-                                recoverable=True,
-                                data={"name": sanitized, "conflict": "residual_or_race"},
-                            )
-                        # Fallback to auto-generate a unique name
-                        desired_name = await _generate_unique_agent_name(project, settings, None)
+                        raise ToolExecutionError(
+                            "NAME_TAKEN",
+                            f"Agent name '{sanitized}' is still in use after attempting retirement.",
+                            recoverable=True,
+                            data={
+                                "name": sanitized,
+                                "conflict": "residual_or_race",
+                                "hint": "Retry with force_reclaim=True if this persists",
+                            },
+                        )
                     else:
                         desired_name = sanitized
             else:
@@ -1350,6 +1449,8 @@ async def _get_or_create_agent(
             agent.model = model
             agent.task_description = task_description
             agent.last_active_ts = datetime.now(timezone.utc)
+            # Mark as officially registered (not a placeholder)
+            agent.is_placeholder = False
             # Reactivate if previously retired
             if not getattr(agent, "is_active", True):
                 agent.is_active = True
@@ -1408,7 +1509,86 @@ async def _get_or_create_agent(
                         "hint": "Retry the operation; if it persists, call register_agent with force_reclaim=True",
                     },
                 ) from exc
-    archive = await ensure_archive(settings, project.slug)
+    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+    async with _archive_write_lock(archive):
+        await write_agent_profile(archive, _agent_to_dict(agent))
+    return agent
+
+
+async def _create_placeholder_agent(
+    project: Project,
+    name: str,
+    sender_program: str,
+    sender_model: str,
+    settings: Settings,
+) -> Agent:
+    """Create a placeholder agent to receive messages before official registration.
+
+    Placeholder agents:
+    - Have is_placeholder=True
+    - Inherit program/model from the sender (as a reasonable default)
+    - Can receive messages just like regular agents
+    - Can be "claimed" by a later register_agent call, which sets is_placeholder=False
+
+    This enables the pattern: send messages to an agent that doesn't exist yet,
+    and when they register later, they can read their pending messages.
+    """
+    if project.id is None:
+        raise ValueError("Project must have an id before creating placeholder agents.")
+
+    sanitized = sanitize_agent_name(name)
+    if not sanitized:
+        raise ValueError(f"Invalid agent name for placeholder: {name}")
+
+    await ensure_schema()
+    async with get_session() as session:
+        # Check if agent already exists (shouldn't happen, but be safe)
+        result = await session.execute(
+            select(Agent).where(
+                func.lower(Agent.name) == sanitized.lower(),
+                cast(Any, Agent.is_active).is_(True),
+            )
+        )
+        existing = result.scalars().first()
+        if existing:
+            if not getattr(existing, "is_placeholder", False):
+                raise ValueError(f"Agent '{sanitized}' already exists and is not a placeholder")
+            return existing  # Placeholder already exists
+
+        agent = Agent(
+            project_id=project.id,
+            name=sanitized,
+            program=sender_program,
+            model=sender_model,
+            task_description="(pending registration)",
+            contact_policy="auto",
+            is_placeholder=True,
+        )
+        session.add(agent)
+        try:
+            await session.commit()
+            await session.refresh(agent)
+        except IntegrityError as exc:
+            # Race condition: name was taken between check and commit
+            await session.rollback()
+            # Try to fetch the existing agent
+            result = await session.execute(
+                select(Agent).where(
+                    func.lower(Agent.name) == sanitized.lower(),
+                    cast(Any, Agent.is_active).is_(True),
+                )
+            )
+            existing = result.scalars().first()
+            if existing:
+                if not getattr(existing, "is_placeholder", False):
+                    raise ValueError(
+                        f"Agent '{sanitized}' was created as non-placeholder during race condition"
+                    ) from exc
+                return existing
+            raise ValueError(f"Failed to create placeholder agent: {sanitized}") from exc
+
+    # Write placeholder profile to archive
+    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
     async with _archive_write_lock(archive):
         await write_agent_profile(archive, _agent_to_dict(agent))
     return agent
@@ -1478,7 +1658,7 @@ async def _delete_agent(project: Project, name: str, settings: Settings) -> dict
         await session.execute(delete(Agent).where(Agent.id == agent_id))
 
     # Write deletion marker to Git archive
-    archive = await ensure_archive(settings, project.slug)
+    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
     async with _archive_write_lock(archive):
         await write_agent_deletion_marker(archive, agent_name, stats)
 
@@ -1530,7 +1710,7 @@ async def _retire_agent(agent: Agent, project: Project, settings: Settings) -> A
         await session.refresh(db_agent)
         agent = db_agent
 
-    archive = await ensure_archive(settings, project.slug)
+    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
     async with _archive_write_lock(archive):
         await write_agent_profile(archive, _agent_to_dict(agent))
     return agent
@@ -1922,90 +2102,6 @@ async def _expire_stale_file_reservations(project_id: int) -> list[FileReservati
     return stale_statuses
 
 
-def _glob_patterns_overlap(pattern_a: str, pattern_b: str) -> bool:
-    """Check if two glob patterns could match overlapping files.
-
-    Handles ** (recursive directory matching) properly using pathlib.
-    """
-    from pathlib import PurePath
-
-    # Normalize: remove leading ./
-    def _norm(s: str) -> str:
-        while s.startswith("./"):
-            s = s[2:]
-        return s
-
-    a = _norm(pattern_a)
-    b = _norm(pattern_b)
-
-    # Exact match
-    if a == b:
-        return True
-
-    # Use pathlib.match for ** support - check both directions
-    # PurePath.match treats the argument as a pattern
-    try:
-        # If a is a concrete path and b is a pattern
-        if ("**" in b or "*" in b) and PurePath(a).match(b):
-            return True
-        # If b is a concrete path and a is a pattern
-        if ("**" in a or "*" in a) and PurePath(b).match(a):
-            return True
-    except Exception:
-        # Suppress exceptions from PurePath.match (e.g., invalid patterns or paths).
-        # Fallback to fnmatch for simple pattern matching below.
-        pass
-
-    # Fallback to fnmatch for simple patterns
-    if fnmatch.fnmatchcase(a, b) or fnmatch.fnmatchcase(b, a):
-        return True
-
-    # Check if patterns share a common prefix that could overlap
-    # e.g., "src/backend/**/*.py" and "src/backend/auth.py"
-    # Split into directory parts and check overlap
-    a_parts = a.split("/")
-    b_parts = b.split("/")
-
-    # Handle empty parts (e.g., empty pattern after normalization)
-    if not a_parts or not b_parts:
-        return False
-
-    # Find the first differing part
-    min_len = min(len(a_parts), len(b_parts))
-    diverged = False
-    for i in range(min_len):
-        ap, bp = a_parts[i], b_parts[i]
-        # If either part is ** or contains wildcards, they could overlap
-        if ap == "**" or bp == "**":
-            return True
-        if "*" in ap or "*" in bp:
-            if fnmatch.fnmatchcase(ap, bp) or fnmatch.fnmatchcase(bp, ap):
-                continue
-            # Wildcards that don't match - patterns diverge
-            diverged = True
-            break
-        elif ap != bp:
-            diverged = True
-            break
-
-    # If patterns diverged at some point, they don't overlap
-    if diverged:
-        return False
-
-    # All compared parts matched - check if one pattern is a prefix of the other
-    # and ends with wildcards
-    if len(a_parts) < len(b_parts):
-        last_part = a_parts[-1]
-        # If last part is a wildcard or "**", overlap is possible
-        return last_part == "**" or "*" in last_part
-    elif len(b_parts) < len(a_parts):
-        last_part = b_parts[-1]
-        return last_part == "**" or "*" in last_part
-    else:
-        # Same length, all parts matched, so it's an exact match
-        return True
-
-
 def _file_reservations_conflict(
     existing: FileReservation, candidate_path: str, candidate_exclusive: bool, candidate_agent: Agent
 ) -> bool:
@@ -2015,8 +2111,27 @@ def _file_reservations_conflict(
         return False
     if not existing.exclusive and not candidate_exclusive:
         return False
+    normalized_existing = existing.path_pattern
+    # Allow **/ patterns to match files at the immediate directory level too
+    fallback_existing = normalized_existing.replace("**/", "")
 
-    return _glob_patterns_overlap(existing.path_pattern, candidate_path)
+    # Treat simple directory patterns like "src/*" as inclusive of files under that directory
+    # when comparing against concrete file paths like "src/app.py".
+    def _expand_dir_star(p: str) -> str:
+        if p.endswith("/*"):
+            return p[:-1] + "*"  # "src/*" -> "src/**"-like breadth for fnmatchcase approximation
+        return p
+
+    a = _expand_dir_star(candidate_path)
+    b = _expand_dir_star(normalized_existing)
+    b_fallback = _expand_dir_star(fallback_existing)
+    return (
+        fnmatch.fnmatchcase(a, b)
+        or fnmatch.fnmatchcase(b, a)
+        or fnmatch.fnmatchcase(a, b_fallback)
+        or fnmatch.fnmatchcase(b_fallback, a)
+        or a == b
+    )
 
 
 def _patterns_overlap(a: str, b: str) -> bool:
@@ -2282,7 +2397,7 @@ def _canonical_relpath_for_message(project: Project, message: Message, archive) 
 
 async def _commit_info_for_message(settings: Settings, project: Project, message: Message) -> dict[str, Any] | None:
     """Fetch commit metadata for the canonical message file (hexsha, summary, authored_ts, stats)."""
-    archive = await ensure_archive(settings, project.slug)
+    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
     relpath = _canonical_relpath_for_message(project, message, archive)
     if not relpath:
         return None
@@ -2593,6 +2708,20 @@ async def _update_recipient_timestamp(
     return now
 
 
+async def _get_recipient_timestamp(agent: Agent, message_id: int, field: str) -> Optional[datetime]:
+    if agent.id is None:
+        raise ValueError("Agent must have an id before reading message state.")
+    await ensure_schema()
+    async with get_session() as session:
+        result = await session.execute(
+            select(getattr(MessageRecipient, field)).where(
+                MessageRecipient.message_id == message_id,
+                MessageRecipient.agent_id == agent.id,
+            )
+        )
+        return result.scalars().first()
+
+
 async def _validate_agent_is_recipient(agent: Agent, message_id: int) -> None:
     """Validate that an agent is a recipient of a message.
 
@@ -2649,6 +2778,9 @@ EXTENDED_TOOLS = {
     "macro_file_reservation_cycle",
     "install_precommit_guard",
     "uninstall_precommit_guard",
+    "slack_post_message",
+    "slack_list_channels",
+    "slack_get_channel_info",
     "acquire_build_slot",
     "renew_build_slot",
     "release_build_slot",
@@ -2712,6 +2844,12 @@ EXTENDED_TOOL_METADATA = {
     "uninstall_precommit_guard": {
         "category": "infrastructure",
         "description": "Remove pre-commit guard from repository",
+    },
+    "slack_post_message": {"category": "messaging", "description": "Post a message to a Slack channel"},
+    "slack_list_channels": {"category": "messaging", "description": "List available Slack channels"},
+    "slack_get_channel_info": {
+        "category": "messaging",
+        "description": "Get detailed information about a Slack channel",
     },
 }
 
@@ -2796,7 +2934,7 @@ def build_mcp_server() -> FastMCP:
         recipient_records.extend((agent, "cc") for agent in cc_agents)
         recipient_records.extend((agent, "bcc") for agent in bcc_agents)
 
-        archive = await ensure_archive(settings, project.slug)
+        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
         convert_markdown = (
             convert_images_override if convert_images_override is not None else settings.storage.convert_images
         )
@@ -2924,7 +3062,67 @@ def build_mcp_server() -> FastMCP:
                 attachment_files,
                 commit_panel_text,
             )
+
+            # Optional Slack mirror via incoming webhook (env-driven)
+            try:
+                from .slack_integration import mirror_message_to_slack
+
+                mirror_message_to_slack(frontmatter, body_md)
+            except Exception:
+                logger.exception("Slack mirror failed (non-blocking)")
         await ctx.info(f"Message {message.id} created by {sender.name} (to {', '.join(recipients_for_archive)})")
+
+        # Send Slack notification if enabled (fire-and-forget, non-blocking)
+        # Capture client reference before async boundary to avoid race condition during shutdown
+        slack_client = _slack_client
+        if settings.slack.enabled and settings.slack.notify_on_message:
+
+            def _slack_done_cb(t: asyncio.Task) -> None:
+                try:
+                    _ = t.result()
+                except Exception as e:
+                    logger.exception("Failed to send Slack notification", exc_info=e)
+
+            # Try Web API client first, fall back to webhook
+            if slack_client:
+
+                async def _send_slack_notification() -> None:
+                    if slack_client is None or getattr(slack_client, "_http_client", None) is None:
+                        logger.debug("Slack client unavailable, skipping notification")
+                        return
+                    await notify_slack_message(
+                        client=slack_client,
+                        settings=settings,
+                        message_id=str(message.id),
+                        subject=subject,
+                        body_md=body_md,
+                        sender_name=sender.name,
+                        recipients=recipients_for_archive,
+                        importance=importance,
+                        thread_id=thread_id,
+                    )
+
+                task = asyncio.create_task(_send_slack_notification())
+                task.add_done_callback(_slack_done_cb)
+            elif settings.slack.webhook_url:
+                # Fallback to webhook URL if no client available
+                from .slack_integration import format_mcp_message_for_slack, post_via_webhook
+
+                async def _post_webhook():
+                    text, blocks = format_mcp_message_for_slack(
+                        subject=subject,
+                        body_md=body_md,
+                        sender_name=sender.name,
+                        recipients=recipients_for_archive,
+                        message_id=str(message.id),
+                        importance=importance,
+                        use_blocks=settings.slack.use_blocks,
+                    )
+                    await post_via_webhook(settings.slack.webhook_url, text, blocks=blocks)
+
+                task = asyncio.create_task(_post_webhook())
+                task.add_done_callback(_slack_done_cb)
+
         if payload is None:
             raise RuntimeError("Message payload was not generated.")
         return payload
@@ -3044,9 +3242,28 @@ def build_mcp_server() -> FastMCP:
 
         try:
             if hasattr(tool_func, "run"):
-                return await tool_func.run(arguments or {})
-            result = await tool_func(ctx, **(arguments or {}))
-            return result
+                result = await tool_func.run(arguments or {})
+            else:
+                result = await tool_func(ctx, **(arguments or {}))
+
+            if isinstance(result, ToolResult):
+                payload: Any = getattr(result, "structured_content", None)
+                if payload is None and hasattr(result, "content"):
+                    payload = result.content
+                if payload is None and hasattr(result, "data"):
+                    payload = result.data
+                if payload is None:
+                    try:
+                        payload = next(iter(result)) if result else None
+                    except (TypeError, IndexError, StopIteration):
+                        payload = None
+                result = payload
+
+            # Avoid double-wrapping if the tool already returned a structured result
+            if isinstance(result, dict) and set(result.keys()) == {"result"}:
+                return result
+
+            return {"result": result}
         except TypeError as e:
             # Invalid arguments
             raise ValueError(f"Invalid arguments for {tool_name}: {e!s}") from e
@@ -3134,7 +3351,7 @@ def build_mcp_server() -> FastMCP:
         """
         await ctx.info(f"Ensuring project for key '{human_key}'.")
         project = await _ensure_project(human_key)
-        await ensure_archive(settings, project.slug)
+        await ensure_archive(settings, project.slug, project_key=project.human_key)
         return _project_to_dict(project)
 
     @mcp.tool(name="register_agent")
@@ -3196,9 +3413,9 @@ def build_mcp_server() -> FastMCP:
         Parameters
         ----------
         project_key : str
-            Any string identifier for your project. The project will be automatically created
-            if it doesn't exist. Common patterns include absolute paths, repo names, or custom
-            project identifiers (e.g., "/data/projects/backend", "my-repo", "project-alpha").
+            Any string identifier for your project. Informational only for agent lookup; agents are
+            global. The project will be automatically created if it doesn't exist. Common patterns
+            include absolute paths, repo names, or custom project identifiers.
         program : str
             The agent program (e.g., "codex-cli", "claude-code").
         model : str
@@ -3243,7 +3460,7 @@ def build_mcp_server() -> FastMCP:
         """
         # Auto-create project if it doesn't exist (allows any string as project_key)
         project = await _ensure_project(project_key)
-        await ensure_archive(settings, project.slug)
+        await ensure_archive(settings, project.slug, project_key=project.human_key)
 
         if settings.tools_log_enabled:
             try:
@@ -3434,12 +3651,16 @@ def build_mcp_server() -> FastMCP:
                 suggestion_text = f" Did you mean one of: {suggestions}?"
             error_msg = f"Agent '{agent_name}' not found.{suggestion_text}"
             await ctx.warning(error_msg)
-            return {
-                "error": error_msg,
-                "agent_name": agent_name,
-                "suggestions": suggestions,
-                "_tip": "Use resource://agents to see all registered agents globally.",
-            }
+            raise ToolExecutionError(
+                "AGENT_NOT_FOUND",
+                f"Agent '{agent_name}' not registered for project '{project.human_key}'.{suggestion_text}",
+                recoverable=True,
+                data={
+                    "agent_name": agent_name,
+                    "suggestions": suggestions,
+                    "_tip": "Use resource://agents to see all registered agents globally.",
+                },
+            )
 
         # Get the agent's actual project for commit history and logging
         # This matters when agent was found via global fallback (different from requested project)
@@ -3448,7 +3669,7 @@ def build_mcp_server() -> FastMCP:
         profile = _agent_to_dict(agent)
         recent: list[dict[str, Any]] = []
         if include_recent_commits:
-            archive = await ensure_archive(settings, agent_project.slug)
+            archive = await ensure_archive(settings, agent_project.slug, project_key=agent_project.human_key)
             repo: Repo = archive.repo
             try:
                 # Limit to archive path; extract last commits
@@ -3549,7 +3770,7 @@ def build_mcp_server() -> FastMCP:
                 await session.commit()
                 await session.refresh(db_agent)
                 agent = db_agent
-        archive = await ensure_archive(settings, project.slug)
+        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
         async with _archive_write_lock(archive):
             await write_agent_profile(archive, _agent_to_dict(agent))
         await ctx.info(f"Created new agent identity '{agent.name}' for project '{project.human_key}'.")
@@ -3608,9 +3829,9 @@ def build_mcp_server() -> FastMCP:
         Parameters
         ----------
         project_key : str
-            Project identifier (same used with `ensure_project`/`register_agent`).
+            Project identifier (informational only for agent lookup; agents are global).
         sender_name : str
-            Must match an agent registered in the project.
+            Must match an existing agent name (agents are global).
         to : list[str]
             Primary recipients (agent names). At least one of to/cc/bcc must be non-empty.
         subject : str
@@ -3791,48 +4012,68 @@ def build_mcp_server() -> FastMCP:
                 canonical = sanitized or (trimmed if trimmed else None)
                 return trimmed or value, keys, canonical
 
-            unknown: set[str] = set()
+            unknown: dict[str, set[str]] = {}
 
             async def _route(name_list: list[str], kind: str) -> None:
-                """Routing with cross-project addressing support.
+                """Route recipients, supporting cross-project addressing."""
 
-                Supported formats:
-                - Bare name: "AgentName"
-                - project:id#name: "project:/path/to/proj#AgentName" or "project:slug#AgentName"
-                - name@project: "AgentName@/path/to/proj" or "AgentName@slug"
-                """
+                async def _resolve_cross_project(project_identifier: str, target: str) -> str | None:
+                    try:
+                        proj = await _get_project_by_identifier(project_identifier)
+                    except NoResultFound:
+                        return None
+
+                    # Try original and sanitized name variants
+                    candidates = [target]
+                    sanitized = sanitize_agent_name(target)
+                    if sanitized and sanitized not in candidates:
+                        candidates.append(sanitized)
+
+                    for candidate in candidates:
+                        try:
+                            agent_obj = await _get_agent(proj, candidate)
+                            return agent_obj.name
+                        except NoResultFound:
+                            continue
+                    return None
+
                 for raw in name_list:
-                    name = (raw or "").strip()
-                    if not name:
+                    display_value, key_candidates, canonical = _normalize(raw)
+                    unknown_key = canonical or (
+                        display_value.strip() if display_value else (raw.strip() if raw else raw)
+                    )
+                    if not key_candidates or not canonical:
+                        if unknown_key is not None:
+                            unknown.setdefault(unknown_key, set()).add(kind)
                         continue
 
-                    # Parse cross-project addressing formats
-                    target_name = name
-                    target_project = None
+                    target_project: str | None = None
+                    target_name = canonical
 
                     # Format 1: "project:<identifier>#<agent-name>"
-                    if name.startswith("project:") and "#" in name:
-                        parts = name.split("#", 1)
+                    if display_value.startswith("project:") and "#" in display_value:
+                        parts = display_value.split("#", 1)
                         if len(parts) == 2:
-                            project_part = parts[0].replace("project:", "", 1)
-                            target_name = parts[1].strip()
-                            target_project = project_part.strip()
+                            target_project = parts[0].replace("project:", "", 1).strip()
+                            target_name = (parts[1] or target_name).strip() or target_name
+                            key_candidates = {target_name.lower()}
+                            sanitized = sanitize_agent_name(target_name)
+                            if sanitized:
+                                key_candidates.add(sanitized.lower())
 
                     # Format 2: "<agent-name>@<project-identifier>"
-                    elif "@" in name and not name.startswith("@"):
-                        parts = name.rsplit("@", 1)  # rsplit to handle names with @ in them
+                    elif "@" in display_value and not display_value.startswith("@"):
+                        parts = display_value.rsplit("@", 1)
                         if len(parts) == 2:
-                            target_name = parts[0].strip()
-                            target_project = parts[1].strip()
+                            target_name = (parts[0] or target_name).strip() or target_name
+                            target_project = (parts[1] or "").strip() or None
+                            key_candidates = {target_name.lower()}
+                            sanitized = sanitize_agent_name(target_name)
+                            if sanitized:
+                                key_candidates.add(sanitized.lower())
 
-                    # Normalize and get lookup keys for the agent name
-                    display_value, key_candidates, canonical = _normalize(target_name)
-                    if not key_candidates or not canonical:
-                        unknown.add(raw.strip() if raw else raw)
-                        continue
-
-                    # Allow self-send
-                    if sender_candidate_keys.intersection(key_candidates):
+                    # Allow self-send unless explicitly targeting another project
+                    if not target_project and sender_candidate_keys.intersection(key_candidates):
                         if kind == "to":
                             all_to.append(sender.name)
                         elif kind == "cc":
@@ -3841,18 +4082,11 @@ def build_mcp_server() -> FastMCP:
                             all_bcc.append(sender.name)
                         continue
 
-                    # Look up agent (cross-project if target_project specified, otherwise global)
                     resolved = None
+
                     if target_project:
-                        # Cross-project lookup: resolve project and agent explicitly
-                        try:
-                            proj = await _get_project_by_identifier(target_project)
-                            agent = await _get_agent(proj, target_name)
-                            resolved = agent.name  # Agent names are globally unique
-                        except NoResultFound:
-                            resolved = None
+                        resolved = await _resolve_cross_project(target_project, target_name)
                     else:
-                        # Global lookup by name (returns canonical name)
                         for key in key_candidates:
                             resolved = global_lookup.get(key)
                             if resolved:
@@ -3866,7 +4100,8 @@ def build_mcp_server() -> FastMCP:
                         else:
                             all_bcc.append(resolved)
                     else:
-                        unknown.add(name)
+                        if unknown_key is not None:
+                            unknown.setdefault(unknown_key, set()).add(kind)
 
             await _route(to, "to")
             await _route(cc or [], "cc")
@@ -3875,25 +4110,41 @@ def build_mcp_server() -> FastMCP:
             if unknown:
                 # Auto-register missing recipients if enabled
                 if getattr(settings_local, "messaging_auto_register_recipients", True):
-                    # Best effort: try to register any unknown recipients with sane defaults
-                    newly_registered: set[str] = set()
-                    for missing in list(unknown):
+                    # Best effort: create placeholder agents for unknown recipients.
+                    # Placeholder agents can receive messages and be "claimed" later
+                    # when the real agent registers with that name.
+                    newly_registered: list[tuple[str, set[str]]] = []
+                    for missing in list(unknown.keys()):
+                        # Skip cross-project address syntaxes; only auto-register simple names
+                        if missing.startswith("project:") or "@" in missing:
+                            continue
                         try:
-                            _ = await _get_or_create_agent(
+                            placeholder = await _create_placeholder_agent(
                                 project,
                                 missing,
                                 sender.program,
                                 sender.model,
-                                sender.task_description,
                                 settings_local,
                             )
-                            newly_registered.add(missing)
+                            newly_registered.append((missing, unknown.get(missing, set())))
+                            unknown.pop(missing, None)
+                            # Add the newly created placeholder to global_lookup so _route can find it
+                            canonical_name = placeholder.name
+                            sanitized_canonical = sanitize_agent_name(canonical_name) or canonical_name
+                            for key in {canonical_name.lower(), sanitized_canonical.lower()}:
+                                global_lookup.setdefault(key, canonical_name)
                         except Exception:
                             pass
-                    unknown.difference_update(newly_registered)
                     # Re-run routing for any that were registered
                     if newly_registered:
-                        await _route(list(newly_registered), "to")
+                        for name, kinds in newly_registered:
+                            route_kinds = kinds or {"to"}
+                            if "to" in route_kinds:
+                                await _route([name], "to")
+                            if "cc" in route_kinds:
+                                await _route([name], "cc")
+                            if "bcc" in route_kinds:
+                                await _route([name], "bcc")
 
                 # If still have unknown recipients, raise error
                 if unknown:
@@ -4404,18 +4655,57 @@ def build_mcp_server() -> FastMCP:
             except Exception:
                 pass
         try:
+            settings = get_settings()
             agent = await _get_agent_by_name(agent_name)
-            await _get_message_by_id_global(message_id)
+            message = await _get_message_by_id_global(message_id)
             await _validate_agent_is_recipient(agent, message_id)
             read_ts = await _update_recipient_timestamp(agent, message_id, "read_ts")
+            prev_ack_ts = await _get_recipient_timestamp(agent, message_id, "ack_ts")
             ack_ts = await _update_recipient_timestamp(agent, message_id, "ack_ts")
             await ctx.info(f"Acknowledged message {message_id} for '{agent.name}'.")
-            return {
+            result = {
                 "message_id": message_id,
                 "acknowledged": bool(ack_ts),
                 "acknowledged_at": _iso(ack_ts) if ack_ts else None,
                 "read_at": _iso(read_ts) if read_ts else None,
             }
+            # Fire-and-forget Slack notification for acknowledgements
+            slack_client = _slack_client
+            if settings.slack.enabled and settings.slack.notify_on_ack and prev_ack_ts is None and ack_ts:
+
+                def _ack_done_cb(task: asyncio.Task) -> None:
+                    try:
+                        task.result()
+                    except Exception as exc:
+                        logger.exception("Failed to send Slack ack notification", exc_info=exc)
+
+                if slack_client:
+
+                    async def _send_ack_notification() -> None:
+                        if slack_client is None or getattr(slack_client, "_http_client", None) is None:
+                            logger.debug("Slack client unavailable, skipping ack notification")
+                            return
+                        await notify_slack_ack(
+                            client=slack_client,
+                            settings=settings,
+                            message_id=str(message.id),
+                            agent_name=agent.name,
+                            subject=message.subject,
+                        )
+
+                    task = asyncio.create_task(_send_ack_notification())
+                    task.add_done_callback(_ack_done_cb)
+                elif settings.slack.webhook_url:
+                    from .slack_integration import post_via_webhook
+
+                    async def _post_ack_webhook() -> None:
+                        text = f":white_check_mark: {agent.name} acknowledged: {message.subject}"
+                        await post_via_webhook(settings.slack.webhook_url, text)
+
+                    task = asyncio.create_task(_post_ack_webhook())
+                    task.add_done_callback(_ack_done_cb)
+
+            return result
         except Exception as exc:
             if get_settings().tools_log_enabled:
                 try:
@@ -4982,8 +5272,7 @@ def build_mcp_server() -> FastMCP:
             }
             for row in rows
         ]
-        # Return list directly for simpler client consumption
-        return items
+        return ToolResult(structured_content={"result": items})
 
     @mcp.tool(name="acquire_build_slot")
     @_instrument_tool(
@@ -5467,7 +5756,7 @@ def build_mcp_server() -> FastMCP:
 
         granted: list[dict[str, Any]] = []
         conflicts: list[dict[str, Any]] = []
-        archive = await ensure_archive(settings, project.slug)
+        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
         async with _archive_write_lock(archive):
             for path in paths:
                 conflicting_holders: list[dict[str, Any]] = []
@@ -5892,7 +6181,7 @@ def build_mcp_server() -> FastMCP:
             await session.commit()
 
         # Update Git artifacts for the renewed file_reservations
-        archive = await ensure_archive(settings, project.slug)
+        archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
         async with _archive_write_lock(archive):
             for file_reservation_info in updated:
                 payload = {
@@ -7475,7 +7764,7 @@ def build_mcp_server() -> FastMCP:
         # Attach recent commit summaries touching the archive (best-effort)
         commits_index: dict[str, dict[str, str]] = {}
         try:
-            archive = await ensure_archive(settings, project_obj.slug)
+            archive = await ensure_archive(settings, project_obj.slug, project_key=project_obj.human_key)
             repo: Repo = archive.repo
             for commit in repo.iter_commits(paths=["."], max_count=200):
                 # Heuristic: extract message id from commit summary when present in canonical subject format
@@ -7603,6 +7892,293 @@ def build_mcp_server() -> FastMCP:
 
     # No explicit output-schema transform; the tool returns ToolResult with {"result": ...}
 
+    @mcp.tool(name="slack_post_message")
+    @_instrument_tool("slack_post_message", cluster=CLUSTER_MESSAGING, capabilities={"messaging", "slack", "write"})
+    async def slack_post_message(
+        ctx: Context,
+        channel: str,
+        text: str,
+        thread_ts: str = "",
+    ) -> dict[str, Any]:
+        """
+        Post a message to a Slack channel.
+
+        Purpose
+        -------
+        Send notifications or messages to Slack channels for external visibility
+        or to notify non-MCP team members about important events.
+
+        Parameters
+        ----------
+        channel : str
+            Slack channel ID (e.g., "C1234567890") or name (e.g., "#general")
+        text : str
+            Message text to post (supports Slack mrkdwn formatting)
+        thread_ts : str, optional
+            Thread timestamp to reply in a specific thread
+
+        Returns
+        -------
+        dict
+            {
+              "ok": true,
+              "channel": "C1234567890",
+              "ts": "1503435956.000247",
+              "permalink": "https://example.slack.com/archives/..."
+            }
+
+        Examples
+        --------
+        Post a simple message:
+            slack_post_message(
+                channel="general",
+                text="Deployment to production completed successfully!"
+            )
+
+        Reply in a thread:
+            slack_post_message(
+                channel="C1234567890",
+                text="I've completed the review",
+                thread_ts="1503435956.000247"
+            )
+
+        Raises
+        ------
+        ToolExecutionError
+            - SLACK_DISABLED: Slack integration is not enabled
+            - SLACK_API_ERROR: Failed to post message to Slack
+        """
+        if get_settings().tools_log_enabled:
+            try:
+                import importlib as _imp
+
+                _rc = _imp.import_module("rich.console")
+                _rp = _imp.import_module("rich.panel")
+                Console = _rc.Console
+                Panel = _rp.Panel
+                Console().print(
+                    Panel.fit(
+                        f"channel={channel[:50]}, text={text[:100]}",
+                        title="tool: slack_post_message",
+                        border_style="green",
+                    )
+                )
+            except Exception:
+                # Suppress all exceptions from rich logging to avoid interfering with main tool execution
+                pass
+
+        settings = get_settings()
+        if not settings.slack.enabled or not _slack_client:
+            raise ToolExecutionError(
+                "SLACK_DISABLED",
+                "Slack client is not available (disabled or failed to initialize). "
+                "Verify SLACK_ENABLED/SLACK_BOT_TOKEN and check startup logs.",
+                recoverable=False,
+            )
+
+        try:
+            result = await _slack_client.post_message(
+                channel=channel,
+                text=text,
+                thread_ts=thread_ts if thread_ts else None,
+            )
+
+            # Get permalink for the message
+            permalink = ""
+            if result.get("ok") and result.get("channel") and result.get("ts"):
+                # Permalink retrieval is non-critical; log failures only at debug level
+                try:
+                    permalink = await _slack_client.get_permalink(
+                        channel=result["channel"],
+                        message_ts=result["ts"],
+                    )
+                except Exception as ex:
+                    logger.debug(
+                        "slack_post_message.permalink_failed",
+                        extra={
+                            "channel": result.get("channel"),
+                            "ts": result.get("ts"),
+                            "error": str(ex),
+                        },
+                    )
+
+            await ctx.info(f"Posted message to Slack channel {channel}")
+            return {
+                "ok": True,
+                "channel": result.get("channel", ""),
+                "ts": result.get("ts", ""),
+                "permalink": permalink,
+            }
+
+        except Exception as e:
+            logger.error(f"Slack API error: {e}")
+            raise ToolExecutionError(
+                "SLACK_API_ERROR",
+                f"Failed to post message to Slack: {e}",
+                recoverable=True,
+                data={"channel": channel},
+            ) from e
+
+    @mcp.tool(name="slack_list_channels")
+    @_instrument_tool("slack_list_channels", cluster=CLUSTER_MESSAGING, capabilities={"messaging", "slack", "read"})
+    async def slack_list_channels(ctx: Context) -> dict[str, Any]:
+        """
+        List available Slack channels.
+
+        Purpose
+        -------
+        Discover available Slack channels that the bot has access to,
+        useful for determining where to post messages.
+
+        Returns
+        -------
+        dict
+            {
+              "channels": [
+                {
+                  "id": "C1234567890",
+                  "name": "general",
+                  "is_private": false,
+                  "is_archived": false,
+                  "num_members": 42
+                },
+                ...
+              ],
+              "count": 10
+            }
+
+        Raises
+        ------
+        ToolExecutionError
+            - SLACK_DISABLED: Slack integration is not enabled
+            - SLACK_API_ERROR: Failed to list channels
+        """
+        if get_settings().tools_log_enabled:
+            try:
+                import importlib as _imp
+
+                _rc = _imp.import_module("rich.console")
+                _rp = _imp.import_module("rich.panel")
+                Console = _rc.Console
+                Panel = _rp.Panel
+                Console().print(Panel.fit("", title="tool: slack_list_channels", border_style="green"))
+            except Exception:
+                # Suppress all exceptions from rich logging to avoid interfering with tool execution
+                pass
+
+        settings = get_settings()
+        if not settings.slack.enabled or not _slack_client:
+            raise ToolExecutionError(
+                "SLACK_DISABLED",
+                "Slack client is not available (disabled or failed to initialize). "
+                "Verify SLACK_ENABLED/SLACK_BOT_TOKEN and check startup logs.",
+                recoverable=False,
+            )
+
+        try:
+            channels_data = await _slack_client.list_channels(exclude_archived=True)
+            channels = [
+                {
+                    "id": ch.get("id", ""),
+                    "name": ch.get("name", ""),
+                    "is_private": ch.get("is_private", False),
+                    "is_archived": ch.get("is_archived", False),
+                    "num_members": ch.get("num_members", 0),
+                }
+                for ch in channels_data
+            ]
+
+            await ctx.info(f"Listed {len(channels)} Slack channels")
+            return {
+                "channels": channels,
+                "count": len(channels),
+            }
+
+        except Exception as e:
+            logger.error(f"Slack API error: {e}")
+            raise ToolExecutionError(
+                "SLACK_API_ERROR",
+                f"Failed to list Slack channels: {e}",
+                recoverable=True,
+            ) from e
+
+    @mcp.tool(name="slack_get_channel_info")
+    @_instrument_tool("slack_get_channel_info", cluster=CLUSTER_MESSAGING, capabilities={"messaging", "slack", "read"})
+    async def slack_get_channel_info(ctx: Context, channel: str) -> dict[str, Any]:
+        """
+        Get detailed information about a Slack channel.
+
+        Parameters
+        ----------
+        channel : str
+            Channel ID to lookup
+
+        Returns
+        -------
+        dict
+            {
+              "id": "C1234567890",
+              "name": "general",
+              "is_private": false,
+              "topic": "General discussion",
+              "purpose": "Company-wide announcements",
+              "num_members": 42
+            }
+
+        Raises
+        ------
+        ToolExecutionError
+            - SLACK_DISABLED: Slack integration is not enabled
+            - SLACK_API_ERROR: Failed to get channel info
+        """
+        if get_settings().tools_log_enabled:
+            try:
+                import importlib as _imp
+
+                _rc = _imp.import_module("rich.console")
+                _rp = _imp.import_module("rich.panel")
+                Console = _rc.Console
+                Panel = _rp.Panel
+                Console().print(
+                    Panel.fit(f"channel={channel}", title="tool: slack_get_channel_info", border_style="green")
+                )
+            except Exception:
+                # Ignore all errors in rich logging to avoid interfering with tool execution
+                pass
+
+        settings = get_settings()
+        if not settings.slack.enabled or not _slack_client:
+            raise ToolExecutionError(
+                "SLACK_DISABLED",
+                "Slack client is not available (disabled or failed to initialize). "
+                "Verify SLACK_ENABLED/SLACK_BOT_TOKEN and check startup logs.",
+                recoverable=False,
+            )
+
+        try:
+            channel_info = await _slack_client.get_channel_info(channel)
+
+            result = {
+                "id": channel_info.get("id", ""),
+                "name": channel_info.get("name", ""),
+                "is_private": channel_info.get("is_private", False),
+                "topic": channel_info.get("topic", {}).get("value", ""),
+                "purpose": channel_info.get("purpose", {}).get("value", ""),
+                "num_members": channel_info.get("num_members", 0),
+            }
+
+            await ctx.info(f"Retrieved info for channel {channel}")
+            return result
+
+        except Exception as e:
+            logger.error(f"Slack API error: {e}")
+            raise ToolExecutionError(
+                "SLACK_API_ERROR",
+                f"Failed to get channel info: {e}",
+                recoverable=True,
+                data={"channel": channel},
+            ) from e
+
     # Populate extended tool registry for dynamic invocation via call_extended_tool
     _EXTENDED_TOOL_REGISTRY.update(
         {
@@ -7624,6 +8200,9 @@ def build_mcp_server() -> FastMCP:
             "summarize_thread": summarize_thread,
             "summarize_threads": summarize_threads,
             "uninstall_precommit_guard": uninstall_precommit_guard,
+            "slack_post_message": slack_post_message,
+            "slack_list_channels": slack_list_channels,
+            "slack_get_channel_info": slack_get_channel_info,
         }
     )
 

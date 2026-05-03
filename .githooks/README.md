@@ -1,25 +1,20 @@
-# Custom Git Hooks (Legacy)
+# Git hooks
 
-This directory contains custom git hooks that were previously used before adopting the pre-commit framework.
+We use local hooks in `.githooks` (pre-commit + post-checkout/post-merge) and set `core.hooksPath` to this directory.
 
-## Current Recommendation
+## Install / enforce
 
-**We now use the [pre-commit framework](https://pre-commit.com/)** which is the Python standard for managing git hooks.
-
-To set up hooks, run:
 ```bash
-./scripts/setup_git_hooks.sh
+git config core.hooksPath .githooks
 ```
 
-## Legacy Hook
+The post-checkout and post-merge hooks here will reassert `core.hooksPath=.githooks` if it drifts.
 
-The `pre-commit` script in this directory is kept for reference but is **not actively used**. The pre-commit framework (configured in `.pre-commit-config.yaml`) provides:
-- Better hook management and versioning
-- Automatic installation and updates
-- Multi-language support
-- Extensive hook library
-- Better caching and performance
+## Pre-commit hook
 
-## Migration
-
-If you were previously using the custom hook from this directory, please switch to the pre-commit framework by running the setup script above.
+Runs:
+- `uv sync --dev` (cached)
+- `uvx ruff check --fix --unsafe-fixes` (blocking)
+- `uvx ty check` (non-blocking)
+- `uv run bandit ...` (non-blocking)
+- `uv run safety check` (non-blocking)
