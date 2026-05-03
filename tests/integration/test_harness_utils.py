@@ -77,7 +77,10 @@ RESULTS_DIR = Path(tempfile.gettempdir()) / "mcp-mail-tests" / _get_branch_name(
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 MCP_CONFIG_PATH = PROJECT_ROOT / ".mcp.json"
 MCP_AGENT_MAIL_SERVER = "mcp-agent-mail"
-MCP_EXPECTED_TOOLS = {"register_agent", "send_message", "fetch_inbox"}
+# Core MCP tools OR extended tools both indicate successful connection
+MCP_EXPECTED_TOOLS_CORE = {"register_agent", "send_message", "fetch_inbox"}
+MCP_EXPECTED_TOOLS_EXTENDED = {"create_file_reservation", "acquire_build_slot", "search_messages"}
+MCP_EXPECTED_TOOLS = MCP_EXPECTED_TOOLS_CORE | MCP_EXPECTED_TOOLS_EXTENDED
 ENV_PATH = PROJECT_ROOT / ".env"
 
 
@@ -360,13 +363,22 @@ class BaseCLITest:
                 return False, message, last_details
 
             tool_names = self._parse_tool_names_from_output(output)
-            missing_tools = expected_tools - tool_names
             last_details = {"tools": sorted(tool_names), "attempt": attempt, "output": self._redact_output(output)}
 
-            if not missing_tools:
-                return True, "MCP Agent Mail tools available", last_details
+            # Check if ALL core tools OR ALL extended tools are present (both indicate successful MCP connection)
+            has_all_core = tool_names >= MCP_EXPECTED_TOOLS_CORE
+            has_all_extended = tool_names >= MCP_EXPECTED_TOOLS_EXTENDED
 
-            message = f"Missing expected tools: {', '.join(sorted(missing_tools))}"
+            if has_all_core or has_all_extended:
+                if has_all_core and has_all_extended:
+                    found_type = "core and extended"
+                elif has_all_core:
+                    found_type = "core"
+                else:
+                    found_type = "extended"
+                return True, f"MCP Agent Mail tools available ({found_type})", last_details
+
+            message = f"No complete MCP Agent Mail toolset found. Expected all of core {sorted(MCP_EXPECTED_TOOLS_CORE)} or extended {sorted(MCP_EXPECTED_TOOLS_EXTENDED)}"
             if attempt < len(prompts):
                 print(f"  WARN: {message} (attempt {attempt}); retrying...")
                 time.sleep(1)  # Brief pause between retries
@@ -539,10 +551,17 @@ class BaseCLITest:
         try:
             # Build command using CLI profile template
             command_template = self.cli_profile.get("command_template", "{binary} -p {prompt_file}")
+            # Get model from profile or use CLI-specific default (templates may include {model})
+            model = self.cli_profile.get("model")
+            if not model:
+                # Use CLI-specific defaults when model not specified in profile
+                cli_model_defaults = {"claude": "sonnet", "gemini": "gemini-2.0-flash", "codex": "o3-mini"}
+                model = cli_model_defaults.get(self.CLI_NAME, "default")
             cli_command_str = command_template.format(
                 binary=shlex.quote(cli_path),
                 prompt_file=shlex.quote(str(prompt_file)),
                 continue_flag="",
+                model=shlex.quote(model),  # Quote model to prevent command injection
             )
 
             # Split into list for safe subprocess execution (shell=False)
