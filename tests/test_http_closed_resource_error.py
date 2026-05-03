@@ -31,12 +31,10 @@ def _rpc(method: str, params: dict) -> dict[str, Any]:
 
 @pytest.mark.asyncio
 async def test_closed_resource_error_handled_gracefully(isolated_env, monkeypatch):
-    """Test that ClosedResourceError from client disconnect doesn't crash the server.
+    """Sanity check that standard requests do not crash the server.
 
-    This test simulates the scenario where:
-    1. Client connects to MCP server
-    2. During message routing, connection is closed (e.g., client disconnects)
-    3. The server should handle this gracefully without propagating the exception
+    This ensures baseline HTTP handling is stable before simulating disconnects
+    in later tests.
     """
     with contextlib.suppress(Exception):
         _config.clear_settings_cache()
@@ -102,7 +100,7 @@ async def test_closed_resource_error_in_connect_suppressed(isolated_env, monkeyp
         assert r1.status_code in (200, 401, 403)
 
         # Patch for second request
-        with patch.object(StreamableHTTPServerTransport, 'connect', patched_connect):
+        with patch.object(StreamableHTTPServerTransport, "connect", patched_connect):
             # Second request triggers ClosedResourceError - should be handled gracefully
             try:
                 r2 = await client.post(
@@ -155,7 +153,7 @@ async def test_handle_request_closed_resource_error_suppressed(isolated_env, mon
         assert r1.status_code in (200, 401, 403)
 
         # Patch for second request
-        with patch.object(StreamableHTTPServerTransport, 'handle_request', patched_handle_request):
+        with patch.object(StreamableHTTPServerTransport, "handle_request", patched_handle_request):
             try:
                 r2 = await client.post(
                     settings.http.path,
@@ -205,7 +203,7 @@ async def test_exception_group_with_closed_resource_error(isolated_env, monkeypa
         assert r1.status_code in (200, 401, 403)
 
         # Patch for second request
-        with patch.object(StreamableHTTPServerTransport, 'handle_request', patched_handle_request):
+        with patch.object(StreamableHTTPServerTransport, "handle_request", patched_handle_request):
             try:
                 r2 = await client.post(
                     settings.http.path,
@@ -249,8 +247,10 @@ async def test_server_recovers_after_closed_resource_error(isolated_env, monkeyp
 
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         # First request triggers ClosedResourceError
-        with patch.object(StreamableHTTPServerTransport, 'handle_request', patched_handle_request), \
-             contextlib.suppress(Exception):
+        with (
+            patch.object(StreamableHTTPServerTransport, "handle_request", patched_handle_request),
+            contextlib.suppress(Exception),
+        ):
             await client.post(
                 settings.http.path,
                 json=_rpc("tools/call", {"name": "health_check", "arguments": {}}),

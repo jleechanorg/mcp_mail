@@ -952,11 +952,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         # Cancel server_task before exiting context to prevent ClosedResourceError
                         # from the message router trying to read from closed streams
                         server_task.cancel()
-                        # Wait briefly to ensure cancellation completes before closing streams
-                        try:
-                            await asyncio.wait_for(server_task, timeout=0.1)
-                        except (asyncio.CancelledError, asyncio.TimeoutError):
-                            pass  # Expected - task was cancelled or timed out
+                        # Wait briefly to allow cancellation to propagate before closing streams
+                        await asyncio.wait({server_task}, timeout=0.1)
                         try:
                             await http_transport.terminate()
                         except anyio.ClosedResourceError:
@@ -967,6 +964,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                 exc_info=True,
                                 exception=exc,
                             )
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await server_task
             except anyio.ClosedResourceError:
                 # Gracefully handle client disconnects - this is expected behavior when
                 # clients close connections during message routing (e.g., Codex, OAuth flows)
@@ -976,13 +975,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 # and re-raise if there are other non-suppressible exceptions
                 non_closed = [e for e in eg.exceptions if not isinstance(e, anyio.ClosedResourceError)]
                 if non_closed:
-                    # Use derive() to preserve exception context and traceback
-                    if hasattr(eg, "derive"):
-                        raise eg.derive(non_closed) from eg
-                    else:
-                        # Fallback for older Python versions without derive()
-                        raise type(eg)(eg.message, non_closed) from eg
-                # All exceptions were ClosedResourceError, suppress silently
+                    derived = eg.derive(non_closed) if hasattr(eg, "derive") else type(eg)(eg.args[0], non_closed)
+                    raise derived from eg
 
     # Mount at both '/base' and '/base/' to tolerate either form from clients/tests
     mount_base = settings.http.path or "/mcp"
