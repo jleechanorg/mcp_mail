@@ -5,8 +5,6 @@ with panels, syntax highlighting, tables, and more to give full visibility into
 agent tool calls and system operations.
 """
 
-from __future__ import annotations
-
 import json
 import time
 from contextlib import contextmanager, suppress

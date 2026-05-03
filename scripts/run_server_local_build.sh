@@ -31,16 +31,19 @@ trap 'rm -rf "$TEMP_ENV"' EXIT
 # Find Python 3.11+ (prefer the default python3 if it meets the requirement)
 PYTHON_BIN=""
 MIN_VERSION=311  # e.g. 3.11 -> 311, 3.12 -> 312
+MAX_VERSION_EXCLUSIVE=314  # Python 3.14+ is unsupported
 
 if command -v python3 >/dev/null 2>&1; then
   PY_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}{sys.version_info.minor:02d}")')
-  if [[ "$PY_VER" -ge "$MIN_VERSION" ]]; then
+  if [[ "$PY_VER" -ge "$MIN_VERSION" && "$PY_VER" -lt "$MAX_VERSION_EXCLUSIVE" ]]; then
     PYTHON_BIN=$(command -v python3)
   fi
 fi
 
 if [[ -z "$PYTHON_BIN" ]]; then
-  for py in python3.14 python3.13 python3.12 python3.11; do
+  # Python 3.14 is NOT supported due to beartype incompatibility (collections.abc.ByteString removed)
+  # Prefer 3.13 > 3.12 > 3.11 in that order
+  for py in python3.13 python3.12 python3.11; do
     if command -v "$py" >/dev/null 2>&1; then
       PYTHON_BIN=$(command -v "$py")
       break
@@ -49,7 +52,7 @@ if [[ -z "$PYTHON_BIN" ]]; then
 fi
 
 if [[ -z "$PYTHON_BIN" ]]; then
-  echo "❌ Error: Python 3.11 or higher is required"
+  echo "❌ Error: Python 3.11-3.13 is required (Python 3.14+ is not supported)"
   exit 1
 fi
 

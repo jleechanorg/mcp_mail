@@ -49,26 +49,9 @@ fi
 _URL="http://${_HTTP_HOST}:${_HTTP_PORT}${_HTTP_PATH}"
 log_ok "Detected MCP HTTP endpoint: ${_URL}"
 
-# Determine or generate bearer token (prefer session token provided by orchestrator)
-# Reuse existing token if possible (INTEGRATION_BEARER_TOKEN > .env > run helper)
-_TOKEN="${INTEGRATION_BEARER_TOKEN:-}"
-if [[ -z "${_TOKEN}" && -f .env ]]; then
-  _TOKEN=$(grep -E '^HTTP_BEARER_TOKEN=' .env | sed -E 's/^HTTP_BEARER_TOKEN=//') || true
-fi
-if [[ -z "${_TOKEN}" && -f scripts/run_server_with_token.sh ]]; then
-  _TOKEN=$(grep -E 'export HTTP_BEARER_TOKEN="' scripts/run_server_with_token.sh | sed -E 's/.*HTTP_BEARER_TOKEN="([^"]+)".*/\1/') || true
-fi
-if [[ -z "${_TOKEN}" ]]; then
-  if command -v openssl >/dev/null 2>&1; then
-    _TOKEN=$(openssl rand -hex 32)
-  else
-    _TOKEN=$(uv run python - <<'PY'
-import secrets; print(secrets.token_hex(32))
-PY
-)
-  fi
-  log_ok "Generated bearer token."
-fi
+# Load or generate bearer token
+load_or_generate_token python3
+_TOKEN="${HTTP_BEARER_TOKEN}"
 
 log_step "Preparing project-local .claude/settings.json"
 CLAUDE_DIR="${TARGET_DIR}/.claude"
@@ -298,29 +281,19 @@ set_secure_file "$HOME_SETTINGS_PATH" || true
 log_step "Creating run helper script"
 mkdir -p scripts
 RUN_HELPER="scripts/run_server_with_token.sh"
-write_atomic "$RUN_HELPER" <<'SH'
+run_helper_here() { cat; }  # placeholder replaced below
+write_atomic "$RUN_HELPER" <<'HEREDOC_RUNNER'
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then
-  if [[ -f .env ]]; then
-    HTTP_BEARER_TOKEN=$(grep -E '^HTTP_BEARER_TOKEN=' .env | sed -E 's/^HTTP_BEARER_TOKEN=//') || true
-  fi
-fi
-if [[ -z "${HTTP_BEARER_TOKEN:-}" ]]; then
-  if command -v uv >/dev/null 2>&1; then
-    HTTP_BEARER_TOKEN=$(uv run python - <<'PY'
-import secrets; print(secrets.token_hex(32))
-PY
-)
-  else
-    HTTP_BEARER_TOKEN="$(date +%s)_$(hostname)"
-  fi
-fi
-export HTTP_BEARER_TOKEN
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1090
+. "${SCRIPT_DIR}/lib.sh"
+
+load_or_generate_token python3
 
 uv run python -m mcp_agent_mail.cli serve-http "$@"
-SH
+HEREDOC_RUNNER
 set_secure_exec "$RUN_HELPER"
 echo "Created $RUN_HELPER"
 
