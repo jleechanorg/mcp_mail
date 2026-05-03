@@ -1031,6 +1031,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         project = await _ensure_project(settings.slack.sync_project_name)
 
                         # Get or create SlackBridge agent
+                        from .models import Agent
+
                         sender_name = message_info["sender_name"]
                         sender_agent = await _get_agent_by_name_optional(sender_name)
 
