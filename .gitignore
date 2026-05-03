@@ -52,9 +52,6 @@ cover/
 # Django stuff:
 *.log
 local_settings.py
-# PR automation artifacts
-responses.json
-
 db.sqlite3
 db.sqlite3-journal
 
@@ -199,26 +196,6 @@ tmp
 .artifacts*
 run_server_clean.sh.txt
 vendor/*
-# Internal automation prompt artifacts (auto-generated; do not commit—existing tracked file retained per repo policy)
-.agent_prompt*
-
-# Temporary commit message files
-COMMIT_MSG
-COMMIT_EDITMSG
-
-# Signing keys (should never be committed)
-signing-*.key
-signing-*.pub
-
-# Temporary reports (should go in roadmap/ if needed)
-/coverage_report.txt
-/test_report.md
-/evidence_evaluation_report.md
-
-# Local Claude settings (may contain bearer tokens; never commit)
-.claude/settings.local.json
-.claude/settings.local.json.*
-.claude/blocked_violations.log
 
 # Benchmark results - exclude transient JSON output files
 benchmarks/tmp_*
@@ -242,14 +219,10 @@ temp.lock.owner.json
 out/
 test_slack_webhook.py
 
-# MCP Mail - keep placeholder files but ignore generated archive contents
-.mcp_mail/*
+# MCP Mail - track messages.jsonl but ignore SQLite cache
 !.mcp_mail/
-!.mcp_mail/.gitignore
 !.mcp_mail/messages.jsonl
-!.mcp_mail/projects/
 .mcp_mail/*.db
 .mcp_mail/*.db-shm
 .mcp_mail/*.db-wal
-
-.mcp.json
+.mcp_mail/projects/
