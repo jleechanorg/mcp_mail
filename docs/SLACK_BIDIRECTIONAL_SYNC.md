@@ -119,7 +119,7 @@ You have two options for configuration:
 
 #### Option A: credentials.json (Recommended for PyPI installs)
 
-Create or update `~/.mcp_mail/credentials.json`:
+Create or update `~/.mcp_agent_mail_git_mailbox_repo/credentials.json`:
 
 ```json
 {

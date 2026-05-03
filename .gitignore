@@ -52,6 +52,9 @@ cover/
 # Django stuff:
 *.log
 local_settings.py
+# PR automation artifacts
+responses.json
+
 db.sqlite3
 db.sqlite3-journal
 
@@ -215,6 +218,7 @@ signing-*.pub
 # Local Claude settings (may contain bearer tokens; never commit)
 .claude/settings.local.json
 .claude/settings.local.json.*
+.claude/blocked_violations.log
 
 # Benchmark results - exclude transient JSON output files
 benchmarks/tmp_*
@@ -247,3 +251,5 @@ test_slack_webhook.py
 .mcp_mail/*.db
 .mcp_mail/*.db-shm
 .mcp_mail/*.db-wal
+
+.mcp.json

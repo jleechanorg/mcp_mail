@@ -288,9 +288,13 @@ class BaseCLITest:
                 if cleaned:
                     tokens.add(cleaned.lower())
 
+        # Handle both underscore and hyphen variants:
+        # - mcp__mcp_agent_mail__send_message (underscore format)
+        # - mcp__mcp-agent-mail__send_message (hyphen format)
+        # - mcp__mcpagentmail__send_message (no separator format)
         derived = set(
             re.findall(
-                r"mcp__mcp(?:_)?agent(?:_)?mail__([a-zA-Z_][a-zA-Z0-9_]*)",
+                r"mcp__mcp[-_]?agent[-_]?mail__([a-zA-Z_][a-zA-Z0-9_]*)",
                 output.lower(),
             )
         )
@@ -696,42 +700,57 @@ class BaseCLITest:
         """
         display_name = self.cli_profile.get("display_name", self.CLI_NAME) if self.cli_profile else "Unknown"
         print("=" * 70)
-        print(f"{display_name} - MCP Mail Integration Tests (REAL CLI)")
+        print(f"{display_name} - MCP Agent Mail Integration Tests")
         print("=" * 70)
-        print(f"Started: {datetime.now(timezone.utc).isoformat()}\n")
+        print(f"Started: {self.start_time.isoformat()}\n")
 
         # Check prerequisites
-        print("[TEST] CLI availability...")
+        print("[TEST] Orchestration framework...")
         if not ORCHESTRATION_AVAILABLE:
             self.record(
                 "orchestration",
                 False,
-                "orchestration framework not installed - run: uv tool install jleechanorg-orchestration",
+                "Not installed - run: uv tool install jleechanorg-orchestration",
                 skip=True,
             )
             return self._finish()
+        self.record("orchestration", True, "Available")
 
-        if self.check_cli_available():
-            self.record("cli", True, "Installed and responding")
-        else:
+        # Check CLI availability
+        print(f"\n[TEST] {display_name} CLI availability...")
+        if not self.check_cli_available():
             cli_binary = self.cli_profile.get("binary", self.CLI_NAME) if self.cli_profile else self.CLI_NAME
             self.record(
                 "cli",
                 False,
-                f"Not found - install {cli_binary}",
+                self._get_cli_not_found_message(cli_binary),
                 skip=True,
             )
             return self._finish()
+        self.record("cli", True, "Installed and responding")
 
-        # Run CLI test
-        print(f"\n[TEST] CLI invocation (real {display_name})...")
-        success, output = self.run_cli(f"echo 'test marker: {self.test_marker}'")
-        if not success:
-            self.record("invocation", False, f"CLI failed: {output[:200]}")
-        else:
-            self.record("invocation", True, "CLI responded successfully")
+        # MCP Mail tool validation
+        print("\n[TEST] MCP Agent Mail tools via CLI...")
+        if not self.validate_mcp_mail_access(timeout=120):
+            return self._finish()
+
+        # CLI-specific test (override for custom probe)
+        self._run_cli_test()
 
         return self._finish()
+
+    def _get_cli_not_found_message(self, cli_binary: str) -> str:
+        """Return the skip message when CLI is not found. Override in subclasses."""
+        return f"{cli_binary} not installed"
+
+    def _run_cli_test(self) -> None:
+        """Run CLI-specific integration test. Override in subclasses."""
+        print("\n[TEST] Basic CLI invocation...")
+        success, output = self.run_cli("echo 'MCP Mail integration test'")
+        if success:
+            self.record("basic_invocation", True, "CLI responded")
+        else:
+            self.record("basic_invocation", False, f"CLI failed: {output[:200]}")
 
     def _finish(self) -> int:
         """Print summary, save results, return exit code."""

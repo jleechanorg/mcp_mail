@@ -1,8 +1,7 @@
-"""Filesystem and Git archive helpers for MCP Agent Mail.
+"""Legacy storage helper stubs for MCP Agent Mail.
 
-NOTE: Local disk message copying to .mcp_mail/projects/ has been removed.
-This module now only provides stub functions for backwards compatibility.
-All message storage is handled via SQLite database.
+Message persistence is handled via SQLite database only.
+This module keeps compatibility interfaces as inert no-op helpers.
 """
 
 import asyncio
@@ -13,16 +12,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Iterable, Sequence
 
+import anyio
+
 from .config import Settings
 
 logger = logging.getLogger(__name__)
 
 
 def is_archive_enabled(settings: Settings) -> bool:
-    """Check if archive storage is enabled.
-
-    Archive storage has been removed. This always returns False.
-    """
+    """Always disabled; legacy compatibility hook."""
     return False
 
 
@@ -55,7 +53,9 @@ async def ensure_archive(settings: Settings, slug: str, *, project_key: str | No
 
     Returns a dummy ProjectArchive for backwards compatibility.
     """
-    root = Path(settings.storage.root).expanduser().resolve() / "projects" / slug
+    resolved_root = await anyio.Path(settings.storage.root).expanduser()
+    resolved_root = await resolved_root.resolve()
+    root = Path(resolved_root) / "projects" / slug
     return ProjectArchive(
         settings=settings,
         slug=slug,
@@ -68,7 +68,9 @@ async def ensure_archive(settings: Settings, slug: str, *, project_key: str | No
 
 async def ensure_archive_root(settings: Settings, project_key: str | None, slug: str) -> tuple[Path, Any]:
     """Stub function - archive functionality has been removed."""
-    root = Path(settings.storage.root).expanduser().resolve()
+    resolved_root = await anyio.Path(settings.storage.root).expanduser()
+    resolved_root = await resolved_root.resolve()
+    root = Path(resolved_root)
     return root, None
 
 
