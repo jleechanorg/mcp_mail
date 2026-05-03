@@ -32,10 +32,12 @@ class HttpSettings:
     # Basic per-IP limiter (legacy/simple)
     rate_limit_enabled: bool
     rate_limit_per_minute: int
+    rate_limit_slack_per_minute: int
     # Robust token-bucket limiter
     rate_limit_backend: str  # "memory" | "redis"
     rate_limit_tools_per_minute: int
     rate_limit_resources_per_minute: int
+    rate_limit_slack_burst: int
     rate_limit_redis_url: str
     # Optional bursts to control spikiness
     rate_limit_tools_burst: int
@@ -121,6 +123,7 @@ class SlackSettings:
     notify_mention_format: Literal["real_name", "display_name", "agent_name"]
     # Bidirectional sync
     sync_enabled: bool  # Enable bidirectional message sync
+    sync_project_name: str  # Project used for Slack sync threads
     sync_channels: list[str]  # Channel IDs to sync messages from
     sync_thread_replies: bool  # Sync threaded replies as thread_id in MCP
     sync_reactions: bool  # Track reactions as acknowledgments
@@ -227,6 +230,7 @@ def get_settings() -> Settings:
         bearer_token=_decouple_config("HTTP_BEARER_TOKEN", default="") or None,
         rate_limit_enabled=_bool(_decouple_config("HTTP_RATE_LIMIT_ENABLED", default="false"), default=False),
         rate_limit_per_minute=_int(_decouple_config("HTTP_RATE_LIMIT_PER_MINUTE", default="60"), default=60),
+        rate_limit_slack_per_minute=_int(_decouple_config("HTTP_RATE_LIMIT_SLACK_PER_MINUTE", default="120"), default=120),
         rate_limit_backend=_decouple_config("HTTP_RATE_LIMIT_BACKEND", default="memory").lower(),
         rate_limit_tools_per_minute=_int(
             _decouple_config("HTTP_RATE_LIMIT_TOOLS_PER_MINUTE", default="60"), default=60
@@ -237,6 +241,7 @@ def get_settings() -> Settings:
         rate_limit_redis_url=_decouple_config("HTTP_RATE_LIMIT_REDIS_URL", default=""),
         rate_limit_tools_burst=_int(_decouple_config("HTTP_RATE_LIMIT_TOOLS_BURST", default="0"), default=0),
         rate_limit_resources_burst=_int(_decouple_config("HTTP_RATE_LIMIT_RESOURCES_BURST", default="0"), default=0),
+        rate_limit_slack_burst=_int(_decouple_config("HTTP_RATE_LIMIT_SLACK_BURST", default="0"), default=0),
         request_log_enabled=_bool(_decouple_config("HTTP_REQUEST_LOG_ENABLED", default="false"), default=False),
         otel_enabled=_bool(_decouple_config("HTTP_OTEL_ENABLED", default="false"), default=False),
         otel_service_name=_decouple_config("OTEL_SERVICE_NAME", default="mcp-agent-mail"),
@@ -325,6 +330,7 @@ def get_settings() -> Settings:
         notify_on_ack=_bool(_decouple_config("SLACK_NOTIFY_ON_ACK", default="false"), default=False),
         notify_mention_format=mention_format,
         sync_enabled=_bool(_decouple_config("SLACK_SYNC_ENABLED", default="false"), default=False),
+        sync_project_name=_decouple_config("SLACK_SYNC_PROJECT_NAME", default="Slack Sync"),
         sync_channels=_csv("SLACK_SYNC_CHANNELS", default=""),
         sync_thread_replies=_bool(_decouple_config("SLACK_SYNC_THREAD_REPLIES", default="true"), default=True),
         sync_reactions=_bool(_decouple_config("SLACK_SYNC_REACTIONS", default="true"), default=True),

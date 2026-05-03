@@ -36,6 +36,9 @@ from .config import Settings, SlackSettings
 
 logger = logging.getLogger(__name__)
 
+# Regex pattern for extracting Slack user mentions (e.g., <@U123|name>)
+_SLACK_MENTION_PATTERN = re.compile(r"<@([A-Z0-9]+)(?:\|[^>]+)?>")
+
 
 @dataclass
 class SlackThreadMapping:
@@ -228,9 +231,9 @@ class SlackClient:
             Slack API response
 
         Note:
-            Currently uses synchronous file I/O which may block the event loop
-            for large files. Consider using aiofiles or asyncio.to_thread() for
-            async file operations in future improvements.
+            Uses asyncio.to_thread() to avoid blocking the event loop while
+            reading files. Large files still run in a thread pool; revisit if
+            true async filesystem access is required in the future.
         """
         self._check_client()
         assert self._http_client is not None
@@ -625,8 +628,9 @@ async def notify_slack_ack(
 
     Note:
         Unlike notify_slack_message, this function does not raise exceptions
-        on failure. Acknowledgment notifications are non-critical; errors are
-        logged but do not propagate to prevent disrupting the ack workflow.
+        on failure. Acknowledgment notifications are intentionally treated as
+        best-effort so that Slack outages do not disrupt the primary ack
+        workflow. Errors are logged but do not propagate.
 
     Args:
         client: Connected SlackClient instance
@@ -713,14 +717,13 @@ async def handle_slack_message_event(
         logger.debug(f"Channel {channel_id} not in sync_channels list")
         return None
 
-    # Extract @mentions for targeted delivery
+    # Extract @mentions for potential targeted delivery
     # Slack format: <@U1234567890|username> or <@U1234567890>
-    mention_pattern = r"<@([A-Z0-9]+)(?:\|[^>]+)?>"
-    mentioned_users = re.findall(mention_pattern, text)
+    mentioned_users = _SLACK_MENTION_PATTERN.findall(text)
+    # TODO: Route messages to mentioned agents once agent/user mapping is available
 
-    # Try to map Slack user to agent name (simplified - use display name)
-    # In production, you'd want a user mapping table
-    sender_name = f"slack_user_{user_id}" if user_id else "SlackBridge"
+    # Route all Slack traffic through the shared SlackBridge system agent
+    sender_name = "SlackBridge"
 
     # Determine MCP thread_id from Slack thread
     mcp_thread_id = None

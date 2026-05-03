@@ -2825,12 +2825,14 @@ def build_mcp_server() -> FastMCP:
                 try:
                     _ = t.result()
                 except Exception as e:
-                    logger.warning(f"Failed to send Slack notification: {e}")
+                    logger.exception("Failed to send Slack notification", exc_info=e)
 
             # Try Web API client first, fall back to webhook
             if slack_client:
-                task = asyncio.create_task(
-                    notify_slack_message(
+                async def _send_slack_notification() -> None:
+                    if slack_client is None:
+                        return
+                    await notify_slack_message(
                         client=slack_client,
                         settings=settings,
                         message_id=str(message.id),
@@ -2841,7 +2843,8 @@ def build_mcp_server() -> FastMCP:
                         importance=importance,
                         thread_id=thread_id,
                     )
-                )
+
+                task = asyncio.create_task(_send_slack_notification())
                 task.add_done_callback(_slack_done_cb)
             elif settings.slack.webhook_url:
                 # Fallback to webhook URL if no client available
@@ -4272,19 +4275,24 @@ def build_mcp_server() -> FastMCP:
             if settings.slack.enabled and settings.slack.notify_on_ack:
 
                 def _ack_done_cb(task: asyncio.Task) -> None:
-                    with suppress(Exception):
+                    try:
                         task.result()
+                    except Exception as exc:
+                        logger.exception("Failed to send Slack ack notification", exc_info=exc)
 
                 if slack_client:
-                    task = asyncio.create_task(
-                        notify_slack_ack(
+                    async def _send_ack_notification() -> None:
+                        if slack_client is None:
+                            return
+                        await notify_slack_ack(
                             client=slack_client,
                             settings=settings,
                             message_id=str(message.id),
                             agent_name=agent.name,
                             subject=message.subject,
                         )
-                    )
+
+                    task = asyncio.create_task(_send_ack_notification())
                     task.add_done_callback(_ack_done_cb)
                 elif settings.slack.webhook_url:
                     from .slack_integration import post_via_webhook
@@ -7459,7 +7467,8 @@ def build_mcp_server() -> FastMCP:
         if not settings.slack.enabled or not _slack_client:
             raise ToolExecutionError(
                 "SLACK_DISABLED",
-                "Slack integration is not enabled. Set SLACK_ENABLED=true in .env and configure SLACK_BOT_TOKEN.",
+                "Slack client is not available (disabled or failed to initialize). "
+                "Verify SLACK_ENABLED/SLACK_BOT_TOKEN and check startup logs.",
                 recoverable=False,
             )
 
@@ -7473,7 +7482,7 @@ def build_mcp_server() -> FastMCP:
             # Get permalink for the message
             permalink = ""
             if result.get("ok") and result.get("channel") and result.get("ts"):
-                # Permalink retrieval is non-critical; log errors at debug level and proceed without permalink
+                # Permalink retrieval is non-critical; log failures only at debug level
                 try:
                     permalink = await _slack_client.get_permalink(
                         channel=result["channel"],
@@ -7481,8 +7490,12 @@ def build_mcp_server() -> FastMCP:
                     )
                 except Exception as ex:
                     logger.debug(
-                        f"Failed to retrieve Slack permalink for channel={result['channel']} "
-                        f"ts={result['ts']}: {ex}"
+                        "slack_post_message.permalink_failed",
+                        extra={
+                            "channel": result.get("channel"),
+                            "ts": result.get("ts"),
+                            "error": str(ex),
+                        },
                     )
 
             await ctx.info(f"Posted message to Slack channel {channel}")
@@ -7553,7 +7566,8 @@ def build_mcp_server() -> FastMCP:
         if not settings.slack.enabled or not _slack_client:
             raise ToolExecutionError(
                 "SLACK_DISABLED",
-                "Slack integration is not enabled.",
+                "Slack client is not available (disabled or failed to initialize). "
+                "Verify SLACK_ENABLED/SLACK_BOT_TOKEN and check startup logs.",
                 recoverable=False,
             )
 
@@ -7593,7 +7607,7 @@ def build_mcp_server() -> FastMCP:
         Parameters
         ----------
         channel : str
-            Channel ID or name
+            Channel ID to lookup
 
         Returns
         -------
@@ -7632,7 +7646,8 @@ def build_mcp_server() -> FastMCP:
         if not settings.slack.enabled or not _slack_client:
             raise ToolExecutionError(
                 "SLACK_DISABLED",
-                "Slack integration is not enabled.",
+                "Slack client is not available (disabled or failed to initialize). "
+                "Verify SLACK_ENABLED/SLACK_BOT_TOKEN and check startup logs.",
                 recoverable=False,
             )
 
