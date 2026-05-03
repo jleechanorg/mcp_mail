@@ -113,6 +113,8 @@ def test_generate_agent_name_structure():
         assert name[0].isupper()
         # Should be alphanumeric only
         assert name.isalnum()
+        # Should include numeric suffix for larger namespace
+        assert any(ch.isdigit() for ch in name)
 
 
 def test_sanitize_agent_name_basic():

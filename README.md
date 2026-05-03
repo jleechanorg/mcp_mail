@@ -81,9 +81,9 @@ scripts/run_server_with_token.sh
 MCP Mail requires Python 3.11-3.13 due to an upstream dependency incompatibility with Python 3.14. The `beartype` library (a transitive dependency) uses `collections.abc.ByteString`, which was removed in Python 3.14.
 
 **What happens if I try to use Python 3.14?**
-- The launcher scripts will automatically skip Python 3.14 and select 3.13, 3.12, or 3.11
-- If only Python 3.14 is available, you'll see a clear error message with instructions
-- The server includes a startup guard that detects Python 3.14 and exits gracefully
+- **Package installation:** PyPI will block installation on Python 3.14 (enforced by `requires-python` in package metadata)
+- **Launcher scripts:** Will skip Python 3.14 and select 3.13, 3.12, or 3.11 if available
+- **Runtime guard:** If somehow launched with Python 3.14, the CLI exits immediately with a clear error message before dependencies load
 
 **When will Python 3.14 be supported?**
 We're monitoring upstream dependencies (beartype and related packages) for Python 3.14 compatibility. Once the dependency chain is updated, we'll re-enable Python 3.14 support.

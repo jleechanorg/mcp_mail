@@ -28,7 +28,7 @@ echo "📦 Found wheel: $(basename "$WHEEL_FILE")"
 TEMP_ENV=$(mktemp -d -t mcp_mail-XXXXXX)
 trap 'rm -rf "$TEMP_ENV"' EXIT
 
-# Find Python 3.11+ (prefer the default python3 if it meets the requirement)
+# Find Python 3.11-3.13 (prefer the default python3 if it meets the requirement)
 PYTHON_BIN=""
 MIN_VERSION=311  # e.g. 3.11 -> 311, 3.12 -> 312
 MAX_VERSION_EXCLUSIVE=314  # Python 3.14+ is unsupported
