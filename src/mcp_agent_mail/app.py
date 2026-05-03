@@ -1037,6 +1037,35 @@ async def _get_project_by_id(project_id: int) -> Project:
         return project
 
 
+DEFAULT_MAX_BROADCAST_RECIPIENTS = 100
+
+
+async def _get_active_project_agents(
+    project_id: int, *, session: AsyncSession | None = None, max_recipients: int = DEFAULT_MAX_BROADCAST_RECIPIENTS
+) -> tuple[list[Agent], bool]:
+    """Return active, non-placeholder agents for a project, ordered by name.
+
+    Limits to max_recipients + 1 to detect overflow.
+    Returns (agents, is_truncated) where agents has at most max_recipients items.
+    """
+    stmt = (
+        select(Agent)
+        .where(Agent.project_id == project_id)
+        .where(cast(Any, Agent.is_active).is_(True))
+        .where(cast(Any, Agent.is_placeholder).is_(False))
+        .order_by(func.lower(Agent.name))
+        .limit(max_recipients + 1)
+    )
+    if session is None:
+        async with get_session() as new_session:
+            result = await new_session.execute(stmt)
+    else:
+        result = await session.execute(stmt)
+    rows = list(result.scalars().all())
+    is_truncated = len(rows) > max_recipients
+    return rows[:max_recipients], is_truncated
+
+
 # --- Project sibling suggestion helpers -----------------------------------------------------
 
 _PROJECT_PROFILE_FILENAMES: tuple[str, ...] = (
@@ -3119,6 +3148,32 @@ def build_mcp_server() -> FastMCP:
         if should_cc_global_inbox:
             cc_agents.append(global_inbox_agent)
 
+# If sender explicitly CCs the global inbox, fan out to all active project workers.
+        # This keeps global inbox usable as a broadcast trigger while still preserving
+        # regular recipient semantics.
+        explicitly_cced_global_inbox = global_inbox_name.lower() in {n.lower() for n in cc_names}
+        if explicitly_cced_global_inbox and sender.name != global_inbox_name and project.id is not None:
+            existing_recipient_names = {
+                agent.name for agent in to_agents + cc_agents + bcc_agents if getattr(agent, "name", None)
+            }
+            async with get_session() as fanout_session:
+                workers, truncated = await _get_active_project_agents(project.id, session=fanout_session)
+                if truncated:
+                    logger.warning(
+                        "Global inbox broadcast to project %s exceeded %d recipients; truncating.",
+                        project.id,
+                        DEFAULT_MAX_BROADCAST_RECIPIENTS,
+                    )
+                for worker in workers:
+                    worker_name = (worker.name or "").strip()
+                    if not worker_name:
+                        continue
+                    if worker_name == sender.name or worker_name == global_inbox_name:
+                        continue
+                    if worker_name in existing_recipient_names:
+                        continue
+                    cc_agents.append(worker)
+                    existing_recipient_names.add(worker_name)
         # Filter out global inbox from cc_agents for outbox visibility (keep in recipient_records)
         cc_agents_for_outbox = [agent for agent in cc_agents if agent.name != global_inbox_name]
 
