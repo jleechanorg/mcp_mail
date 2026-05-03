@@ -13,8 +13,8 @@ These tests validate end-to-end agent coordination scenarios:
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
+import anyio
 import pytest
 
 from mcp_agent_mail.config import get_settings
@@ -97,9 +97,9 @@ async def test_basic_agent_registration_and_messaging(mcp_client, tmp_path):
     assert inbox_messages[0]["from"] == agent1_name
 
     # Verify .mcp_mail/ directory structure exists
-    storage_root = Path(settings.storage.root)
+    storage_root = anyio.Path(settings.storage.root)
     # The storage structure is under storage_root, organized by project
-    assert storage_root.exists()
+    assert await storage_root.exists()
 
 
 @pytest.mark.asyncio

@@ -15,6 +15,7 @@ import sys
 import time
 from pathlib import Path
 
+import anyio
 import httpx
 import pytest
 
@@ -111,7 +112,7 @@ async def test_server_handles_disconnect_gracefully(real_server):
         try:
             async with client.stream(
                 "POST",
-                "/mcp",
+                "/mcp/",
                 json={
                     "jsonrpc": "2.0",
                     "id": "1",
@@ -132,7 +133,7 @@ async def test_server_handles_disconnect_gracefully(real_server):
 
         # Verify server is still responsive after the disconnect
         response = await client.post(
-            "/mcp",
+            "/mcp/",
             json={
                 "jsonrpc": "2.0",
                 "id": "2",
@@ -154,7 +155,7 @@ async def test_server_continues_after_disconnect(real_server):
         try:
             async with client.stream(
                 "POST",
-                "/mcp",
+                "/mcp/",
                 json={"jsonrpc": "2.0", "id": "1", "method": "tools/list", "params": {}},
                 headers={"Accept": "text/event-stream"},
             ) as response:
@@ -169,7 +170,7 @@ async def test_server_continues_after_disconnect(real_server):
 
         # Second: make a normal request - server should still work
         response = await client.post(
-            "/mcp",
+            "/mcp/",
             json={
                 "jsonrpc": "2.0",
                 "id": "2",
@@ -194,7 +195,7 @@ async def test_multiple_disconnects_dont_crash_server(real_server):
             try:
                 async with client.stream(
                     "POST",
-                    "/mcp",
+                    "/mcp/",
                     json={"jsonrpc": "2.0", "id": str(i), "method": "tools/list", "params": {}},
                     headers={"Accept": "text/event-stream"},
                 ) as response:
@@ -207,7 +208,7 @@ async def test_multiple_disconnects_dont_crash_server(real_server):
 
         # Server should still respond
         response = await client.post(
-            "/mcp",
+            "/mcp/",
             json={
                 "jsonrpc": "2.0",
                 "id": "final",
@@ -230,7 +231,8 @@ async def test_no_asgi_exception_in_logs(real_server):
     log_path = real_server["log_path"]
 
     # Clear log
-    Path(log_path).write_text("")
+    log_file = anyio.Path(log_path)
+    await log_file.write_text("")
 
     async with httpx.AsyncClient(base_url=base_url, timeout=5.0) as client:
         # Trigger disconnects
@@ -238,7 +240,7 @@ async def test_no_asgi_exception_in_logs(real_server):
             try:
                 async with client.stream(
                     "POST",
-                    "/mcp",
+                    "/mcp/",
                     json={"jsonrpc": "2.0", "id": str(i), "method": "tools/list", "params": {}},
                     headers={"Accept": "text/event-stream"},
                 ) as response:
@@ -250,7 +252,7 @@ async def test_no_asgi_exception_in_logs(real_server):
 
     await asyncio.sleep(0.5)
 
-    log_content = Path(log_path).read_text()
+    log_content = await log_file.read_text()
 
     # After fix: Should NOT see "Exception in ASGI application"
     # This is the key assertion - the fix should prevent this error

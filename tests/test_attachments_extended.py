@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 from pathlib import Path
 
+import anyio
 import pytest
 from fastmcp import Client
 from PIL import Image
@@ -17,7 +18,9 @@ async def test_attachments_keep_originals_and_manifest(isolated_env, monkeypatch
     monkeypatch.setenv("KEEP_ORIGINAL_IMAGES", "true")
     with contextlib.suppress(Exception):
         _config.clear_settings_cache()
-    storage_root = Path(get_settings().storage.root).expanduser().resolve()
+    resolved_root = await anyio.Path(get_settings().storage.root).expanduser()
+    resolved_root = await resolved_root.resolve()
+    storage_root = Path(resolved_root)
     img_path = storage_root.parent / "img_o.png"
     img = Image.new("RGB", (4, 4), color=(0, 0, 255))
     img.save(img_path)
@@ -40,23 +43,28 @@ async def test_attachments_keep_originals_and_manifest(isolated_env, monkeypatch
                 "attachment_paths": [str(img_path)],
             },
         )
-        assert res.data.get("deliveries")
-        # Check originals and manifest presence
-        proj = storage_root / "projects" / "backend"
-        manifests = list((proj / "attachments" / "_manifests").glob("*.json"))
-        assert manifests, "expected manifest json"
-        originals = list((proj / "attachments" / "originals").rglob("*.*"))
-        assert originals, "expected originals stored"
+        deliveries = res.data.get("deliveries") or []
+        assert deliveries
+        attachments = deliveries[0].get("payload", {}).get("attachments") or []
+        assert any(att.get("type") == "file" and att.get("path") == str(img_path) for att in attachments)
+        # No archive copies should be produced when storage is disabled
+        proj = storage_root / "projects" / "backend" / "attachments"
+        manifests = list((proj / "_manifests").glob("*.json"))
+        assert not manifests, "expected no manifest files when archive storage is disabled"
+        originals = list((proj / "originals").rglob("*.*"))
+        assert not originals, "expected no originals stored when archive storage is disabled"
     img_path.unlink(missing_ok=True)
 
 
 @pytest.mark.asyncio
 async def test_attachment_inline_vs_file_threshold(isolated_env, monkeypatch):
-    # Large threshold -> inline
+    # Threshold changes should not alter file attachment metadata when archive storage is disabled
     monkeypatch.setenv("INLINE_IMAGE_MAX_BYTES", "1048576")
     with contextlib.suppress(Exception):
         _config.clear_settings_cache()
-    storage_root = Path(get_settings().storage.root).expanduser().resolve()
+    resolved_root = await anyio.Path(get_settings().storage.root).expanduser()
+    resolved_root = await resolved_root.resolve()
+    storage_root = Path(resolved_root)
     img_path = storage_root.parent / "img_t.png"
     img = Image.new("RGB", (8, 8), color=(255, 0, 0))
     img.save(img_path)
@@ -68,7 +76,7 @@ async def test_attachment_inline_vs_file_threshold(isolated_env, monkeypatch):
             "register_agent",
             {"project_key": "Backend", "program": "codex", "model": "gpt-5", "name": "BlueLake"},
         )
-        # Inline expected
+        # With archive disabled, all attachments are file type regardless of threshold.
         r_inline = await client.call_tool(
             "send_message",
             {
@@ -81,9 +89,9 @@ async def test_attachment_inline_vs_file_threshold(isolated_env, monkeypatch):
             },
         )
         atts1 = (r_inline.data.get("deliveries") or [{}])[0].get("payload", {}).get("attachments", [])
-        assert any(a.get("type") == "inline" for a in atts1)
+        assert any(a.get("type") == "file" for a in atts1)
 
-        # Small threshold -> file
+        # Small threshold -> still file
         monkeypatch.setenv("INLINE_IMAGE_MAX_BYTES", "1")
         with contextlib.suppress(Exception):
             _config.clear_settings_cache()

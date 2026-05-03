@@ -1,6 +1,6 @@
 # MCP Agent Mail - Test Evidence Package
-**Date**: 2025-11-18  
-**PR Branch**: dev1763422703  
+**Date**: 2025-11-18
+**PR Branch**: dev1763422703
 **Commits**: a8be525, 90e6760, 4e62058
 
 ## Executive Summary
@@ -48,7 +48,7 @@ async def _ensure_project(human_key: str) -> Project:
     async with get_session() as session:
         # ... create/load project ...
         await _ensure_global_inbox_agent(project)  # Creates nested session!
-        
+
 async def _ensure_global_inbox_agent(project: Project) -> Agent:
     async with get_session() as session:  # NESTED SESSION - BREAKS!
         # project is detached from this session
@@ -60,7 +60,7 @@ async def _ensure_project(human_key: str) -> Project:
     async with get_session() as session:
         # ... create/load project ...
         await _ensure_global_inbox_agent(project, session=session)  # Reuse session!
-        
+
 async def _ensure_global_inbox_agent(project: Project, session: Optional["AsyncSession"] = None) -> Agent:
     if session:
         return await _create_or_get_global_inbox(session, project, global_inbox_name)
@@ -78,7 +78,7 @@ async def _ensure_global_inbox_agent(project: Project, session: Optional["AsyncS
 **Evidence**:
 ```
 ✅ Message 2 sent: BackendDev -> DatabaseAdmin
-✅ Message 3 sent: DatabaseAdmin -> BackendDev  
+✅ Message 3 sent: DatabaseAdmin -> BackendDev
 ✅ Message 4 sent: BackendDev -> FrontendDev (CC: DatabaseAdmin)
 ```
 
@@ -166,7 +166,7 @@ SELECT COUNT(*) FROM message_recipients WHERE kind IN ('to', 'cc'); -- Result: 6
 
 **Evidence Location**: `/tmp/real_claude_multiagent_20251118_193652/`
 
-**Analysis**: 
+**Analysis**:
 - Test identified critical production bug (MCP-fq5)
 - Bug was fixed and validated via Test 2
 - Real Claude CLI failures were environment-related (OOM/timeout), not code bugs
@@ -177,16 +177,16 @@ SELECT COUNT(*) FROM message_recipients WHERE kind IN ('to', 'cc'); -- Result: 6
 ## Known Issues (Non-Blocking)
 
 ### 1. FastMCP Deserialization Bug
-**Symptom**: `fetch_inbox` returns empty `types.Root()` objects  
-**Impact**: ❌ Test automation only - does NOT affect functionality  
-**Workaround**: Use SQLite queries for validation  
-**Evidence**: Inbox JSON files show `[{},{},...]` but SQLite queries show full message content  
+**Symptom**: `fetch_inbox` returns empty `types.Root()` objects
+**Impact**: ❌ Test automation only - does NOT affect functionality
+**Workaround**: Use SQLite queries for validation
+**Evidence**: Inbox JSON files show `[{},{},...]` but SQLite queries show full message content
 **Production Impact**: None - messages work correctly, only Python API test display affected
 
 ### 2. Global Inbox Recipients (Feature, Not Bug)
-**Behavior**: All messages automatically CC'd to `global-inbox-{project-slug}`  
-**Purpose**: Project-wide visibility, audit trail, debugging  
-**Impact**: ✅ Expected behavior, documented in design  
+**Behavior**: All messages automatically CC'd to `global-inbox-{project-slug}`
+**Purpose**: Project-wide visibility, audit trail, debugging
+**Impact**: ✅ Expected behavior, documented in design
 **Production Impact**: None - this is intentional functionality
 
 ---
@@ -374,6 +374,6 @@ test_report.md                  # Gemini agent validation summary
 
 ---
 
-**Generated**: 2025-11-18  
-**Validated By**: Agent 'm', Agent 'mv' (liam_pcm), Gemini agent  
+**Generated**: 2025-11-18
+**Validated By**: Agent 'm', Agent 'mv' (liam_pcm), Gemini agent
 **Production Readiness**: ✅ READY
