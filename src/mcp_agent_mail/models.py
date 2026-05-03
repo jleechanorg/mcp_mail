@@ -42,6 +42,10 @@ class Agent(SQLModel, table=True):
     contact_policy: str = Field(default="auto", max_length=16)
     is_active: bool = Field(default=True)
     deleted_ts: Optional[datetime] = Field(default=None)
+    # True if agent was auto-created when receiving messages before official registration.
+    # When officially registered, this is set to False. Placeholder agents can be "claimed"
+    # by a later registration call, which updates the agent's program/model/task_description.
+    is_placeholder: bool = Field(default=False)
 
 
 class MessageRecipient(SQLModel, table=True):

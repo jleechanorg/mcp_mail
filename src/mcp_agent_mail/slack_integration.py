@@ -360,8 +360,12 @@ def format_mcp_message_for_slack(
         "low": ":information_source:",
     }.get(importance, ":email:")
 
-    # Fallback text for notifications with importance indicator
-    text = f"{importance_emoji} *{subject}* from {sender_name}"
+    # Fallback text for notifications with importance indicator and full routing info
+    if recipients:
+        recipient_list = ", ".join(recipients)
+        text = f"{importance_emoji} *{subject}* from *{sender_name}* to {recipient_list}"
+    else:
+        text = f"{importance_emoji} *{subject}* from *{sender_name}*"
 
     if not use_blocks:
         return (text, None)
@@ -383,9 +387,11 @@ def format_mcp_message_for_slack(
     )
 
     # Metadata section
+    recipient_lines = "\n".join(f"• {name}" for name in recipients) if recipients else "—"
+
     metadata_fields = [
-        {"type": "mrkdwn", "text": f"*From:*\n{sender_name}"},
-        {"type": "mrkdwn", "text": f"*To:*\n{', '.join(recipients[:5])}"},
+        {"type": "mrkdwn", "text": f"*From:*\n*{sender_name}*"},
+        {"type": "mrkdwn", "text": f"*To:*\n{recipient_lines}"},
     ]
 
     if message_id:
