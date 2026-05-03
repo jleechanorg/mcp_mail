@@ -335,10 +335,30 @@ get_project_hash() {
   fi
 }
 
+# Generate short hash of branch name for disambiguation (6 alphanumeric chars).
+# Hashes the raw branch name (before sanitize_alphanumeric) so "feat/auth-system"
+# and "feat-auth-system" produce different suffixes despite colliding post-sanitize.
+get_branch_hash() {
+  local raw_branch="$1"
+  # xxhsum is fastest; sha256sum is most universally available
+  if command -v xxhsum >/dev/null 2>&1; then
+    echo "$raw_branch" | xxhsum -h 2>/dev/null | cut -c1-6 || \
+      echo "$raw_branch" | xxhsum | cut -c1-6
+  elif command -v sha256sum >/dev/null 2>&1; then
+    echo "$raw_branch" | sha256sum | cut -c1-6
+  elif command -v shasum >/dev/null 2>&1; then
+    echo "$raw_branch" | shasum -a 256 | cut -c1-6
+  else
+    # Final fallback: last 6 alphanumerics of the branch itself (noisy but functional)
+    echo "$raw_branch" | sanitize_alphanumeric | tail -c 6
+  fi
+}
+
 # Main logic
 BRANCH=$(get_git_branch)
 PROJECT_KEY=$(get_project_key)
 PROJECT_HASH=$(get_project_hash "$PROJECT_KEY")
+BRANCH_HASH=$(get_branch_hash "$BRANCH")
 
 # Generate memorable name from branch (2 words with hyphens)
 MEMORABLE_NAME=""
@@ -354,11 +374,17 @@ if [[ -n "$SUFFIX" ]]; then
   MEMORABLE_NAME="${MEMORABLE_NAME}-${SUFFIX}"
 fi
 
-# Add project hash for cross-repo uniqueness (e.g., "auto-register-c-3f2a1b")
+# Append branch hash for disambiguation before sanitization.
+# Example: "auto-register-c" -> "auto-register-c-a1b2c3"
+# This breaks the collision between "feat/auth-system" and "feat-auth-system"
+# (both sanitize to "featauthsystem" but differ on the hash suffix).
+MEMORABLE_NAME="${MEMORABLE_NAME}-${BRANCH_HASH}"
+
+# Add project hash for cross-repo uniqueness (e.g., "auto-register-c-a1b2c3-3f2a1b")
 MEMORABLE_NAME="${MEMORABLE_NAME}-${PROJECT_HASH}"
 
 # Agent names must be alphanumeric only - sanitize by removing hyphens
-# Example: "auto-register-c-3f2a1b" -> "autoregisterc3f2a1b"
+# Example: "auto-register-c-a1b2c3-3f2a1b" -> "autoregisterca1b2c33f2a1b"
 AGENT_NAME=$(sanitize_alphanumeric "$MEMORABLE_NAME")
 
 # Validate agent name is not empty
