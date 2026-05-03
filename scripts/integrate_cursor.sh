@@ -46,21 +46,10 @@ if [[ -z "${_HTTP_HOST}" || -z "${_HTTP_PORT}" || -z "${_HTTP_PATH}" ]]; then
 fi
 
 _URL="http://${_HTTP_HOST}:${_HTTP_PORT}${_HTTP_PATH}"
-_TOKEN="${INTEGRATION_BEARER_TOKEN:-}"
-if [[ -z "${_TOKEN}" && -f .env ]]; then
-  _TOKEN=$(grep -E '^HTTP_BEARER_TOKEN=' .env | sed -E 's/^HTTP_BEARER_TOKEN=//') || true
-fi
-if [[ -z "${_TOKEN}" ]]; then
-  if command -v openssl >/dev/null 2>&1; then
-    _TOKEN=$(openssl rand -hex 32)
-  else
-    _TOKEN=$(uv run python - <<'PY'
-import secrets; print(secrets.token_hex(32))
-PY
-)
-  fi
-  echo "Generated bearer token."
-fi
+
+# Load or generate bearer token
+load_or_generate_token python3
+_TOKEN="${HTTP_BEARER_TOKEN}"
 AUTH_HEADER_LINE="        \"Authorization\": \"Bearer ${_TOKEN}\""
 OUT_JSON="${TARGET_DIR}/cursor.mcp.json"
 backup_file "$OUT_JSON"

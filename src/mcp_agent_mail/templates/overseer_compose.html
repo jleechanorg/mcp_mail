@@ -168,13 +168,58 @@
                  id="subject"
                  x-model="subject"
                  required
-                 maxlength="200"
+                 :maxlength="getSubjectMaxLength()"
                  placeholder="e.g., Urgent: Review security vulnerability"
                  class="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white placeholder-slate-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all" />
           <p class="mt-1.5 text-xs text-slate-500 dark:text-slate-500">
-            <span x-text="subject.length"></span> / 200 characters
+            <span x-text="subject.length"></span> / <span x-text="getSubjectMaxLength()"></span> characters
+            <span x-show="messageMode !== 'normal'" class="text-slate-400">(mode reserves space for prefix)</span>
           </p>
         </div>
+
+        <!-- Message Mode Selector -->
+        <fieldset>
+          <legend class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">
+            Message Mode
+          </legend>
+          <div class="flex items-center gap-4" role="group" aria-describedby="messageMode-help">
+            <label class="flex items-center gap-2 cursor-pointer group">
+              <input type="radio"
+                     name="messageMode"
+                     value="normal"
+                     x-model="messageMode"
+                     class="w-4 h-4 text-primary-600 bg-white dark:bg-slate-700 border-slate-300 dark:border-slate-600 focus:ring-2 focus:ring-primary-500" />
+              <span class="text-sm text-slate-700 dark:text-slate-300 group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
+                Normal
+              </span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer group">
+              <input type="radio"
+                     name="messageMode"
+                     value="think"
+                     x-model="messageMode"
+                     class="w-4 h-4 text-primary-600 bg-white dark:bg-slate-700 border-slate-300 dark:border-slate-600 focus:ring-2 focus:ring-primary-500" />
+              <span class="text-sm text-slate-700 dark:text-slate-300 group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
+                Think/Plan
+              </span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer group">
+              <input type="radio"
+                     name="messageMode"
+                     value="god"
+                     x-model="messageMode"
+                     class="w-4 h-4 text-primary-600 bg-white dark:bg-slate-700 border-slate-300 dark:border-slate-600 focus:ring-2 focus:ring-primary-500" />
+              <span class="text-sm text-slate-700 dark:text-slate-300 group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
+                God Mode
+              </span>
+            </label>
+          </div>
+          <p id="messageMode-help" class="mt-2 text-xs text-slate-500 dark:text-slate-400">
+            <span x-show="messageMode === 'normal'">Standard message - no special indicator</span>
+            <span x-show="messageMode === 'think'">Adds <code class="px-1 py-0.5 bg-slate-200 dark:bg-slate-700 rounded text-xs font-mono">:THINK:</code> prefix to help agents identify planning/thinking requests</span>
+            <span x-show="messageMode === 'god'">Adds <code class="px-1 py-0.5 bg-slate-200 dark:bg-slate-700 rounded text-xs font-mono">:GOD:</code> prefix for maximum priority directives</span>
+          </p>
+        </fieldset>
 
         <!-- Message Body -->
         <div x-show="viewMode === 'write' || viewMode === 'split'" x-transition>
@@ -362,7 +407,17 @@ Please investigate the following:
           </div>
           <div class="flex items-start justify-between text-sm gap-3">
             <span class="text-slate-600 dark:text-slate-400 flex-shrink-0">Subject:</span>
-            <span class="font-medium text-slate-900 dark:text-white text-right" x-text="subject"></span>
+            <span class="font-medium text-slate-900 dark:text-white text-right" x-text="getSubjectWithMode()"></span>
+          </div>
+          <div class="flex items-center justify-between text-sm">
+            <span class="text-slate-600 dark:text-slate-400">Mode:</span>
+            <span class="px-2 py-0.5 text-xs font-medium rounded"
+                  :class="{
+                    'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300': messageMode === 'normal',
+                    'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400': messageMode === 'think',
+                    'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400': messageMode === 'god'
+                  }"
+                  x-text="messageMode === 'normal' ? 'Normal' : messageMode === 'think' ? 'Think/Plan' : 'God Mode'"></span>
           </div>
           <div class="flex items-center justify-between text-sm">
             <span class="text-slate-600 dark:text-slate-400">Priority:</span>
@@ -403,6 +458,9 @@ function overseerComposer() {
     recipientSearch: '',
     viewMode: 'write',
     renderedPreview: '',
+    messageMode: 'normal',
+    thinkPrefix: ':THINK:',
+    godPrefix: ':GOD:',
     sending: false,
     showToast: false,
     showConfirmModal: false,
@@ -434,13 +492,79 @@ function overseerComposer() {
     },
 
     canSend() {
+      // Calculate the final subject length including mode prefix
+      const finalSubjectLength = this.getSubjectWithMode().length;
+
       return this.selectedRecipients.length > 0 &&
              this.selectedRecipients.length <= 100 &&
              this.subject.trim() &&
-             this.subject.length <= 200 &&
+             finalSubjectLength <= 200 &&
              this.body.trim() &&
              this.body.length <= 49600 &&
              !this.sending;
+    },
+
+    getSubjectWithMode() {
+      // Prepend mode indicator to subject based on selected mode, avoiding duplicate prefixes
+      const rawSubject = this.subject.trim();
+
+      if (this.messageMode === 'think') {
+        // If subject already starts with :THINK:, return as-is
+        if (rawSubject.startsWith(this.thinkPrefix)) {
+          return rawSubject;
+        }
+        // If subject starts with :GOD:, replace it with :THINK:
+        if (rawSubject.startsWith(this.godPrefix)) {
+          const remainder = rawSubject.slice(this.godPrefix.length).trimStart();
+          return this.thinkPrefix + (remainder ? ' ' + remainder : '');
+        }
+        // Otherwise, prepend :THINK:
+        return this.thinkPrefix + (rawSubject ? ' ' + rawSubject : '');
+      } else if (this.messageMode === 'god') {
+        // If subject already starts with :GOD:, return as-is
+        if (rawSubject.startsWith(this.godPrefix)) {
+          return rawSubject;
+        }
+        // If subject starts with :THINK:, replace it with :GOD:
+        if (rawSubject.startsWith(this.thinkPrefix)) {
+          const remainder = rawSubject.slice(this.thinkPrefix.length).trimStart();
+          return this.godPrefix + (remainder ? ' ' + remainder : '');
+        }
+        // Otherwise, prepend :GOD:
+        return this.godPrefix + (rawSubject ? ' ' + rawSubject : '');
+      }
+
+      return rawSubject;
+    },
+
+    getSubjectMaxLength() {
+      const rawSubject = this.subject.trim();
+
+      if (this.messageMode === 'think') {
+        if (rawSubject.startsWith(this.thinkPrefix)) {
+          return 200;
+        }
+        // If it starts with the OTHER prefix, account for the replacement
+        if (rawSubject.startsWith(this.godPrefix)) {
+          // It will replace :GOD: (6) with :THINK: (8), net +2
+          return 200 - (8 - 6); // 198
+        }
+        return 200 - 8; // 192
+      }
+
+      if (this.messageMode === 'god') {
+        if (rawSubject.startsWith(this.godPrefix)) {
+          return 200;
+        }
+        // If it starts with the OTHER prefix, account for the replacement
+        if (rawSubject.startsWith(this.thinkPrefix)) {
+          // It will replace :THINK: (8) with :GOD: (6), net -2
+          return 200 + (8 - 6); // 202
+        }
+        return 200 - 6; // 194
+      }
+
+      return 200;
     },
 
     insertMarkdown(before, after, placeholder) {
@@ -524,7 +648,7 @@ function overseerComposer() {
           },
           body: JSON.stringify({
             recipients: this.selectedRecipients,
-            subject: this.subject.trim(),
+            subject: this.getSubjectWithMode(),
             body_md: this.body.trim(),
             thread_id: this.threadId.trim() || null,
           })

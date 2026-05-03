@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import base64
 import contextlib
+import hmac
 import importlib
 import json
 import logging
@@ -61,6 +62,7 @@ from .storage import (
 # Slack webhook dedupe cache (in-memory best-effort)
 _slack_event_cache: set[tuple[str, str]] = set()
 _slack_event_cache_order: deque[tuple[str, str]] = deque(maxlen=5000)
+_slack_event_cache_lock = asyncio.Lock()
 
 
 async def _project_slug_from_id(pid: int | None) -> str | None:
@@ -145,6 +147,33 @@ def _configure_logging(settings: Settings) -> None:
     _LOGGING_CONFIGURED = True
 
 
+def _has_forwarded_headers(request: Request) -> bool:
+    """Return True if the request contains standard reverse-proxy forwarding headers."""
+    forwarded = request.headers.get("X-Forwarded-For") or request.headers.get("X-Real-IP")
+    return bool(forwarded)
+
+
+def _is_trusted_localhost(request: Request) -> bool:
+    """Return True if the request is from a trusted localhost source.
+
+    When the server runs behind a reverse proxy on the same host, the proxy's
+    outbound socket appears as 127.0.0.1. We only trust localhost as "local"
+    when either the connection is direct (no forwarded headers, meaning the
+    client is truly on the same machine) or when the request comes from the
+    loopback interface explicitly (::1). This prevents unauthenticated
+    access when a reverse proxy sits in front of the server.
+    """
+    try:
+        client_host = request.client.host if request.client else ""
+    except Exception:
+        return False
+    if client_host not in {"127.0.0.1", "::1", "localhost"}:
+        return False
+    # Require forwarding headers to be present before trusting a loopback address,
+    # unless the request comes from ::1 (kernel-level loopback, not a forwarded socket).
+    return client_host == "::1" or _has_forwarded_headers(request)
+
+
 class BearerAuthMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: FastAPI, token: str, allow_localhost: bool = False) -> None:
         super().__init__(app)
@@ -155,14 +184,10 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         path = request.url.path or ""
         if request.method == "OPTIONS":  # allow CORS preflight
             return await call_next(request)
-        if path.startswith("/health/") or path == "/slack/events":
+        if path.startswith("/health/") or path in {"/slack/events", "/slackbox/incoming"}:
             return await call_next(request)
-        # Allow localhost without Authorization when enabled
-        try:
-            client_host = request.client.host if request.client else ""
-        except Exception:
-            client_host = ""
-        if self._allow_localhost and client_host in {"127.0.0.1", "::1", "localhost"}:
+        # Allow localhost without Authorization when enabled (requires direct loopback or forwarded headers)
+        if self._allow_localhost and _is_trusted_localhost(request):
             return await call_next(request)
         auth_header = request.headers.get("Authorization", "")
         if auth_header != f"Bearer {self._token}":
@@ -379,27 +404,15 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
         else:
             roles = {self._default_role}
             # Elevate localhost to writer when unauthenticated localhost is allowed
-            try:
-                client_host = request.client.host if request.client else ""
-            except Exception:
-                client_host = ""
-            if bool(getattr(self.settings.http, "allow_localhost_unauthenticated", False)) and client_host in {
-                "127.0.0.1",
-                "::1",
-                "localhost",
-            }:
+            if bool(getattr(self.settings.http, "allow_localhost_unauthenticated", False)) and _is_trusted_localhost(
+                request
+            ):
                 roles.add("writer")
 
         # RBAC enforcement (skip for localhost when allowed)
-        try:
-            client_host = request.client.host if request.client else ""
-        except Exception:
-            client_host = ""
-        is_local_ok = bool(getattr(self.settings.http, "allow_localhost_unauthenticated", False)) and client_host in {
-            "127.0.0.1",
-            "::1",
-            "localhost",
-        }
+        is_local_ok = bool(
+            getattr(self.settings.http, "allow_localhost_unauthenticated", False)
+        ) and _is_trusted_localhost(request)
         # When RBAC is enabled but no authentication mechanism is available, return 401
         if self._rbac_enabled and not is_local_ok and kind in {"tools", "resources"}:
             # If JWT is not enabled AND bearer token is not configured, there's no way to authenticate
@@ -813,7 +826,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         for task in tasks:
             task.cancel()
         for task in tasks:
-            with contextlib.suppress(Exception):
+            # Suppress both Exception (pre-3.11 CancelledError) and BaseException CancelledError (3.11+)
+            with contextlib.suppress(Exception, asyncio.CancelledError):
                 await task
 
     from contextlib import asynccontextmanager
@@ -952,34 +966,73 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         slack_channel = message_info.get("slack_channel")
         cache_key = dedupe_key or ((slack_channel, slack_ts) if slack_ts and slack_channel else None)
 
-        if cache_key and cache_key in _slack_event_cache:
-            logger.info(
-                "slack_message_duplicate_skipped",
-                slack_ts=slack_ts,
-                channel=slack_channel,
-                source=source,
-            )
-            return JSONResponse({"ok": True, "message": "Duplicate Slack event skipped"})
+        if cache_key:
+            async with _slack_event_cache_lock:
+                if cache_key in _slack_event_cache:
+                    logger.info(
+                        "slack_message_duplicate_skipped",
+                        slack_ts=slack_ts,
+                        channel=slack_channel,
+                        source=source,
+                    )
+                    return JSONResponse({"ok": True, "message": "Duplicate Slack event skipped"})
+                # Pre-evict if deque is at capacity so set and deque stay in sync
+                if len(_slack_event_cache_order) >= _slack_event_cache_order.maxlen:
+                    old = _slack_event_cache_order.popleft()
+                    _slack_event_cache.discard(old)
+                _slack_event_cache.add(cache_key)
+                _slack_event_cache_order.append(cache_key)
 
-        project = await _ensure_project(settings.slack.sync_project_name)
+        # Route to the original thread's project if thread_id is provided, so Slack
+        # ack replies land in the same project as the original message.
+        thread_id = message_info.get("thread_id")
+        project = None
+        if thread_id:
+            async with get_session() as session:
+                if thread_id.isdigit():
+                    result = await session.execute(
+                        text(
+                            "SELECT p.id, p.slug, p.human_key FROM messages m JOIN projects p ON p.id = m.project_id WHERE m.id = :mid"
+                        ),
+                        {"mid": int(thread_id)},
+                    )
+                else:
+                    result = await session.execute(
+                        text("""
+                            SELECT p.id, p.slug, p.human_key
+                            FROM messages m
+                            JOIN projects p ON p.id = m.project_id
+                            WHERE m.thread_id = :tid
+                            ORDER BY m.id ASC
+                            LIMIT 1
+                        """),
+                        {"tid": thread_id},
+                    )
+                row = result.fetchone()
+                if row:
+                    from .models import Project
+
+                    project = Project(id=row[0], slug=row[1], human_key=row[2])
+                    logger.info(
+                        "slack_reply_routed_to_original_project",
+                        thread_id=thread_id,
+                        project_slug=project.slug,
+                        source=source,
+                    )
+        if not project:
+            # Fall back to sync_project_name for new Slack-originated threads
+            project = await _ensure_project(settings.slack.sync_project_name)
 
         sender_name = message_info["sender_name"]
         sender_agent = await _get_agent_by_name_optional(sender_name)
 
         if not sender_agent:
             async with get_session() as session:
-                # Set program/model based on source
-                if source == "slack":
-                    program = "slack_bridge"
-                    model = "slack-events"
-                else:
-                    program = "slack_ingestion"
-                    model = "slack-webhook"
                 sender_agent = Agent(
                     name=sender_name,
                     project_id=project.id,
-                    program=program,
-                    model=model,
+                    program="slack_bridge",
+                    model="slack-events",
                     task_description="Bridges Slack messages into MCP Agent Mail",
                     is_active=True,
                 )
@@ -1057,13 +1110,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
         _archive_task = asyncio.create_task(_persist_archive())
         _ = _archive_task
-
-        if cache_key:
-            _slack_event_cache.add(cache_key)
-            _slack_event_cache_order.append(cache_key)
-            while len(_slack_event_cache_order) > _slack_event_cache_order.maxlen:
-                old = _slack_event_cache_order.popleft()
-                _slack_event_cache.discard(old)
 
         slack_client_ref = None
         try:
@@ -1177,7 +1223,9 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         source="slack_events",
                     )
 
-                return JSONResponse({"ok": True, "message": "Event ignored"})
+                else:
+                    # Message was filtered/ignored (e.g., bot message, wrong channel)
+                    return JSONResponse({"ok": True, "message": "Event ignored"})
 
             # Handle reaction_added events (future: map to acknowledgments)
             elif event_subtype == "reaction_added":
@@ -1197,13 +1245,17 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         if not settings.slack.slackbox_enabled:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Slackbox disabled")
 
-        if not settings.slack.slackbox_token:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Slackbox token not configured")
-
         form = await request.form()
 
         token = (form.get("token") or "").strip()
-        if token != settings.slack.slackbox_token:
+        expected_token = (settings.slack.slackbox_token or "").strip()
+        if not expected_token:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Slackbox token not configured",
+            )
+
+        if not hmac.compare_digest(token, expected_token):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Slackbox token")
 
         text = (form.get("text") or "").strip()

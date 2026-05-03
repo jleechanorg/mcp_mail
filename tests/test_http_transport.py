@@ -3,9 +3,9 @@ from __future__ import annotations
 import contextlib
 import json
 import time
-from pathlib import Path
 from typing import Any
 
+import anyio
 import pytest
 from authlib.jose import JsonWebKey, jwt
 from httpx import ASGITransport, AsyncClient
@@ -33,29 +33,32 @@ async def test_http_bearer_and_cors_preflight(isolated_env, monkeypatch):
     server = build_mcp_server()
     app = build_http_app(settings, server)
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # Preflight OPTIONS
-        r0 = await client.options(
-            settings.http.path,
-            headers={
-                "Origin": "http://example.com",
-                "Access-Control-Request-Method": "POST",
-            },
-        )
-        assert r0.status_code in (200, 204)
-        # No bearer -> 401
-        r1 = await client.post(settings.http.path, json=_rpc("tools/call", {"name": "health_check", "arguments": {}}))
-        assert r1.status_code == 401
-        # With bearer
-        r2 = await client.post(
-            settings.http.path,
-            headers={"Authorization": "Bearer token123", "Origin": "http://example.com"},
-            json=_rpc("tools/call", {"name": "health_check", "arguments": {}}),
-        )
-        assert r2.status_code == 200
-        # CORS header present on response
-        assert r2.headers.get("access-control-allow-origin") in ("*", "http://example.com")
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test", follow_redirects=True) as client:
+            # Preflight OPTIONS
+            r0 = await client.options(
+                settings.http.path,
+                headers={
+                    "Origin": "http://example.com",
+                    "Access-Control-Request-Method": "POST",
+                },
+            )
+            assert r0.status_code in (200, 204)
+            # No bearer -> 401
+            r1 = await client.post(
+                settings.http.path, json=_rpc("tools/call", {"name": "health_check", "arguments": {}})
+            )
+            assert r1.status_code == 401
+            # With bearer
+            r2 = await client.post(
+                settings.http.path,
+                headers={"Authorization": "Bearer token123", "Origin": "http://example.com"},
+                json=_rpc("tools/call", {"name": "health_check", "arguments": {}}),
+            )
+            assert r2.status_code == 200
+            # CORS header present on response
+            assert r2.headers.get("access-control-allow-origin") in ("*", "http://example.com")
 
 
 @pytest.mark.asyncio
@@ -105,23 +108,24 @@ async def test_http_jwks_validation_and_resource_rate_limit(isolated_env, monkey
 
     monkeypatch.setattr(httpx.AsyncClient, "get", fake_get, raising=False)
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        headers = {"Authorization": f"Bearer {token}"}
-        # Reader can call read-only tool
-        r = await client.post(
-            settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}})
-        )
-        assert r.status_code == 200
-        # Resource rate limit 1 rpm -> second call 429
-        r1 = await client.post(
-            settings.http.path, headers=headers, json=_rpc("resources/read", {"uri": "resource://projects"})
-        )
-        assert r1.status_code in (200, 429)
-        r2 = await client.post(
-            settings.http.path, headers=headers, json=_rpc("resources/read", {"uri": "resource://projects"})
-        )
-        assert r2.status_code == 429
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test", follow_redirects=True) as client:
+            headers = {"Authorization": f"Bearer {token}"}
+            # Reader can call read-only tool
+            r = await client.post(
+                settings.http.path, headers=headers, json=_rpc("tools/call", {"name": "health_check", "arguments": {}})
+            )
+            assert r.status_code == 200
+            # Resource rate limit 1 rpm -> second call 429
+            r1 = await client.post(
+                settings.http.path, headers=headers, json=_rpc("resources/read", {"uri": "resource://projects"})
+            )
+            assert r1.status_code in (200, 429)
+            r2 = await client.post(
+                settings.http.path, headers=headers, json=_rpc("resources/read", {"uri": "resource://projects"})
+            )
+            assert r2.status_code == 429
 
 
 @pytest.mark.asyncio
@@ -129,13 +133,15 @@ async def test_http_path_mount_trailing_and_no_slash(isolated_env):
     server = build_mcp_server()
     settings = _config.get_settings()
     app = build_http_app(settings, server)
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        base = settings.http.path.rstrip("/")
-        r1 = await client.post(base, json=_rpc("tools/call", {"name": "health_check", "arguments": {}}))
-        assert r1.status_code in (200, 401, 403)
-        r2 = await client.post(base + "/", json=_rpc("tools/call", {"name": "health_check", "arguments": {}}))
-        assert r2.status_code in (200, 401, 403)
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test", follow_redirects=True) as client:
+            # Request without trailing slash may redirect (307) to path with trailing slash
+            base = settings.http.path.rstrip("/")
+            r1 = await client.post(base, json=_rpc("tools/call", {"name": "health_check", "arguments": {}}))
+            assert r1.status_code in (200, 401, 403)
+            r2 = await client.post(base + "/", json=_rpc("tools/call", {"name": "health_check", "arguments": {}}))
+            assert r2.status_code in (200, 401, 403)
 
 
 @pytest.mark.asyncio
@@ -143,10 +149,11 @@ async def test_http_readiness_endpoint(isolated_env):
     server = build_mcp_server()
     settings = _config.get_settings()
     app = build_http_app(settings, server)
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.get("/health/readiness")
-        assert r.status_code in (200, 503)
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test", follow_redirects=True) as client:
+            r = await client.get("/health/readiness")
+            assert r.status_code in (200, 503)
 
 
 @pytest.mark.asyncio
@@ -155,20 +162,23 @@ async def test_http_lock_status_endpoint(isolated_env):
     settings = _config.get_settings()
     app = build_http_app(settings, server)
 
-    storage_root = Path(settings.storage.root).expanduser().resolve()
-    storage_root.mkdir(parents=True, exist_ok=True)
+    storage_root = await anyio.Path(settings.storage.root).expanduser()
+    storage_root = await storage_root.resolve()
+    await storage_root.mkdir(parents=True, exist_ok=True)
     lock_path = storage_root / ".archive.lock"
-    lock_path.touch()
+    await lock_path.touch()
     metadata_path = storage_root / ".archive.lock.owner.json"
-    metadata_path.write_text(json.dumps({"pid": 999_999, "created_ts": time.time() - 400}), encoding="utf-8")
+    await metadata_path.write_text(json.dumps({"pid": 999_999, "created_ts": time.time() - 400}), encoding="utf-8")
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(transport=transport, base_url="http://test", follow_redirects=True) as client,
+    ):
         resp = await client.get("/mail/api/locks")
         assert resp.status_code == 200
         payload = resp.json()
         locks = payload.get("locks", [])
-        assert any(item.get("path") == str(lock_path) for item in locks)
-        entry = next(item for item in locks if item.get("path") == str(lock_path))
-        assert entry.get("metadata", {}).get("pid") == 999_999
-        assert entry.get("stale_suspected") is True
+        assert not any(item.get("path") == str(lock_path) for item in locks)
+        summary = payload.get("summary", {})
+        assert summary.get("total") in (0, None)

@@ -9,7 +9,7 @@ These tests validate:
 
 from __future__ import annotations
 
-import subprocess
+import json
 from pathlib import Path
 
 import pytest
@@ -286,20 +286,14 @@ async def test_git_commit_verification(mcp_client, tmp_path):
     # Find the project archive directory
     project_archive = storage_root / "projects" / project_slug
 
-    # Git commit verification - ensure persistence is working
-    assert project_archive.exists(), f"Project archive {project_archive} should exist"
+    # Archive storage has been removed; ensure no on-disk project archive is created.
+    assert not project_archive.exists(), f"Project archive {project_archive} should not exist"
 
-    result = subprocess.run(
-        ["git", "log", "--oneline"],
-        cwd=project_archive,
-        capture_output=True,
-        text=True,
-        check=False,  # Don't raise on error, we'll check returncode
+    inbox = await mcp_client.call_tool(
+        "fetch_inbox",
+        {"project_key": str(project_path), "agent_name": agent2, "limit": 10, "include_bodies": True},
     )
-
-    # Should have at least one commit (message or agent registration)
-    assert result.returncode == 0, f"git log failed with: {result.stderr}"
-    assert len(result.stdout.strip()) > 0, "Git history should not be empty"
+    assert any(item.get("subject") == "Git Test Message" for item in inbox.structured_content.get("result", []))
 
 
 @pytest.mark.asyncio
@@ -437,35 +431,55 @@ async def test_delete_agent(mcp_client, tmp_path):
     )
     assert whois_before.data["is_active"] is True
 
-    # Delete agent
+    # Delete agent (using extended tool interface)
     delete_result = await mcp_client.call_tool(
-        "delete_agent",
+        "call_extended_tool",
         {
-            "project_key": str(project_path),
-            "name": agent,
+            "tool_name": "delete_agent",
+            "arguments": {
+                "project_key": str(project_path),
+                "name": agent,
+            },
         },
     )
 
-    # Response structure may vary - just check it succeeded
-    assert "error" not in delete_result.data or delete_result.data.get("error") is None
+    # Extended tool wraps result payload under "result"
+    assert delete_result.data is not None
+    assert "result" in delete_result.data
+    delete_payload = delete_result.data["result"]
+    # Extended tool may wrap result in [{"text": json_string}] format
+    if isinstance(delete_payload, list):
+        first_item = delete_payload[0] if delete_payload else {}
+        if isinstance(first_item, dict) and "text" in first_item:
+            try:
+                delete_payload = json.loads(first_item["text"])
+            except (json.JSONDecodeError, ValueError):
+                delete_payload = first_item
+    assert isinstance(delete_payload, dict)
+    assert "agent_name" in delete_payload, "delete_agent response missing 'agent_name'"
+    assert delete_payload["agent_name"] == agent
 
-    # Verify agent is no longer active - whois should raise exception for deleted agent
-    try:
-        whois_after = await mcp_client.call_tool(
-            "whois",
-            {
-                "project_key": str(project_path),
-                "agent_name": agent,
-            },
-        )
-        # If whois returns a result, verify agent is inactive
-        assert whois_after.data["is_active"] is False
-    except Exception as e:
-        # Exception with "not registered" or "NoResultFound" is acceptable for deleted agent
-        error_msg = str(e)
-        assert "not registered" in error_msg or "NoResultFound" in error_msg, (
-            f"Expected 'not registered' or 'NoResultFound' in error, got: {error_msg}"
-        )
+    # Verify agent is no longer active - whois should return error or inactive status
+    whois_after = await mcp_client.call_tool(
+        "whois",
+        {
+            "project_key": str(project_path),
+            "agent_name": agent,
+        },
+        raise_on_error=False,
+    )
+    # After deletion, whois returns an error response OR shows agent as inactive
+    whois_data = whois_after.data or {}
+    if getattr(whois_after, "isError", False):
+        # Agent not found error is acceptable
+        error_value = whois_data.get("error")
+        if error_value is None and getattr(whois_after, "content", None):
+            first_block = whois_after.content[0]
+            error_value = getattr(first_block, "text", None) if first_block else None
+        assert "not found" in str(error_value).lower()
+    else:
+        # If agent still exists in some form, it should be marked inactive
+        assert whois_data.get("is_active", False) is False
 
 
 @pytest.mark.asyncio

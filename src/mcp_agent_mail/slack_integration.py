@@ -41,7 +41,10 @@ logger = logging.getLogger(__name__)
 # Regex pattern for extracting Slack user mentions (e.g., <@U123|name>)
 _SLACK_MENTION_PATTERN = re.compile(r"<@([A-Z0-9]+)(?:\|[^>]+)?>")
 # Thread id format: slack_<channel_id>_<thread_ts> or slackbox_<channel_id>_<thread_ts>
-_SLACK_THREAD_ID_PATTERN = re.compile(r"^(?:slack|slackbox)_([^_]+)_(.+)$")
+# Channel identifiers may include underscores (e.g., team_engineering), so capture
+# everything up to the final underscore before the thread timestamp.
+# Timestamp is always digits.digits (e.g., 1234567890.123456).
+_SLACK_THREAD_ID_PATTERN = re.compile(r"^(?:slack|slackbox)_(.+)_(\d+\.\d+)$")
 
 
 @dataclass
@@ -471,13 +474,11 @@ async def notify_slack_message(
         # Check for existing thread mapping (fallback to message_id for new threads)
         slack_thread_ts: Optional[str] = None
         thread_key = thread_id or message_id
-        had_mapping = False
         if thread_key:
             thread_mapping = await client.get_slack_thread(thread_key)
             if thread_mapping:
                 slack_thread_ts = thread_mapping.slack_thread_ts
                 channel = thread_mapping.slack_channel_id
-                had_mapping = True
             else:
                 match = _SLACK_THREAD_ID_PATTERN.match(thread_key)
                 if match:
@@ -493,8 +494,8 @@ async def notify_slack_message(
             thread_ts=slack_thread_ts,
         )
 
-        # If this is a new thread or thread was derived from pattern, create mapping
-        if thread_key and not had_mapping:
+        # If this is a new thread, create mapping
+        if thread_key and not slack_thread_ts:
             msg_ts = response.get("ts")
             channel_id = response.get("channel")
             if msg_ts and channel_id:
@@ -515,6 +516,7 @@ async def notify_slack_ack(
     message_id: str,
     agent_name: str,
     subject: str,
+    thread_id: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
     """Send a notification to Slack when a message is acknowledged.
 
@@ -542,10 +544,34 @@ async def notify_slack_ack(
 
     try:
         text = f":white_check_mark: {agent_name} acknowledged: {subject}"
+
+        channel = settings.slack.default_channel
+        slack_thread_ts: Optional[str] = None
+        thread_key = thread_id or message_id
+
+        if thread_key:
+            thread_mapping = await client.get_slack_thread(thread_key)
+            if thread_mapping:
+                slack_thread_ts = thread_mapping.slack_thread_ts
+                channel = thread_mapping.slack_channel_id
+            else:
+                match = _SLACK_THREAD_ID_PATTERN.match(thread_key)
+                if match:
+                    derived_channel, derived_ts = match.groups()
+                    channel = derived_channel
+                    slack_thread_ts = derived_ts
+
         response = await client.post_message(
-            channel=settings.slack.default_channel,
+            channel=channel,
             text=text,
+            thread_ts=slack_thread_ts,
         )
+
+        if thread_key and not slack_thread_ts:
+            msg_ts = response.get("ts")
+            channel_id = response.get("channel")
+            if msg_ts and channel_id:
+                await client.map_thread(thread_key, channel_id, msg_ts)
 
         logger.info(f"Sent Slack ack notification for message {message_id[:8]}")
         return response
@@ -599,6 +625,11 @@ async def handle_slack_message_event(
     user_id = event.get("user")
     message_ts = event.get("ts")
     thread_ts = event.get("thread_ts")  # If reply in thread
+
+    # Guard against None channel_id which would produce malformed thread IDs
+    if not channel_id:
+        logger.debug("No channel_id in Slack event, skipping")
+        return None
 
     # Check if this channel is configured for sync
     if not settings.slack.sync_enabled:

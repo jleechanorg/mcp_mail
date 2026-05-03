@@ -1,11 +1,25 @@
-import contextlib
 import gc
 from pathlib import Path
 
 import pytest
 
+from mcp_agent_mail.app import RECENT_TOOL_USAGE
 from mcp_agent_mail.config import clear_settings_cache
 from mcp_agent_mail.db import reset_database_state
+
+
+def extract_result(call_result):
+    """Extract the payload value from a CallToolResult-like object."""
+    if hasattr(call_result, "structured_content") and call_result.structured_content:
+        return call_result.structured_content.get("result", call_result.data)
+    return call_result.data
+
+
+def get_field(field: str, obj):
+    """Read a field from either a mapping or object attribute."""
+    if isinstance(obj, dict):
+        return obj.get(field)
+    return getattr(obj, field, None)
 
 
 @pytest.fixture
@@ -20,15 +34,13 @@ def isolated_env(tmp_path, monkeypatch):
     monkeypatch.setenv("MCP_TOOLS_MODE", "extended")
     storage_root = tmp_path / "storage"
     monkeypatch.setenv("STORAGE_ROOT", str(storage_root))
-    monkeypatch.setenv("GIT_AUTHOR_NAME", "test-agent")
-    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "test@example.com")
     monkeypatch.setenv("INLINE_IMAGE_MAX_BYTES", "128")
     clear_settings_cache()
     reset_database_state()
+    RECENT_TOOL_USAGE.clear()
     try:
         yield
     finally:
-        # Close any Git Repo objects before cleanup to prevent subprocess warnings
         # Suppress ResourceWarnings during cleanup since Python 3.11+ warns about resources
         # being cleaned up by GC, which is exactly what we want
         import warnings
@@ -38,26 +50,11 @@ def isolated_env(tmp_path, monkeypatch):
             try:
                 import time
 
-                from git import Repo
-
-                # Explicitly close repo at storage_root if it exists
-                storage_root = tmp_path / "storage"
-                if storage_root.exists() and (storage_root / ".git").exists():
-                    try:
-                        repo = Repo(str(storage_root))
-                        repo.close()
-                        del repo
-                    except Exception:
-                        pass
-
                 # Multiple GC passes to ensure full cleanup
+                # Avoid scanning `gc.get_objects()` for open Repo instances here:
+                # it is O(N) in heap size and has caused multi-minute hangs during test teardown.
                 for _ in range(3):
                     gc.collect()
-                    # Close any Repo instances that might still be open
-                    for obj in gc.get_objects():
-                        if isinstance(obj, Repo):
-                            with contextlib.suppress(Exception):
-                                obj.close()
 
                 # Give subprocesses time to terminate
                 time.sleep(0.1)
@@ -72,6 +69,7 @@ def isolated_env(tmp_path, monkeypatch):
 
         clear_settings_cache()
         reset_database_state()
+        RECENT_TOOL_USAGE.clear()
 
         if db_path.exists():
             db_path.unlink()
