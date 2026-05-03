@@ -3,9 +3,9 @@ from __future__ import annotations
 import contextlib
 import json
 import time
-from pathlib import Path
 from typing import Any
 
+import anyio
 import pytest
 from authlib.jose import JsonWebKey, jwt
 from httpx import ASGITransport, AsyncClient
@@ -162,12 +162,13 @@ async def test_http_lock_status_endpoint(isolated_env):
     settings = _config.get_settings()
     app = build_http_app(settings, server)
 
-    storage_root = Path(settings.storage.root).expanduser().resolve()
-    storage_root.mkdir(parents=True, exist_ok=True)
+    storage_root = await anyio.Path(settings.storage.root).expanduser()
+    storage_root = await storage_root.resolve()
+    await storage_root.mkdir(parents=True, exist_ok=True)
     lock_path = storage_root / ".archive.lock"
-    lock_path.touch()
+    await lock_path.touch()
     metadata_path = storage_root / ".archive.lock.owner.json"
-    metadata_path.write_text(json.dumps({"pid": 999_999, "created_ts": time.time() - 400}), encoding="utf-8")
+    await metadata_path.write_text(json.dumps({"pid": 999_999, "created_ts": time.time() - 400}), encoding="utf-8")
 
     transport = ASGITransport(app=app)
     async with (
