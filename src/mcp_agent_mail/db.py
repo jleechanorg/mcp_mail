@@ -324,6 +324,15 @@ def _check_and_fix_duplicate_agent_names(connection) -> None:
 
 def _setup_fts(connection) -> None:
     _ensure_agent_active_columns(connection)
+
+    # Index migrations for newly added columns.
+    # Must run AFTER _ensure_agent_active_columns so columns exist first.
+    # CREATE INDEX IF NOT EXISTS is natively idempotent in SQLite.
+    for index_sql in [
+        "CREATE INDEX IF NOT EXISTS ix_agents_registration_token ON agents (registration_token)",
+        "CREATE INDEX IF NOT EXISTS idx_messages_project_topic ON messages (project_id, topic)",
+    ]:
+        connection.exec_driver_sql(index_sql)
     connection.exec_driver_sql(
         "CREATE VIRTUAL TABLE IF NOT EXISTS fts_messages USING fts5(message_id UNINDEXED, subject, body)"
     )
@@ -385,22 +394,45 @@ def _setup_fts(connection) -> None:
     connection.exec_driver_sql(
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_agents_name_ci ON agents(lower(name)) WHERE is_active = 1"
     )
+    # File reservation indexes
+    connection.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS idx_file_reservations_project_agent_released "
+        "ON file_reservations(project_id, agent_id, released_ts)"
+    )
+    connection.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS idx_product_project ON product_project_links(product_id, project_id)"
+    )
 
 
 def _ensure_agent_active_columns(connection) -> None:
-    columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info('agents')").fetchall()}
-    if "is_active" not in columns:
+    agents_cols = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info('agents')").fetchall()}
+    if "is_active" not in agents_cols:
         connection.exec_driver_sql("ALTER TABLE agents ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
-    if "deleted_ts" not in columns:
+    if "deleted_ts" not in agents_cols:
         connection.exec_driver_sql("ALTER TABLE agents ADD COLUMN deleted_ts TEXT")
-    if "contact_policy" not in columns:
+    if "contact_policy" not in agents_cols:
         connection.exec_driver_sql("ALTER TABLE agents ADD COLUMN contact_policy TEXT NOT NULL DEFAULT 'auto'")
-    if "is_placeholder" not in columns:
+    if "is_placeholder" not in agents_cols:
         # Add is_placeholder column for tracking agents auto-created before official registration.
         # Existing agents are assumed to be officially registered (is_placeholder=0).
         connection.exec_driver_sql("ALTER TABLE agents ADD COLUMN is_placeholder INTEGER NOT NULL DEFAULT 0")
+    # Backport columns (wave 3 / upstream v0.2.0)
+    if "retired_at" not in agents_cols:
+        connection.exec_driver_sql("ALTER TABLE agents ADD COLUMN retired_at DATETIME DEFAULT NULL")
+    if "registration_token" not in agents_cols:
+        connection.exec_driver_sql("ALTER TABLE agents ADD COLUMN registration_token VARCHAR(64) DEFAULT NULL")
     connection.exec_driver_sql("UPDATE agents SET is_active = 1 WHERE is_active IS NULL")
     connection.exec_driver_sql("UPDATE agents SET contact_policy = 'auto' WHERE contact_policy IS NULL")
+
+    # Backport column for projects
+    project_cols = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info('projects')").fetchall()}
+    if "archived_at" not in project_cols:
+        connection.exec_driver_sql("ALTER TABLE projects ADD COLUMN archived_at DATETIME DEFAULT NULL")
+
+    # Backport column for messages
+    message_cols = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info('messages')").fetchall()}
+    if "topic" not in message_cols:
+        connection.exec_driver_sql("ALTER TABLE messages ADD COLUMN topic VARCHAR(64) DEFAULT NULL")
 
     # MIGRATION v0.2.0: Make project_id nullable on agents and messages tables
     # This allows agents and messages to exist without project context
@@ -500,7 +532,9 @@ def _recreate_agents_table_nullable_project_id(connection) -> None:
             contact_policy VARCHAR(16) DEFAULT 'auto',
             is_active INTEGER DEFAULT 1,
             deleted_ts TIMESTAMP,
-            is_placeholder INTEGER DEFAULT 0
+            is_placeholder INTEGER DEFAULT 0,
+            retired_at DATETIME DEFAULT NULL,
+            registration_token VARCHAR(64) DEFAULT NULL
         )
         """
     )
@@ -512,12 +546,14 @@ def _recreate_agents_table_nullable_project_id(connection) -> None:
             INSERT INTO agents_new (
                 id, project_id, name, program, model, task_description,
                 inception_ts, last_active_ts, attachments_policy, contact_policy,
-                is_active, deleted_ts, is_placeholder
+                is_active, deleted_ts, is_placeholder, retired_at, registration_token
             )
             SELECT
                 id, project_id, name, program, model, task_description,
                 inception_ts, last_active_ts, attachments_policy, contact_policy,
-                is_active, deleted_ts, is_placeholder
+                is_active, deleted_ts, is_placeholder,
+                COALESCE(retired_at, NULL) as retired_at,
+                COALESCE(registration_token, NULL) as registration_token
             FROM agents
             """
         )
@@ -537,6 +573,8 @@ def _recreate_agents_table_nullable_project_id(connection) -> None:
     connection.exec_driver_sql(
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_agents_name_ci ON agents(lower(name)) WHERE is_active = 1"
     )
+    # Restore new-column indexes (lost when table was rebuilt)
+    connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_agents_registration_token ON agents(registration_token)")
 
 
 def _recreate_messages_table_nullable_project_id(connection) -> None:
@@ -610,7 +648,8 @@ def _recreate_messages_table_nullable_project_id(connection) -> None:
             importance VARCHAR(16) DEFAULT 'normal',
             ack_required INTEGER DEFAULT 0,
             created_ts TIMESTAMP,
-            attachments JSON DEFAULT '[]'
+            attachments JSON DEFAULT '[]',
+            topic VARCHAR(64) DEFAULT NULL
         )
         """
     )
@@ -621,11 +660,12 @@ def _recreate_messages_table_nullable_project_id(connection) -> None:
             """
             INSERT INTO messages_new (
                 id, project_id, sender_id, thread_id, subject, body_md,
-                importance, ack_required, created_ts, attachments
+                importance, ack_required, created_ts, attachments, topic
             )
             SELECT
                 id, project_id, sender_id, thread_id, subject, body_md,
-                importance, ack_required, created_ts, attachments
+                importance, ack_required, created_ts, attachments,
+                COALESCE(topic, NULL) as topic
             FROM messages
             """
         )
@@ -643,3 +683,5 @@ def _recreate_messages_table_nullable_project_id(connection) -> None:
     connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_messages_project_id ON messages(project_id)")
     connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_messages_sender_id ON messages(sender_id)")
     connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_messages_thread_id ON messages(thread_id)")
+    # Restore new-column indexes (lost when table was rebuilt)
+    connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_messages_project_topic ON messages(project_id, topic)")
