@@ -156,8 +156,8 @@ append_path_snippet() {
 
   {
     printf '\n%s\n' "${marker}"
-    printf 'if [[ ":\\$PATH:" != *":%s:"* ]]; then\n' "${dir}"
-    printf '  export PATH="%s:\\$PATH"\n' "${dir}"
+    printf 'if [[ ":$PATH:" != *":%s:"* ]]; then\n' "${dir}"
+    printf '  export PATH="%s:$PATH"\n' "${dir}"
     printf 'fi\n'
     printf '# <<< MCP Agent Mail bd path\n'
   } >> "${rc_file}"
@@ -185,7 +185,6 @@ persist_bd_path() {
   rc_candidates+=("~/.bashrc" "~/.zshrc" "~/.profile")
 
   local appended=0
-  declare -A seen_rc=()
   local rc
   for rc in "${rc_candidates[@]}"; do
     [[ -n "${rc}" ]] || continue
@@ -194,10 +193,6 @@ persist_bd_path() {
     if [[ -z "${rc_path}" ]]; then
       continue
     fi
-    if [[ -n "${seen_rc["${rc_path}"]:-}" ]]; then
-      continue
-    fi
-    seen_rc["${rc_path}"]=1
     if append_path_snippet "${dir}" "${rc_path}"; then
       appended=1
       break

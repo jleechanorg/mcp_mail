@@ -135,6 +135,7 @@ If you do see the errors, then I want you to very carefully and intelligently/th
 What it is
 - A mail-like layer that lets coding agents coordinate asynchronously via MCP tools and resources.
 - Provides identities, inbox/outbox, searchable threads, and advisory file reservations, with human-auditable artifacts in Git.
+- **Agent namespace is global**: agent names are globally unique across all projects. `project_key` is informational for identity registration; reusing a name in a new project retires the old agent. Always check `resource://agents` or `whois` before picking a name.
 
 Why it's useful
 - Prevents agents from stepping on each other with explicit file reservations (leases) for files/globs.

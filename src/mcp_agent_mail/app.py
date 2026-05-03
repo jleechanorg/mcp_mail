@@ -100,7 +100,6 @@ def _resolve_project_identity(target_path: str) -> dict[str, Any]:
 
     Returns dict with 'project_uid' key.
     """
-    import hashlib
     import re
     import subprocess
 
@@ -110,6 +109,13 @@ def _resolve_project_identity(target_path: str) -> dict[str, Any]:
     committed_marker = path / ".agent-mail-project-id"
     if committed_marker.exists():
         uid = committed_marker.read_text(encoding="utf-8").strip()
+        if uid:
+            return {"project_uid": uid}
+
+    # 1b. Private marker at conventional .git path
+    direct_private_marker = path / ".git" / "agent-mail" / "project-id"
+    if direct_private_marker.exists():
+        uid = direct_private_marker.read_text(encoding="utf-8").strip()
         if uid:
             return {"project_uid": uid}
 
@@ -125,11 +131,15 @@ def _resolve_project_identity(target_path: str) -> dict[str, Any]:
         if not git_common_dir.startswith("/"):
             git_common_dir = str(path / git_common_dir)
 
-        private_marker = Path(git_common_dir) / "agent-mail" / "project-id"
-        if private_marker.exists():
-            uid = private_marker.read_text(encoding="utf-8").strip()
-            if uid:
-                return {"project_uid": uid}
+        private_candidates = [
+            Path(git_common_dir) / "agent-mail" / "project-id",
+            path / ".git" / "agent-mail" / "project-id",
+        ]
+        for private_marker in private_candidates:
+            if private_marker.exists():
+                uid = private_marker.read_text(encoding="utf-8").strip()
+                if uid:
+                    return {"project_uid": uid}
     except (subprocess.CalledProcessError, FileNotFoundError):
         pass
 
@@ -151,6 +161,7 @@ def _resolve_project_identity(target_path: str) -> dict[str, Any]:
         normalized = re.sub(r"^git@([^:]+):", r"\1/", normalized)
 
         # Get default branch (fallback to 'main' if not found)
+        default_branch = "main"
         try:
             result = subprocess.run(
                 ["git", "-C", str(path), "symbolic-ref", "refs/remotes/origin/HEAD"],
@@ -158,9 +169,11 @@ def _resolve_project_identity(target_path: str) -> dict[str, Any]:
                 text=True,
                 check=True,
             )
-            default_branch = result.stdout.strip().split("/")[-1]
+            branch_guess = result.stdout.strip().split("/")[-1]
+            if branch_guess and branch_guess != "master":
+                default_branch = branch_guess
         except (subprocess.CalledProcessError, IndexError):
-            default_branch = "main"
+            pass
 
         # Create fingerprint and hash it
         fingerprint = f"{normalized}@{default_branch}"
@@ -510,107 +523,6 @@ def _ensure_utc(dt: Optional[datetime]) -> Optional[datetime]:
     return dt.astimezone(timezone.utc)
 
 
-def _resolve_project_identity(target_path: str) -> dict[str, Any]:
-    """Resolve project identity from a filesystem path."""
-    path = Path(target_path).expanduser().resolve()
-
-    # 1. Committed marker
-    marker = path / ".agent-mail-project-id"
-    if marker.exists():
-        try:
-            uid = marker.read_text(encoding="utf-8").strip()
-            if uid:
-                return {
-                    "project_uid": uid,
-                    "source": "committed_marker",
-                    "path": str(marker),
-                    "mode": "committed",
-                }
-        except Exception:
-            pass
-
-    # 2. Private marker (git-common-dir)
-    try:
-        repo = Repo(path, search_parent_directories=True)
-        if repo.git_dir:
-            git_dir = Path(repo.git_dir)
-            # Handle worktrees by checking git-common-dir if available
-            try:
-                common_dir = repo.git.rev_parse("--git-common-dir")
-                if common_dir:
-                    if Path(common_dir).is_absolute():
-                        git_dir = Path(common_dir)
-                    else:
-                        git_dir = (Path(repo.git_dir) / common_dir).resolve()
-            except Exception:
-                pass
-
-            private_marker = git_dir / "agent-mail" / "project-id"
-            if private_marker.exists():
-                uid = private_marker.read_text(encoding="utf-8").strip()
-                if uid:
-                    return {
-                        "project_uid": uid,
-                        "source": "private_marker",
-                        "path": str(private_marker),
-                        "mode": "private",
-                    }
-    except (InvalidGitRepositoryError, NoSuchPathError):
-        pass
-    except Exception:
-        pass
-
-    # 3. Fallback: Remote fingerprint
-    try:
-        repo = Repo(path, search_parent_directories=True)
-        remotes = {r.name: r.url for r in repo.remotes}
-        url = remotes.get("origin") or next(iter(remotes.values()), None)
-
-        if url:
-            # Normalize URL: remove protocol, user, .git suffix
-            normalized = url
-            if "://" in normalized:
-                normalized = normalized.split("://", 1)[1]
-            if "@" in normalized:
-                normalized = normalized.split("@", 1)[1]
-            if ":" in normalized and "/" not in normalized.split(":", 1)[0]:
-                # SCP style: host:path -> host/path
-                host, path_part = normalized.split(":", 1)
-                normalized = f"{host}/{path_part}"
-            if normalized.endswith(".git"):
-                normalized = normalized[:-4]
-
-            # Default branch resolve may fail; code falls back to 'main'
-            branch = "main"
-            try:
-                # Try to get the default branch if possible, or current branch
-                if not repo.head.is_detached:
-                    branch = repo.active_branch.name
-            except Exception:
-                pass
-
-            fingerprint = f"{normalized}@{branch}"
-            uid = hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()[:20]
-
-            return {
-                "project_uid": uid,
-                "source": "remote_fingerprint",
-                "fingerprint": fingerprint,
-                "mode": "fingerprint",
-            }
-    except Exception:
-        pass
-
-    # 4. Last resort: path hash
-    path_uid = hashlib.sha1(str(path).encode("utf-8")).hexdigest()[:20]
-    return {
-        "project_uid": path_uid,
-        "source": "path_hash",
-        "path": str(path),
-        "mode": "path",
-    }
-
-
 def _max_datetime(*timestamps: Optional[datetime]) -> Optional[datetime]:
     values = [ts for ts in timestamps if ts is not None]
     if not values:
@@ -867,6 +779,7 @@ def _agent_to_dict(agent: Agent) -> dict[str, Any]:
         "contact_policy": getattr(agent, "contact_policy", "auto"),
         "is_active": getattr(agent, "is_active", True),
         "deleted_ts": _iso(deleted_ts) if (deleted_ts := getattr(agent, "deleted_ts", None)) is not None else None,
+        "is_placeholder": getattr(agent, "is_placeholder", False),
     }
 
 
@@ -1394,6 +1307,23 @@ async def _agent_name_exists_globally(name: str) -> bool:
         return result.first() is not None
 
 
+async def _get_placeholder_agent_globally(name: str) -> Optional[Agent]:
+    """Get a placeholder agent by name globally, if one exists.
+
+    Returns the Agent if it exists and is_placeholder=True, otherwise None.
+    This is used to "claim" placeholder agents during official registration.
+    """
+    async with get_session() as session:
+        result = await session.execute(
+            select(Agent).where(
+                func.lower(Agent.name) == name.lower(),
+                cast(Any, Agent.is_active).is_(True),
+                cast(Any, Agent.is_placeholder).is_(True),
+            )
+        )
+        return result.scalars().first()
+
+
 async def _generate_unique_agent_name(
     project: Project,
     settings: Settings,
@@ -1528,6 +1458,46 @@ async def _get_or_create_agent(
                 )
             desired_name = await _generate_unique_agent_name(project, settings, None)
         else:
+            # Check if there's a placeholder agent with this name that can be claimed
+            placeholder = await _get_placeholder_agent_globally(sanitized)
+            if placeholder:
+                # Claim the placeholder: update its details and mark as non-placeholder
+                await ensure_schema()
+                async with get_session() as session:
+                    result = await session.execute(
+                        select(Agent).where(
+                            Agent.id == placeholder.id,
+                            cast(Any, Agent.is_placeholder).is_(True),
+                            cast(Any, Agent.is_active).is_(True),
+                        )
+                    )
+                    agent = result.scalars().first()
+                    if agent:
+                        # Race condition check: verify it's still a placeholder
+                        if not getattr(agent, "is_placeholder", False):
+                            # Already claimed by another process, fall through to regular logic
+                            pass
+                        else:
+                            # Update placeholder to claim it
+                            agent.project_id = project.id
+                            agent.program = program
+                            agent.model = model
+                            agent.task_description = task_description
+                            agent.last_active_ts = datetime.now(timezone.utc)
+                            agent.is_placeholder = False
+                            # Reactivate if previously retired
+                            if not getattr(agent, "is_active", True):
+                                agent.is_active = True
+                                agent.deleted_ts = None
+                            session.add(agent)
+                            await session.commit()
+                            await session.refresh(agent)
+                            # Write updated profile to archive
+                            archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+                            async with _archive_write_lock(archive):
+                                await write_agent_profile(archive, _agent_to_dict(agent))
+                            return agent
+                # If we couldn't find the agent, fall through to regular logic
             # Check if the user-provided name is globally unique
             if await _agent_name_exists_globally(sanitized):
                 # Name exists globally; check if it's in THIS project
@@ -1559,15 +1529,16 @@ async def _get_or_create_agent(
                     )
                     # Verify retirement cleared the conflict; otherwise provide a clear path
                     if await _agent_name_exists_globally(sanitized):
-                        if mode == "strict":
-                            raise ToolExecutionError(
-                                "NAME_TAKEN",
-                                f"Agent name '{sanitized}' is still in use after attempting retirement.",
-                                recoverable=True,
-                                data={"name": sanitized, "conflict": "residual_or_race"},
-                            )
-                        # Fallback to auto-generate a unique name
-                        desired_name = await _generate_unique_agent_name(project, settings, None)
+                        raise ToolExecutionError(
+                            "NAME_TAKEN",
+                            f"Agent name '{sanitized}' is still in use after attempting retirement.",
+                            recoverable=True,
+                            data={
+                                "name": sanitized,
+                                "conflict": "residual_or_race",
+                                "hint": "Retry with force_reclaim=True if this persists",
+                            },
+                        )
                     else:
                         desired_name = sanitized
             else:
@@ -1588,6 +1559,8 @@ async def _get_or_create_agent(
             agent.model = model
             agent.task_description = task_description
             agent.last_active_ts = datetime.now(timezone.utc)
+            # Mark as officially registered (not a placeholder)
+            agent.is_placeholder = False
             # Reactivate if previously retired
             if not getattr(agent, "is_active", True):
                 agent.is_active = True
@@ -1646,6 +1619,85 @@ async def _get_or_create_agent(
                         "hint": "Retry the operation; if it persists, call register_agent with force_reclaim=True",
                     },
                 ) from exc
+    archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
+    async with _archive_write_lock(archive):
+        await write_agent_profile(archive, _agent_to_dict(agent))
+    return agent
+
+
+async def _create_placeholder_agent(
+    project: Project,
+    name: str,
+    sender_program: str,
+    sender_model: str,
+    settings: Settings,
+) -> Agent:
+    """Create a placeholder agent to receive messages before official registration.
+
+    Placeholder agents:
+    - Have is_placeholder=True
+    - Inherit program/model from the sender (as a reasonable default)
+    - Can receive messages just like regular agents
+    - Can be "claimed" by a later register_agent call, which sets is_placeholder=False
+
+    This enables the pattern: send messages to an agent that doesn't exist yet,
+    and when they register later, they can read their pending messages.
+    """
+    if project.id is None:
+        raise ValueError("Project must have an id before creating placeholder agents.")
+
+    sanitized = sanitize_agent_name(name)
+    if not sanitized:
+        raise ValueError(f"Invalid agent name for placeholder: {name}")
+
+    await ensure_schema()
+    async with get_session() as session:
+        # Check if agent already exists (shouldn't happen, but be safe)
+        result = await session.execute(
+            select(Agent).where(
+                func.lower(Agent.name) == sanitized.lower(),
+                cast(Any, Agent.is_active).is_(True),
+            )
+        )
+        existing = result.scalars().first()
+        if existing:
+            if not getattr(existing, "is_placeholder", False):
+                raise ValueError(f"Agent '{sanitized}' already exists and is not a placeholder")
+            return existing  # Placeholder already exists
+
+        agent = Agent(
+            project_id=project.id,
+            name=sanitized,
+            program=sender_program,
+            model=sender_model,
+            task_description="(pending registration)",
+            contact_policy="auto",
+            is_placeholder=True,
+        )
+        session.add(agent)
+        try:
+            await session.commit()
+            await session.refresh(agent)
+        except IntegrityError as exc:
+            # Race condition: name was taken between check and commit
+            await session.rollback()
+            # Try to fetch the existing agent
+            result = await session.execute(
+                select(Agent).where(
+                    func.lower(Agent.name) == sanitized.lower(),
+                    cast(Any, Agent.is_active).is_(True),
+                )
+            )
+            existing = result.scalars().first()
+            if existing:
+                if not getattr(existing, "is_placeholder", False):
+                    raise ValueError(
+                        f"Agent '{sanitized}' was created as non-placeholder during race condition"
+                    ) from exc
+                return existing
+            raise ValueError(f"Failed to create placeholder agent: {sanitized}") from exc
+
+    # Write placeholder profile to archive
     archive = await ensure_archive(settings, project.slug, project_key=project.human_key)
     async with _archive_write_lock(archive):
         await write_agent_profile(archive, _agent_to_dict(agent))
@@ -3300,9 +3352,28 @@ def build_mcp_server() -> FastMCP:
 
         try:
             if hasattr(tool_func, "run"):
-                return await tool_func.run(arguments or {})
-            result = await tool_func(ctx, **(arguments or {}))
-            return result
+                result = await tool_func.run(arguments or {})
+            else:
+                result = await tool_func(ctx, **(arguments or {}))
+
+            if isinstance(result, ToolResult):
+                payload: Any = getattr(result, "structured_content", None)
+                if payload is None and hasattr(result, "content"):
+                    payload = result.content
+                if payload is None and hasattr(result, "data"):
+                    payload = result.data
+                if payload is None:
+                    try:
+                        payload = next(iter(result)) if result else None
+                    except (TypeError, IndexError, StopIteration):
+                        payload = None
+                result = payload
+
+            # Avoid double-wrapping if the tool already returned a structured result
+            if isinstance(result, dict) and set(result.keys()) == {"result"}:
+                return result
+
+            return {"result": result}
         except TypeError as e:
             # Invalid arguments
             raise ValueError(f"Invalid arguments for {tool_name}: {e!s}") from e
@@ -3452,9 +3523,9 @@ def build_mcp_server() -> FastMCP:
         Parameters
         ----------
         project_key : str
-            Any string identifier for your project. The project will be automatically created
-            if it doesn't exist. Common patterns include absolute paths, repo names, or custom
-            project identifiers (e.g., "/data/projects/backend", "my-repo", "project-alpha").
+            Any string identifier for your project. Informational only for agent lookup; agents are
+            global. The project will be automatically created if it doesn't exist. Common patterns
+            include absolute paths, repo names, or custom project identifiers.
         program : str
             The agent program (e.g., "codex-cli", "claude-code").
         model : str
@@ -3868,9 +3939,9 @@ def build_mcp_server() -> FastMCP:
         Parameters
         ----------
         project_key : str
-            Project identifier (same used with `ensure_project`/`register_agent`).
+            Project identifier (informational only for agent lookup; agents are global).
         sender_name : str
-            Must match an agent registered in the project.
+            Must match an existing agent name (agents are global).
         to : list[str]
             Primary recipients (agent names). At least one of to/cc/bcc must be non-empty.
         subject : str
@@ -4051,7 +4122,7 @@ def build_mcp_server() -> FastMCP:
                 canonical = sanitized or (trimmed if trimmed else None)
                 return trimmed or value, keys, canonical
 
-            unknown: set[str] = set()
+            unknown: dict[str, set[str]] = {}
 
             async def _route(name_list: list[str], kind: str) -> None:
                 """Route recipients, supporting cross-project addressing."""
@@ -4078,8 +4149,12 @@ def build_mcp_server() -> FastMCP:
 
                 for raw in name_list:
                     display_value, key_candidates, canonical = _normalize(raw)
+                    unknown_key = canonical or (
+                        display_value.strip() if display_value else (raw.strip() if raw else raw)
+                    )
                     if not key_candidates or not canonical:
-                        unknown.add(raw.strip() if raw else raw)
+                        if unknown_key is not None:
+                            unknown.setdefault(unknown_key, set()).add(kind)
                         continue
 
                     target_project: str | None = None
@@ -4107,8 +4182,8 @@ def build_mcp_server() -> FastMCP:
                             if sanitized:
                                 key_candidates.add(sanitized.lower())
 
-                    # Allow self-send
-                    if sender_candidate_keys.intersection(key_candidates):
+                    # Allow self-send unless explicitly targeting another project
+                    if not target_project and sender_candidate_keys.intersection(key_candidates):
                         if kind == "to":
                             all_to.append(sender.name)
                         elif kind == "cc":
@@ -4135,7 +4210,8 @@ def build_mcp_server() -> FastMCP:
                         else:
                             all_bcc.append(resolved)
                     else:
-                        unknown.add(display_value or raw.strip() if raw else raw)
+                        if unknown_key is not None:
+                            unknown.setdefault(unknown_key, set()).add(kind)
 
             await _route(to, "to")
             await _route(cc or [], "cc")
@@ -4144,25 +4220,41 @@ def build_mcp_server() -> FastMCP:
             if unknown:
                 # Auto-register missing recipients if enabled
                 if getattr(settings_local, "messaging_auto_register_recipients", True):
-                    # Best effort: try to register any unknown recipients with sane defaults
-                    newly_registered: set[str] = set()
-                    for missing in list(unknown):
+                    # Best effort: create placeholder agents for unknown recipients.
+                    # Placeholder agents can receive messages and be "claimed" later
+                    # when the real agent registers with that name.
+                    newly_registered: list[tuple[str, set[str]]] = []
+                    for missing in list(unknown.keys()):
+                        # Skip cross-project address syntaxes; only auto-register simple names
+                        if missing.startswith("project:") or "@" in missing:
+                            continue
                         try:
-                            _ = await _get_or_create_agent(
+                            placeholder = await _create_placeholder_agent(
                                 project,
                                 missing,
                                 sender.program,
                                 sender.model,
-                                sender.task_description,
                                 settings_local,
                             )
-                            newly_registered.add(missing)
+                            newly_registered.append((missing, unknown.get(missing, set())))
+                            unknown.pop(missing, None)
+                            # Add the newly created placeholder to global_lookup so _route can find it
+                            canonical_name = placeholder.name
+                            sanitized_canonical = sanitize_agent_name(canonical_name) or canonical_name
+                            for key in {canonical_name.lower(), sanitized_canonical.lower()}:
+                                global_lookup.setdefault(key, canonical_name)
                         except Exception:
                             pass
-                    unknown.difference_update(newly_registered)
                     # Re-run routing for any that were registered
                     if newly_registered:
-                        await _route(list(newly_registered), "to")
+                        for name, kinds in newly_registered:
+                            route_kinds = kinds or {"to"}
+                            if "to" in route_kinds:
+                                await _route([name], "to")
+                            if "cc" in route_kinds:
+                                await _route([name], "cc")
+                            if "bcc" in route_kinds:
+                                await _route([name], "bcc")
 
                 # If still have unknown recipients, raise error
                 if unknown:
@@ -7428,6 +7520,11 @@ def build_mcp_server() -> FastMCP:
         - File reservations communicate edit intent and reduce collisions across agents.
         - Surfacing them helps humans review ongoing work and resolve contention.
 
+        Why this exists
+        ---------------
+        - Claims communicate edit intent and reduce collisions across agents.
+        - Surfacing them helps humans review ongoing work and resolve contention.
+
         Parameters
         ----------
         slug : str
@@ -7449,6 +7546,11 @@ def build_mcp_server() -> FastMCP:
         Also see all historical (including released) file_reservations:
         ```json
         {"jsonrpc":"2.0","id":"r4b","method":"resources/read","params":{"uri":"resource://file_reservations/backend-abc123?active_only=false"}}
+        ```
+
+        Also see all historical (including released) claims:
+        ```json
+        {"jsonrpc":"2.0","id":"r4b","method":"resources/read","params":{"uri":"resource://claims/backend-abc123?active_only=false"}}
         ```
         """
         slug_value, query_params = _split_slug_and_query(slug)

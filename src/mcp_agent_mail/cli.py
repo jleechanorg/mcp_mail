@@ -118,6 +118,42 @@ def _iso(dt: Optional[datetime]) -> str:
     return dt.astimezone(timezone.utc).isoformat()
 
 
+def _call_server_tool(
+    request_id: str,
+    tool_name: str,
+    arguments: dict[str, Any],
+    *,
+    timeout: float = 5.0,
+    error_notice: Optional[str] = None,
+) -> Any:
+    """Invoke a server tool via JSON-RPC; return result or None on failure."""
+
+    settings = get_settings()
+    server_url = f"http://{settings.http.host}:{settings.http.port}{settings.http.path}"
+    bearer = settings.http.bearer_token or ""
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            headers: dict[str, str] = {}
+            if bearer:
+                headers["Authorization"] = f"Bearer {bearer}"
+            req = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": "tools/call",
+                "params": {
+                    "name": tool_name,
+                    "arguments": arguments,
+                },
+            }
+            resp = client.post(server_url, json=req, headers=headers)
+            data = resp.json()
+            return (data or {}).get("result")
+    except (httpx.HTTPError, ValueError, json.JSONDecodeError) as exc:
+        if error_notice:
+            console.print(error_notice.format(exc=exc))
+        return None
+
+
 @products_app.command("ensure")
 def products_ensure(
     product_key: Annotated[Optional[str], typer.Argument(help="Product uid or name")] = None,
@@ -130,34 +166,13 @@ def products_ensure(
     if not key:
         raise typer.BadParameter("Provide a product_key or --name.")
     # Prefer server tool to ensure consistent uid policy
-    settings = get_settings()
-    server_url = f"http://{settings.http.host}:{settings.http.port}{settings.http.path}"
-    bearer = settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
-    resp_data: dict[str, Any] = {}
-    try:
-        with httpx.Client(timeout=5.0) as client:
-            headers = {}
-            if bearer:
-                headers["Authorization"] = f"Bearer {bearer}"
-            req = {
-                "jsonrpc": "2.0",
-                "id": "cli-products-ensure",
-                "method": "tools/call",
-                "params": {
-                    "name": "ensure_product",
-                    "arguments": {
-                        "product_key": product_key or "",
-                        "name": name or "",
-                    },
-                },
-            }
-            resp = client.post(server_url, json=req, headers=headers)
-            data = resp.json()
-            result = (data or {}).get("result") or {}
-            if result:
-                resp_data = result
-    except Exception:
-        resp_data = {}
+    resp = _call_server_tool(
+        "cli-products-ensure",
+        "ensure_product",
+        {"product_key": product_key or "", "name": name or ""},
+        error_notice="[dim]Server unavailable ({exc}); falling back to local DB.[/dim]",
+    )
+    resp_data: dict[str, Any] = resp if isinstance(resp, dict) else {}
     if not resp_data:
         # Fallback to local DB with the same strict uid policy
         async def _ensure_local() -> dict[str, Any]:
@@ -207,7 +222,7 @@ def products_ensure(
         if hasattr(_created, "isoformat"):
             _created = _created.isoformat()
     except Exception:
-        # If _created is not a datetime or lacks isoformat, just use its string representation.
+        # If _created is not ISO-serializable, keep the raw value for display.
         pass
     table.add_row("created_at", str(_created))
     console.print(table)
@@ -371,37 +386,20 @@ def products_inbox(
     Fetch recent inbox messages for an agent across all projects in a product.
     Prefers server tool; falls back to local DB when server is not reachable.
     """
-    settings = get_settings()
-    server_url = f"http://{settings.http.host}:{settings.http.port}{settings.http.path}"
-    bearer = settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
-    # Try server first
-    try:
-        with httpx.Client(timeout=5.0) as client:
-            headers = {}
-            if bearer:
-                headers["Authorization"] = f"Bearer {bearer}"
-            req = {
-                "jsonrpc": "2.0",
-                "id": "cli-products-inbox",
-                "method": "tools/call",
-                "params": {
-                    "name": "fetch_inbox_product",
-                    "arguments": {
-                        "product_key": product_key,
-                        "agent_name": agent,
-                        "limit": int(limit),
-                        "urgent_only": bool(urgent_only),
-                        "include_bodies": bool(include_bodies),
-                        "since_ts": since_ts or "",
-                    },
-                },
-            }
-            resp = client.post(server_url, json=req, headers=headers)
-            data = resp.json()
-            result = (data or {}).get("result")
-            rows = result if isinstance(result, list) else []
-    except Exception:
-        rows = []
+    resp = _call_server_tool(
+        "cli-products-inbox",
+        "fetch_inbox_product",
+        {
+            "product_key": product_key,
+            "agent_name": agent,
+            "limit": int(limit),
+            "urgent_only": bool(urgent_only),
+            "include_bodies": bool(include_bodies),
+            "since_ts": since_ts or "",
+        },
+        error_notice="[dim]Server unavailable ({exc}); using local DB fallback.[/dim]",
+    )
+    rows = resp if isinstance(resp, list) else []
     if not rows:
         # Fallback: local DB
         async def _fallback() -> list[dict]:
@@ -472,8 +470,9 @@ def products_inbox(
                         if include_bodies:
                             payload["body_md"] = msg.body_md
                         items.append(payload)
-                # Sort desc by created_ts
-                items.sort(key=lambda r: r.get("created_ts") or 0, reverse=True)
+                # Sort desc by created_ts, falling back to epoch
+                epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+                items.sort(key=lambda r: r.get("created_ts") or epoch, reverse=True)
                 return items[: max(0, int(limit))]
 
         rows = asyncio.run(_fallback())
@@ -517,35 +516,22 @@ def products_summarize_thread(
     """
     Summarize a thread across all projects in a product. Prefers server tool; minimal fallback if server is unavailable.
     """
-    settings = get_settings()
-    server_url = f"http://{settings.http.host}:{settings.http.port}{settings.http.path}"
-    bearer = settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
-    # Try server
-    try:
-        with httpx.Client(timeout=8.0) as client:
-            headers = {}
-            if bearer:
-                headers["Authorization"] = f"Bearer {bearer}"
-            req = {
-                "jsonrpc": "2.0",
-                "id": "cli-products-summarize-thread",
-                "method": "tools/call",
-                "params": {
-                    "name": "summarize_thread_product",
-                    "arguments": {
-                        "product_key": product_key,
-                        "thread_id": thread_id,
-                        "include_examples": True,
-                        "llm_mode": (not no_llm),
-                        "per_thread_limit": int(per_thread_limit),
-                    },
-                },
-            }
-            resp = client.post(server_url, json=req, headers=headers)
-            data = resp.json()
-            result = (data or {}).get("result") or {}
-    except Exception:
-        result = {}
+    result = (
+        _call_server_tool(
+            "cli-products-summarize-thread",
+            "summarize_thread_product",
+            {
+                "product_key": product_key,
+                "thread_id": thread_id,
+                "include_examples": True,
+                "llm_mode": (not no_llm),
+                "per_thread_limit": int(per_thread_limit),
+            },
+            timeout=8.0,
+            error_notice="[dim]Server unavailable ({exc}); summarization requires the server tool.[/dim]",
+        )
+        or {}
+    )
     if not result:
         console.print(
             "[yellow]Server unavailable; summarization requires server tool. Try again when server is running.[/]"
@@ -958,7 +944,7 @@ def share_export(
         console.print("[green]✓ Built FTS5 index for full-text viewer search.[/]")
     else:
         console.print("[yellow]Search fallback active (FTS5 unavailable in current sqlite build).[/]")
-    console.print("[green]✓ Generated manifest, README.txt, HOW_TO_DEPLOY.md, and viewer assets.[/]")
+    console.print("[green]✓ Generated manifest, README.md, HOW_TO_DEPLOY.md, and viewer assets.[/]")
 
     if zip_bundle:
         archive_path = output_path.parent / f"{output_path.name}.zip"
@@ -1859,7 +1845,6 @@ def list_projects(
     """List known projects."""
 
     settings = get_settings()
-    settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
 
     async def _collect() -> list[tuple[Project, int]]:
         await ensure_schema(settings)
@@ -1934,7 +1919,6 @@ def guard_install(
     """Install the advisory pre-commit guard into the given repository."""
 
     settings = get_settings()
-    settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
     repo_path = repo.expanduser().resolve()
 
     # Use slug directly without database lookup (works for tests and standalone use)
@@ -2236,7 +2220,6 @@ def mail_status(
     and the slug that would be used for this path.
     """
     settings = get_settings()
-    settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
     p = project_path.expanduser().resolve()
     gate = bool(getattr(settings, "worktrees_enabled", False))
     mode = (getattr(settings, "project_identity_mode", "dir") or "dir").strip() or "dir"
@@ -2309,7 +2292,6 @@ def guard_status(
     Print guard status: gate/mode, resolved hooks directory, and presence of hooks.
     """
     settings = get_settings()
-    settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
     p = repo.expanduser().resolve()
     gate = bool(getattr(settings, "worktrees_enabled", False))
     mode = (getattr(settings, "project_identity_mode", "dir") or "dir").strip() or "dir"
@@ -2402,7 +2384,6 @@ def projects_adopt(
 
     # Describe filesystem moves (archive layout)
     settings = get_settings()
-    settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
     from .storage import ensure_archive as _ensure_archive
 
     src_archive = asyncio.run(_ensure_archive(settings, src.slug, project_key=src.human_key))
@@ -2436,7 +2417,6 @@ def projects_adopt(
                 raise typer.BadParameter(f"Agent name conflicts in target project: {', '.join(dup)}")
         # Move Git artifacts
         settings = get_settings()
-        settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
         # local import to minimize top-level churn and keep ordering stable
         from .storage import (
             AsyncFileLock as _AsyncFileLock,  # type: ignore
@@ -2962,7 +2942,6 @@ def config_set_port(
 def config_show_port() -> None:
     """Display the configured HTTP port."""
     settings = get_settings()
-    settings.http.bearer_token or os.environ.get("HTTP_BEARER_TOKEN", "")
     console.print("[cyan]HTTP Server Configuration:[/cyan]")
     console.print(f"  Host: {settings.http.host}")
     console.print(f"  Port: [bold]{settings.http.port}[/bold]")

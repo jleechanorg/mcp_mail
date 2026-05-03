@@ -32,6 +32,7 @@ async def mcp_mail_storage(tmp_path, monkeypatch):
 
     # Configure environment to use .mcp_mail/ storage
     monkeypatch.setenv("STORAGE_ROOT", str(mcp_mail_dir))
+    monkeypatch.setenv("STORAGE_LOCAL_ARCHIVE_ENABLED", "true")
     monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{mcp_mail_dir}/storage.sqlite3")
     monkeypatch.setenv("GIT_AUTHOR_NAME", "test-agent")
     monkeypatch.setenv("GIT_AUTHOR_EMAIL", "test@example.com")

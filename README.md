@@ -268,9 +268,9 @@ When an agent sends a message via `send_message`, here's what happens:
   
 **Configuration:**
 - Storage location: `STORAGE_ROOT` env var (default: `.mcp_mail`)
-  - **Project-local (default)**: `.mcp_mail` - messages stored in project directory and committed to Git
-  - **Optional project-key anchored**: set `STORAGE_PROJECT_KEY_ENABLED=true` to store under `<project_key>/.mcp_mail` (project_key must be the git repo root)
-  - **Disable local archive**: set `STORAGE_LOCAL_ARCHIVE_ENABLED=false` to require project-key storage; otherwise defaults to `.mcp_mail`
+  - **Project-local**: set `STORAGE_LOCAL_ARCHIVE_ENABLED=true` to store in `.mcp_mail` - messages stored in project directory and committed to Git
+  - **Project-key anchored**: set `STORAGE_PROJECT_KEY_ENABLED=true` to store under `<project_key>/.mcp_mail` (project_key must be the git repo root)
+  - **Default behavior**: Both storage modes disabled by default; must explicitly enable one to use MCP Agent Mail
   - **Global alternative**: `~/.mcp_agent_mail_git_mailbox_repo` - messages stored in user home directory
 - Git author: `GIT_AUTHOR_NAME` and `GIT_AUTHOR_EMAIL` env vars
 
@@ -335,7 +335,7 @@ If a blank repo feels daunting, follow the field-tested workflow we documented i
 - **Spin up the swarm:** Launch multiple Codex panes (or any agent mix), register each identity with Agent Mail, and have them acknowledge `AGENTS.md`, the plan document, and the Beads backlog before touching code.
 - **Keep everyone fed:** Reuse the canned instruction cadence from the tweet thread or, better yet, let the commercial Companion app's Message Stacks broadcast those prompts automatically so you never hand-feed panes again.
 
-Watch the full 23-minute walkthrough (https://youtu.be/68VVcqMEDrs?si=pCm6AiJAndtZ6u7q) to see the loop in action.
+Watch the full 23-minute walkthrough ([YouTube link](https://youtu.be/68VVcqMEDrs?si=pCm6AiJAndtZ6u7q)) to see the loop in action.
 
 ## Productivity Math & Automation Loop
 
@@ -351,7 +351,7 @@ Result: you invest 1–2 hours of human supervision, but dozens of agent-hours e
 ### One-line installer
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/mcp_agent_mail/main/scripts/install.sh | bash -s -- --yes
+curl -fsSL https://raw.githubusercontent.com/jleechanorg/mcp_mail/main/scripts/install.sh | bash -s -- --yes
 ```
 
 What this does:
@@ -372,7 +372,7 @@ Already have Beads installed or want to handle it yourself? Append `--skip-beads
 
 ```bash
 # Install with custom port
-curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/mcp_agent_mail/main/scripts/install.sh | bash -s -- --port 9000 --yes
+curl -fsSL https://raw.githubusercontent.com/jleechanorg/mcp_mail/main/scripts/install.sh | bash -s -- --port 9000 --yes
 
 # Or use the CLI command after installation
 uv run python -m mcp_agent_mail.cli config set-port 9000
@@ -388,8 +388,8 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 
 # Clone the repo
-git clone https://github.com/Dicklesworthstone/mcp_agent_mail
-cd mcp_agent_mail
+git clone https://github.com/jleechanorg/mcp_mail
+cd mcp_mail
 
 # Create a Python 3.14 virtual environment and install dependencies
 uv python install 3.14
@@ -1972,7 +1972,7 @@ result = await client.call_tool("list_extended_tools", {})
 | :-- | :-- | :-- |
 | `STORAGE_ROOT` | `.mcp_mail` | Root for per-project repos and SQLite DB (project-local by default) |
 | `STORAGE_PROJECT_KEY_ENABLED` | `false` | When true, use `<project_key>/.mcp_mail` as archive root (project_key must be git repo root) |
-| `STORAGE_LOCAL_ARCHIVE_ENABLED` | `true` | When false, disable default `.mcp_mail` archive; requires project-key storage |
+| `STORAGE_LOCAL_ARCHIVE_ENABLED` | `false` | When true, enable `.mcp_mail` archive; when false, requires project-key storage |
 | `HTTP_HOST` | `127.0.0.1` | Bind host for HTTP transport |
 | `HTTP_PORT` | `8765` | Bind port for HTTP transport |
 | `HTTP_PATH` | `/mcp/` | HTTP path where MCP endpoint is mounted |

@@ -318,12 +318,28 @@ def mirror_message_to_slack(frontmatter: dict[str, Any], body_md: str) -> str | 
 
     project = frontmatter.get("project", "")
     subject = frontmatter.get("subject", "")
+    sender_name = frontmatter.get("from", "")
+
+    recipients: list[str] = []
+    for key in ("to", "cc", "bcc"):
+        value = frontmatter.get(key)
+        if isinstance(value, str):
+            recipients.append(value)
+        elif isinstance(value, list):
+            recipients.extend(value)
     thread = frontmatter.get("thread_id")
     title = f"{project} | {subject}".strip(" |")
     if thread:
         title = f"{title} (thread {thread})"
 
-    text = f"*{title}*\n{body_md}"
+    lines = [f"*{title}*"]
+    if sender_name:
+        lines.append(f"*From:* {sender_name}")
+    if recipients:
+        lines.append(f"*To:* {', '.join(recipients)}")
+    lines.append(body_md)
+
+    text = "\n".join(lines)
     payload = {"text": text}
     return _post_webhook(webhook, payload)
 
@@ -360,8 +376,12 @@ def format_mcp_message_for_slack(
         "low": ":information_source:",
     }.get(importance, ":email:")
 
-    # Fallback text for notifications with importance indicator
-    text = f"{importance_emoji} *{subject}* from {sender_name}"
+    # Fallback text for notifications with importance indicator and full routing info
+    if recipients:
+        recipient_list = ", ".join(recipients)
+        text = f"{importance_emoji} *{subject}* from *{sender_name}* to {recipient_list}"
+    else:
+        text = f"{importance_emoji} *{subject}* from *{sender_name}*"
 
     if not use_blocks:
         return (text, None)
@@ -383,9 +403,11 @@ def format_mcp_message_for_slack(
     )
 
     # Metadata section
+    recipient_lines = "\n".join(f"• {name}" for name in recipients) if recipients else "—"
+
     metadata_fields = [
-        {"type": "mrkdwn", "text": f"*From:*\n{sender_name}"},
-        {"type": "mrkdwn", "text": f"*To:*\n{', '.join(recipients[:5])}"},
+        {"type": "mrkdwn", "text": f"*From:*\n*{sender_name}*"},
+        {"type": "mrkdwn", "text": f"*To:*\n{recipient_lines}"},
     ]
 
     if message_id:
