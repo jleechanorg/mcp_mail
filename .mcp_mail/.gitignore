@@ -1,7 +1,0 @@
-# SQLite cache files should never be committed
-*.db
-*.db-shm
-*.db-wal
-
-# Test artifact placeholder
-.gitattributes

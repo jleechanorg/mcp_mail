@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import anyio
 import pytest
 from fastmcp import Client
 
@@ -20,8 +21,8 @@ async def mcp_server_with_storage(isolated_env, tmp_path):
     settings = get_settings()
 
     # Create storage directory structure
-    storage_root = Path(settings.storage.root)
-    storage_root.mkdir(parents=True, exist_ok=True)
+    storage_root = anyio.Path(settings.storage.root)
+    await storage_root.mkdir(parents=True, exist_ok=True)
 
     # Build server
     server = build_mcp_server()
