@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import hashlib
 import hmac
 import json
@@ -51,18 +53,17 @@ async def test_slack_webhook_creates_message(monkeypatch):
     timestamp = str(int(time.time()))
     signature = _slack_signature(settings.slack.signing_secret or "", timestamp, body)
 
-    async with app.router.lifespan_context(app):
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.post(
-                "/slack/events",
-                content=body,
-                headers={
-                    "X-Slack-Request-Timestamp": timestamp,
-                    "X-Slack-Signature": signature,
-                    "Content-Type": "application/json",
-                },
-            )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/slack/events",
+            content=body,
+            headers={
+                "X-Slack-Request-Timestamp": timestamp,
+                "X-Slack-Signature": signature,
+                "Content-Type": "application/json",
+            },
+        )
 
     assert resp.status_code == 200
 
@@ -106,18 +107,17 @@ async def test_slack_webhook_thread_mapping(monkeypatch):
     timestamp = str(int(time.time()))
     signature = _slack_signature(settings.slack.signing_secret or "", timestamp, body)
 
-    async with app.router.lifespan_context(app):
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.post(
-                "/slack/events",
-                content=body,
-                headers={
-                    "X-Slack-Request-Timestamp": timestamp,
-                    "X-Slack-Signature": signature,
-                    "Content-Type": "application/json",
-                },
-            )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/slack/events",
+            content=body,
+            headers={
+                "X-Slack-Request-Timestamp": timestamp,
+                "X-Slack-Signature": signature,
+                "Content-Type": "application/json",
+            },
+        )
 
     assert resp.status_code == 200
 
@@ -140,17 +140,12 @@ async def test_slack_webhook_records_thread_mapping_for_top_level(monkeypatch):
         async def map_thread(self, mcp_thread_id: str, slack_channel_id: str, slack_thread_ts: str) -> None:
             self.mappings.append((mcp_thread_id, slack_channel_id, slack_thread_ts))
 
-        async def close(self) -> None:
-            """Dummy close method to avoid errors during cleanup."""
-            pass
-
     monkeypatch.setenv("SLACK_ENABLED", "1")
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test-token")
     monkeypatch.setenv("SLACK_SIGNING_SECRET", "test-secret")
     monkeypatch.setenv("SLACK_SYNC_ENABLED", "1")
     monkeypatch.setenv("SLACK_SYNC_CHANNELS", "CCHAN321")
     monkeypatch.setenv("SLACK_SYNC_PROJECT_NAME", "slack-sync-test-top-level")
-    monkeypatch.setenv("SLACK_SYNC_THREAD_REPLIES", "true")
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
     settings = get_settings()
@@ -174,29 +169,21 @@ async def test_slack_webhook_records_thread_mapping_for_top_level(monkeypatch):
     dummy_client = DummySlackClient()
     import mcp_agent_mail.app as app_module
 
-    async with app.router.lifespan_context(app):
-        # Capture the real client created during lifespan startup
-        real_client = getattr(app_module, "_slack_client", None)
-        try:
-            # Close the real client before replacing to avoid resource leak
-            if real_client and hasattr(real_client, "close"):
-                await real_client.close()
-            # Set dummy client AFTER lifespan starts to avoid it being overwritten
-            app_module._slack_client = dummy_client
-            transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-                resp = await client.post(
-                    "/slack/events",
-                    content=body,
-                    headers={
-                        "X-Slack-Request-Timestamp": timestamp,
-                        "X-Slack-Signature": signature,
-                        "Content-Type": "application/json",
-                    },
-                )
-        finally:
-            # Restore real client before lifespan cleanup (or set to None if there wasn't one)
-            app_module._slack_client = real_client
+    app_module._slack_client = dummy_client
+    try:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/slack/events",
+                content=body,
+                headers={
+                    "X-Slack-Request-Timestamp": timestamp,
+                    "X-Slack-Signature": signature,
+                    "Content-Type": "application/json",
+                },
+            )
+    finally:
+        app_module._slack_client = None
 
     assert resp.status_code == 200
     assert dummy_client.mappings == [
@@ -211,13 +198,13 @@ async def test_notify_slack_message_replies_into_slack_thread(monkeypatch):
     class DummySlackClient:
         def __init__(self) -> None:
             self.calls: list[dict[str, str | None]] = []
-            self.mappings: list[tuple[str, str, str]] = []
+            self.mapped_threads: list[tuple[str, str, str]] = []
 
         async def get_slack_thread(self, thread_id: str):
             return None
 
-        async def map_thread(self, mcp_thread_id: str, slack_channel_id: str, slack_thread_ts: str) -> None:
-            self.mappings.append((mcp_thread_id, slack_channel_id, slack_thread_ts))
+        async def map_thread(self, thread_key: str, channel_id: str, thread_ts: str):
+            self.mapped_threads.append((thread_key, channel_id, thread_ts))
 
         async def post_message(
             self,
@@ -235,7 +222,9 @@ async def test_notify_slack_message_replies_into_slack_thread(monkeypatch):
                     "thread_ts": thread_ts,
                 }
             )
-            return {"ok": True, "ts": "9999999999.999999", "channel": channel}
+            # Return a unique message timestamp as the Slack API would
+            new_message_ts = f"{thread_ts or '0000.0000'}.{len(self.calls)}"
+            return {"ok": True, "ts": new_message_ts, "channel": channel}
 
     monkeypatch.setenv("SLACK_ENABLED", "1")
     monkeypatch.setenv("SLACK_NOTIFY_ON_MESSAGE", "1")
@@ -267,3 +256,9 @@ async def test_notify_slack_message_replies_into_slack_thread(monkeypatch):
     assert call["channel"] == "CSLACK123"
     assert call["thread_ts"] == "1111.2222"
     assert "Reply subject" in (call["text"] or "")
+
+    # Verify that mapping was created even when thread_ts was derived from pattern
+    assert len(client.mapped_threads) == 1
+    mapped_key, mapped_channel, _mapped_ts = client.mapped_threads[0]
+    assert mapped_key == thread_id
+    assert mapped_channel == "CSLACK123"
