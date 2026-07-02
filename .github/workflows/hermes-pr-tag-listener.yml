@@ -31,7 +31,7 @@ jobs:
   notify:
     uses: jleechanorg/.github/.github/workflows/hermes-pr-tag-listener.yml@main
     with:
-      slack_channel: ${{ vars.HERMES_SLACK_CHANNEL || '#worldai-bugs' }}
+      slack_channel: ${{ vars.HERMES_SLACK_CHANNEL }}
       dispatch_ao: 'false'
     secrets:
       slack_webhook_url: ${{ secrets.HERMES_SLACK_WEBHOOK_URL }}
