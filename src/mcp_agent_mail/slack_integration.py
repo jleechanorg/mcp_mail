@@ -45,6 +45,37 @@ _SLACK_MENTION_PATTERN = re.compile(r"<@([A-Z0-9]+)(?:\|[^>]+)?>")
 _SLACK_THREAD_ID_PATTERN = re.compile(r"^(?:slack|slackbox)_(.+)_([^_]+)$")
 
 
+def _extract_slack_channel_and_ts(
+    thread_key: str, default_channel: str = ""
+) -> tuple[Optional[str], Optional[str]]:
+    """Extract Slack channel_id and thread_ts from various thread_key representations.
+
+    Supported formats:
+    - slack_<channel>_<ts> or slackbox_<channel>_<ts>
+    - <channel>:<ts>, <channel>/<ts>, or <channel>_<ts> (e.g. C09GRLXF9GR:1786682172.769239)
+    - <ts> (e.g. 1786682172.769239) -> (default_channel, ts)
+    """
+    if not thread_key:
+        return None, None
+
+    # 1. Standard prefixed format: slack_<channel>_<ts> or slackbox_<channel>_<ts>
+    match = _SLACK_THREAD_ID_PATTERN.match(thread_key)
+    if match:
+        return match.group(1), match.group(2)
+
+    # 2. Channel:ts, Channel/ts, or Channel_ts where channel looks like C/G/D Slack ID
+    alt_match = re.match(r"^([CGBD][A-Z0-9]{8,})[:/_](\d{10}\.\d+)$", thread_key)
+    if alt_match:
+        return alt_match.group(1), alt_match.group(2)
+
+    # 3. Bare Slack timestamp (e.g. 1786682172.769239)
+    ts_match = re.match(r"^(\d{10}\.\d+)$", thread_key)
+    if ts_match:
+        return default_channel or None, ts_match.group(1)
+
+    return None, None
+
+
 @dataclass
 class SlackThreadMapping:
     """Maps a Slack thread to an MCP message thread."""
@@ -660,10 +691,10 @@ async def notify_slack_message(
                 slack_thread_ts = thread_mapping.slack_thread_ts
                 channel = thread_mapping.slack_channel_id
             else:
-                match = _SLACK_THREAD_ID_PATTERN.match(thread_key)
-                if match:
-                    derived_channel, derived_ts = match.groups()
+                derived_channel, derived_ts = _extract_slack_channel_and_ts(thread_key, channel)
+                if derived_ts:
                     slack_thread_ts = derived_ts
+                if derived_channel:
                     channel = derived_channel
 
         # Post to Slack
@@ -736,11 +767,11 @@ async def notify_slack_ack(
                 slack_thread_ts = thread_mapping.slack_thread_ts
                 channel = thread_mapping.slack_channel_id
             else:
-                match = _SLACK_THREAD_ID_PATTERN.match(thread_key)
-                if match:
-                    derived_channel, derived_ts = match.groups()
-                    channel = derived_channel
+                derived_channel, derived_ts = _extract_slack_channel_and_ts(thread_key, channel)
+                if derived_ts:
                     slack_thread_ts = derived_ts
+                if derived_channel:
+                    channel = derived_channel
 
         response = await client.post_message(
             channel=channel,

@@ -105,3 +105,38 @@ def test_format_mcp_message_for_slack_includes_full_agent_details():
     assert all(name in recipient_field for name in recipients[:5])
     assert "+2 more" in recipient_field
     assert recipient_field.count("•") == 6  # 5 recipients + "+2 more"
+
+
+def test_extract_slack_channel_and_ts():
+    from mcp_agent_mail.slack_integration import _extract_slack_channel_and_ts
+
+    # 1. Standard prefixed format
+    ch, ts = _extract_slack_channel_and_ts("slack_C09GRLXF9GR_1786682172.769239")
+    assert ch == "C09GRLXF9GR"
+    assert ts == "1786682172.769239"
+
+    ch, ts = _extract_slack_channel_and_ts("slackbox_C09GRLXF9GR_1786682172.769239")
+    assert ch == "C09GRLXF9GR"
+    assert ts == "1786682172.769239"
+
+    # 2. Colon / slash / underscore separated channel and ts
+    ch, ts = _extract_slack_channel_and_ts("C09GRLXF9GR:1786682172.769239")
+    assert ch == "C09GRLXF9GR"
+    assert ts == "1786682172.769239"
+
+    ch, ts = _extract_slack_channel_and_ts("C09GRLXF9GR/1786682172.769239")
+    assert ch == "C09GRLXF9GR"
+    assert ts == "1786682172.769239"
+
+    ch, ts = _extract_slack_channel_and_ts("C09GRLXF9GR_1786682172.769239")
+    assert ch == "C09GRLXF9GR"
+    assert ts == "1786682172.769239"
+
+    # 3. Bare timestamp with default channel
+    ch, ts = _extract_slack_channel_and_ts("1786682172.769239", default_channel="C09GRLXF9GR")
+    assert ch == "C09GRLXF9GR"
+    assert ts == "1786682172.769239"
+
+    # 4. Invalid or empty
+    assert _extract_slack_channel_and_ts("") == (None, None)
+    assert _extract_slack_channel_and_ts("invalid_thread_key") == (None, None)
